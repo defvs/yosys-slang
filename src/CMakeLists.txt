@@ -48,6 +48,9 @@ if (BUILD_AS_PLUGIN)
         PREFIX ""
         OUTPUT_NAME "slang"
         SUFFIX ".so"
+        # Plugin should hide internals
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN YES
     )
 
     if (WIN32)

@@ -6,10 +6,26 @@
 //
 #pragma once
 
+#include "diag.h"
+#include "kernel/log.h"
 #include "kernel/rtlil.h"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
 
 #include "cases.h"
 #include "slang/ast/ASTVisitor.h"
+#include "slang/ast/SemanticFacts.h"
+#include "slang/ast/Statement.h"
+#include "slang/ast/expressions/CallExpression.h"
+#include "slang/ast/statements/ConditionalStatements.h"
+#include "slang/ast/statements/LoopStatements.h"
+#include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/symbols/ValueSymbol.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/text/SourceLocation.h"
 #include "slang_frontend.h"
 #include "variables.h"
 
@@ -577,7 +593,7 @@ public:
 		std::vector<SwitchHelper> sw_stack;
 		std::vector<std::optional<int32_t>> loopVarStack(stmt.loopDims.size(), std::nullopt);
 		// Initialize loop vars ranges
-		for (auto i = 0; i < stmt.loopDims.size(); ++i) {
+		for (size_t i = 0; i < stmt.loopDims.size(); ++i) {
 			auto loopDim = stmt.loopDims[i];
 			if (loopDim.loopVar && loopDim.range) {
 				loopVarStack[loopVarStack.size() - i - 1] = loopDim.range->left;
@@ -587,11 +603,6 @@ public:
 
 		std::vector<slang::ast::ForeachLoopStatement::LoopDim> reversedDims(
 				stmt.loopDims.rbegin(), stmt.loopDims.rend());
-		for (auto i = 0; i < loopVarStack.size(); ++i) {
-			if (loopVarStack[i]) {
-				auto currDim = reversedDims[i];
-			}
-		}
 
 		RegisterEscapeConstructGuard guard1(context, EscapeConstructKind::Loop, &stmt);
 		unroll_limit.enter_unrolling();
@@ -615,7 +626,7 @@ public:
 			}
 
 			bool doBreak = true;
-			for (int i = 0; i < loopVarStack.size(); ++i) {
+			for (size_t i = 0; i < loopVarStack.size(); ++i) {
 				if (!loopVarStack[i])
 					continue;
 
@@ -627,7 +638,7 @@ public:
 					break;
 				} else if (i != loopVarStack.size() - 1) {
 					bool nextDimFound = false;
-					int j = i + 1;
+					size_t j = i + 1;
 					for (; j < loopVarStack.size(); ++j) {
 						if (loopVarStack[j] && *loopVarStack[j] != reversedDims[j].range->right) {
 							nextDimFound = true;
@@ -640,7 +651,7 @@ public:
 												   ? *loopVarStack[j] - 1
 												   : *loopVarStack[j] + 1;
 						doBreak = false;
-						for (int k = 0; k < j; ++k) {
+						for (size_t k = 0; k < j; ++k) {
 							if (loopVarStack[k])
 								*loopVarStack[k] = reversedDims[k].range->left;
 						}
@@ -650,7 +661,7 @@ public:
 				}
 			}
 
-			for (auto i = 0; i < loopVarStack.size(); ++i) {
+			for (size_t i = 0; i < loopVarStack.size(); ++i) {
 				if (loopVarStack[i]) {
 					auto currDim = reversedDims[i];
 					set_iterator_value(*currDim.loopVar, *loopVarStack[i]);

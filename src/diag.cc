@@ -5,6 +5,8 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 #include "diag.h"
+#include "slang/diagnostics/Diagnostics.h"
+#include "slang/text/SourceLocation.h"
 #include "slang_frontend.h"
 
 namespace slang_frontend {
@@ -105,11 +107,11 @@ DiagCode NoteModuleBlackboxBecauseAttribute(DiagSubsystem::Netlist, 1051);
 DiagCode NoteModuleBlackboxBecauseEmpty(DiagSubsystem::Netlist, 1052);
 DiagCode NoteModuleNotDissolvedBecauseBlackbox(DiagSubsystem::Netlist, 1053);
 DiagCode NoteModuleNotDissolvedBecauseKeepHierarchy(DiagSubsystem::Netlist, 1054);
+DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1084);
 DiagCode BlockingAssignmentAfterNonblocking(DiagSubsystem::Netlist, 1055);
 DiagCode NonblockingAssignmentAfterBlocking(DiagSubsystem::Netlist, 1056);
 DiagCode NotePreviousAssignment(DiagSubsystem::Netlist, 1057);
 DiagCode NetTypeUnsupported(DiagSubsystem::Netlist, 1058);
-DiagCode NoAllowTopLevelIfacePorts(DiagSubsystem::Netlist, 1059);
 DiagCode RefUnsupported(DiagSubsystem::Netlist, 1061);
 DiagCode InlinedInOutUnsupported(DiagSubsystem::Netlist, 1062);
 DiagCode PastGatingClockingUnsupported(DiagSubsystem::Netlist, 1063);
@@ -273,6 +275,8 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(NoteModuleNotDissolvedBecauseBlackbox, DiagnosticSeverity::Note);
 	engine.setMessage(NoteModuleNotDissolvedBecauseKeepHierarchy, "instance of module '{}' will not dissolve because of '--keep-hierarchy' option");
 	engine.setSeverity(NoteModuleNotDissolvedBecauseKeepHierarchy, DiagnosticSeverity::Note);
+	engine.setMessage(NoteModuleNotDissolvedBecauseInOut, "instance of module '{}' will not dissolve because the module has an inout port");
+	engine.setSeverity(NoteModuleNotDissolvedBecauseInOut, DiagnosticSeverity::Note);
 
 	engine.setMessage(BlockingAssignmentAfterNonblocking, "blocking assignment to variable '{}' is not supported after previous non-blocking assignment");
 	engine.setSeverity(BlockingAssignmentAfterNonblocking, DiagnosticSeverity::Error);
@@ -283,9 +287,6 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(NetTypeUnsupported, "net type '{}' unsupported");
 	engine.setSeverity(NetTypeUnsupported, DiagnosticSeverity::Error);
-
-	engine.setMessage(NoAllowTopLevelIfacePorts, "'--allow-toplevel-iface-ports' is unsupported with yosys-slang");
-	engine.setSeverity(NoAllowTopLevelIfacePorts, DiagnosticSeverity::Error);
 
 	engine.setMessage(RefUnsupported, "direction 'ref' found on port '{}' unsupported for synthesis");
 	engine.setSeverity(RefUnsupported, DiagnosticSeverity::Error);

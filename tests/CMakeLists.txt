@@ -28,6 +28,7 @@ set(ALL_TESTS
     unit/async.ys
     unit/dualedge.ys
     unit/function_call.ys
+    unit/expression_attrs.ys
     unit/latch.ys
     unit/selftests.tcl
     various/assign_mixing.ys
@@ -49,6 +50,7 @@ set(ALL_TESTS
     various/intf_array_naming.ys
     various/intf_w_hierarchy.ys
     various/issue142.ys
+    various/issue143.ys
     various/issue208.ys
     various/issue227.ys
     various/issue240.ys
@@ -64,9 +66,11 @@ set(ALL_TESTS
     various/stringattrs.ys
     various/stringparams.ys
     various/timescale.ys
+    various/tranif.ys
     various/top_attr.ys
+    various/unimplemented.ys
     various/unknown_cells.ys
-    various/toplevel_intf_unsupported.ys
+    various/toplevel_intf.ys
     various/wait_test.ys
     various/expect_test.ys
     various/program_test.ys

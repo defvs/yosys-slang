@@ -5,10 +5,14 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 // clang-format off
-#include "kernel/rtlil.h"
+#include <string>
+#include <optional>
 #include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/SemanticFacts.h"
+#include "kernel/rtlil.h"
 #include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/text/SourceLocation.h"
 #include "slang/util/ScopeGuard.h"
 
 #include "slang_frontend.h"

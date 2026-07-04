@@ -4,8 +4,15 @@
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
 //
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <string>
+#include <string_view>
+#include <utility>
 
+#include "kernel/log.h"
+#include "kernel/rtlil.h"
 #include "slang_frontend.h"
 #include "variables.h"
 
@@ -45,6 +52,11 @@ std::pair<std::string, SigSpec> RTLILBuilder::add_y_wire(int width)
 void RTLILBuilder::bless_cell(RTLIL::Cell *cell)
 {
 	cell->attributes = staged_attributes;
+	if (staged_source_range_valid && !cell->attributes.count(ID::src)) {
+		auto src = format_src(staged_source_range);
+		if (!src.empty())
+			cell->attributes[ID::src] = src;
+	}
 }
 
 SigSpec RTLILBuilder::ReduceBool(SigSpec a)
@@ -528,7 +540,6 @@ void RTLILBuilder::add_aldff(std::string_view name, const RTLIL::SigSpec &clk,
 SigSpec RTLILBuilder::CountOnes(SigSpec sig, int result_width)
 {
 	SigSpec ret;
-	int x = 1, y = 0;
 	auto width = sig.size();
 	if (width == 0) {
 		ret = RTLIL::Const(0, 1);
@@ -648,7 +659,7 @@ void RTLILBuilder::add_memory_init(
 		processed += length;
 	}
 
-	if (processed < data.size()) {
+	if (processed < (uint64_t)data.size()) {
 		log_assert((bit_offset + processed) % mem->width == 0);
 		uint64_t length = ((((uint64_t)data.size()) - processed) / mem->width) * mem->width;
 		emit_meminit_cell(mem, (bit_offset + processed) / mem->width, big_endian,
@@ -656,9 +667,9 @@ void RTLILBuilder::add_memory_init(
 		processed += length;
 	}
 
-	if (processed < data.size()) {
-		uint64_t length = data.size() - processed;
-		log_assert(length < mem->width);
+	if (processed < (uint64_t)data.size()) {
+		uint64_t length = (uint64_t)data.size() - processed;
+		log_assert(length < (uint64_t)mem->width);
 		Const data1, mask1;
 		data1.append(data.extract(0, length));
 		data1.append(Const(Sx, mem->width - length));
@@ -668,7 +679,7 @@ void RTLILBuilder::add_memory_init(
 		processed += length;
 	}
 
-	log_assert(processed == data.size());
+	log_assert(processed == (uint64_t)data.size());
 }
 
 SigSpec RTLILBuilder::add_placeholder_signal(

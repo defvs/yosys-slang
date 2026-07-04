@@ -5,20 +5,66 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 // clang-format off
+#include <string.h>
+#include <cstdlib>
+#include <cstdio>
+#include <cassert>
+#include <fstream>
+#include <limits>
+#include <sstream>
+#include <exception>
+#include <cmath>
+#include <iostream>
+#include <cstdint>
+#include <string_view>
+#include <string>
+#include <cstddef>
+#include <utility>
+#include <filesystem>
+#include <optional>
+#include <vector>
+
 #include "slang/ast/ASTVisitor.h"
+#include "kernel/yosys_common.h"
+#include "kernel/log.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/EvalContext.h"
+#include "slang/ast/Expression.h"
 #include "slang/ast/SemanticFacts.h"
+#include "slang/ast/Statement.h"
+#include "slang/ast/Symbol.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/expressions/AssertionExpr.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
+#include "slang/ast/expressions/LiteralExpressions.h"
+#include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/expressions/Operator.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
+#include "slang/ast/expressions/SelectExpressions.h"
+#include "slang/ast/statements/MiscStatements.h"
+#include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CheckerSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/SpecifySymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/diagnostics/CompilationDiags.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
+#include "slang/diagnostics/Diagnostics.h"
 #include "slang/diagnostics/LookupDiags.h"
 #include "slang/driver/Driver.h"
+#include "slang/numeric/ConstantValue.h"
+#include "slang/numeric/SVInt.h"
+#include "slang/syntax/SyntaxKind.h"
 #include "slang/syntax/SyntaxPrinter.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/text/Json.h"
+#include "slang/text/SourceLocation.h"
+#include "slang/util/SmallVector.h"
 #include "slang/util/Util.h"
 
 #include "kernel/bitpattern.h"
@@ -103,11 +149,9 @@ slang::SourceRange source_location(const ast::Expression &expr)		{ return expr.s
 slang::SourceRange source_location(const ast::Statement &stmt)		{ return stmt.sourceRange; }
 slang::SourceRange source_location(const ast::TimingControl &stmt)	{ return stmt.sourceRange; }
 
-template<typename T>
-std::string format_src(const T &obj)
+std::string format_src(slang::SourceRange sr)
 {
 	auto sm = global_sourcemgr;
-	auto sr = source_location(obj);
 
 	if (!sm->isFileLoc(sr.start()) || !sm->isFileLoc(sr.end()))
 		return "";
@@ -123,6 +167,12 @@ std::string format_src(const T &obj)
 			(int) sm->getLineNumber(sr.start()), (int) sm->getColumnNumber(sr.start()),
 			(int) sm->getLineNumber(sr.end()), (int) sm->getColumnNumber(sr.end()));
 	}
+}
+
+template<typename T>
+std::string format_src(const T &obj)
+{
+	return format_src(source_location(obj));
 }
 
 };
@@ -268,9 +318,7 @@ template void transfer_attrs<const ast::Symbol>(NetlistContext &netlist, const a
 template<typename T>
 void transfer_attrs(NetlistContext &netlist, T &from, AttributeGuard &guard)
 {
-	auto src = format_src(from);
-	if (!src.empty())
-		guard.set(ID::src, src);
+	guard.set_source(source_location(from));
 
 	for (auto attr : global_compilation->getAttributes(from)) {
 		if (auto value = convert_attr_value(netlist, attr)) {
@@ -692,8 +740,11 @@ RTLIL::SigSpec EvalContext::streaming(ast::StreamingConcatenationExpression cons
 {
 	require(expr, expr.isFixedSize());
 	RTLIL::SigSpec cat;
+	std::vector<RTLIL::SigSpec> parts;
 
-	for (auto stream : expr.streams()) {
+	auto streams = expr.streams();
+	parts.reserve(streams.size());
+	for (auto stream : streams) {
 		require(*stream.operand, !stream.withExpr);
 		auto& op = *stream.operand;
 		RTLIL::SigSpec item;
@@ -703,8 +754,13 @@ RTLIL::SigSpec EvalContext::streaming(ast::StreamingConcatenationExpression cons
 		else
 			item = (*this)(*stream.operand);
 
-		cat = {cat, item};
+		parts.push_back(item);
 	}
+
+	// SigSpec appends LSB-first; streams were evaluated left-to-right above,
+	// so append them in reverse to preserve SystemVerilog ordering.
+	for (auto part_it = parts.rbegin(); part_it != parts.rend(); ++part_it)
+		cat.append(*part_it);
 
 	require(expr, expr.getSliceSize() <= std::numeric_limits<int>::max());
 	int slice = expr.getSliceSize();
@@ -712,8 +768,12 @@ RTLIL::SigSpec EvalContext::streaming(ast::StreamingConcatenationExpression cons
 		return cat;
 	} else {
 		RTLIL::SigSpec reorder;
+		std::vector<RTLIL::SigSpec> slices;
 		for (int i = 0; i < cat.size(); i += slice)
-			reorder = {reorder, cat.extract(i, std::min(slice, cat.size() - i))};
+			slices.push_back(cat.extract(i, std::min(slice, cat.size() - i)));
+		// Slice extraction also walks LSB-first, so rebuild in reverse order.
+		for (auto part_it = slices.rbegin(); part_it != slices.rend(); ++part_it)
+			reorder.append(*part_it);
 		return reorder;
 	}
 }
@@ -877,7 +937,7 @@ void handle_readmem(ProceduralContext &context, const ast::CallExpression &call)
 	auto filename_arg = call.arguments()[0];
 	auto filename_result = filename_arg->eval(context.eval.const_);
 	if (filename_result.bad()) {
-		auto &diag = netlist.add_diag(diag::ErrorNonconstantArgument, filename_arg->sourceRange);
+		netlist.add_diag(diag::ErrorNonconstantArgument, filename_arg->sourceRange);
 		return;
 	}
 
@@ -1003,7 +1063,7 @@ void handle_readmem(ProceduralContext &context, const ast::CallExpression &call)
 		std::getline(f, line);
 
 		// Remove multiline comments
-		for (int i = 0; i < line.size(); i++) {
+		for (size_t i = 0; i < line.size(); i++) {
 			if (in_comment && line.compare(i, 2, "*/") == 0) {
 				line[i] = ' ';
 				line[i + 1] = ' ';
@@ -1139,7 +1199,6 @@ RTLIL::SigSpec EvalContext::sva(ast::Expression const &expr)
 
 RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 {
-	RTLIL::Module *mod = netlist.canvas;
 	RTLIL::SigSpec ret;
 	size_t repl_count;
 
@@ -1469,8 +1528,15 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 	case ast::ExpressionKind::Concatenation:
 		{
 			const ast::ConcatenationExpression &concat = expr.as<ast::ConcatenationExpression>();
-			for (auto op : concat.operands())
-				ret = {ret, (*this)(*op)};
+			auto operands = concat.operands();
+			std::vector<RTLIL::SigSpec> parts;
+			parts.reserve(operands.size());
+			for (auto op : operands)
+				parts.push_back((*this)(*op));
+			// SigSpec appends LSB-first; operands are evaluated in source order
+			// above and appended in reverse to preserve concatenation order.
+			for (auto part_it = parts.rbegin(); part_it != parts.rend(); ++part_it)
+				ret.append(*part_it);
 		}
 		break;
 	case ast::ExpressionKind::SimpleAssignmentPattern:
@@ -1485,10 +1551,16 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 			}
 
 			auto &pattern_expr = static_cast<const ast::AssignmentPatternExpressionBase&>(expr);
+			auto elements = pattern_expr.elements();
 
 			ret = {};
-			for (auto elem : pattern_expr.elements())
-				ret = {ret, (*this)(*elem)};
+			std::vector<RTLIL::SigSpec> parts;
+			parts.reserve(elements.size());
+			for (auto elem : elements)
+				parts.push_back((*this)(*elem));
+			// Assignment patterns use the same bit ordering as concatenations.
+			for (auto part_it = parts.rbegin(); part_it != parts.rend(); ++part_it)
+				ret.append(*part_it);
 			ret = ret.repeat(repl_count);
 		}
 		break;
@@ -1639,6 +1711,52 @@ struct HierarchyQueue {
 	std::map<const ast::InstanceBodySymbol *, NetlistContext *> netlists;
 	std::vector<NetlistContext *> queue;
 };
+
+// Helper for visiting the elements of a connected interface array
+// and assigning them generated names
+template <typename Func> void visit_interface_elements(const ast::PortConnection *conn, Func &&visit)
+{
+	assert(conn->getIfaceConn().second != nullptr);
+	const ast::Symbol &if_instance = *conn->getIfaceConn().first;
+	const ast::ModportSymbol &ref_modport = *conn->getIfaceConn().second;
+	ast_invariant(if_instance, ast::InstanceArraySymbol::isKind(if_instance.kind) ||
+					ast::InstanceSymbol::isKind(if_instance.kind));
+
+	std::span<const slang::ConstantRange> array_range;
+	if (ast::InstanceArraySymbol::isKind(if_instance.kind)) {
+		auto range1 = conn->port.as<ast::InterfacePortSymbol>().getDeclaredRange();
+		ast_invariant(conn->port, range1.has_value());
+		array_range = range1.value();
+	}
+
+	std::string hierpath_suffix = "";
+	int array_level = 0;
+	if_instance.visit(ast::makeVisitor(
+		[&](auto &visitor, const ast::InstanceArraySymbol &symbol) {
+			// Mock instance array symbols made up by slang don't contain
+			// the instances as members, but they do contain them as elements
+			std::string save = hierpath_suffix;
+			int i = 0;
+			for (auto &elem : symbol.elements) {
+				auto dim = array_range[array_level];
+				int hdl_index = dim.lower() + i;
+				i++;
+				hierpath_suffix += "[" + std::to_string(hdl_index) + "]";
+				array_level++;
+				elem->visit(visitor);
+				array_level--;
+				hierpath_suffix = save;
+			}
+		},
+		[&](auto &visitor, const ast::ModportSymbol &modport) {
+			// To support interface arrays, we need to match all modports
+			// with the same name as ref_modport
+			if (!modport.name.compare(ref_modport.name)) {
+				visit(modport, hierpath_suffix);
+			}
+		}
+	));
+}
 
 struct PopulateNetlist : public TimingPatternInterpretor, public ast::ASTVisitor<PopulateNetlist, ast::VisitFlags::Statements> {
 public:
@@ -2003,7 +2121,7 @@ public:
 		netlist.add_diag(diag::MultiportUnsupported, sym.location);
 	}
 
-	void inline_port_connection(const ast::PortSymbol &port, RTLIL::SigSpec connection, slang::SourceRange range)
+	void inline_port_connection(const ast::PortSymbol &port, RTLIL::SigSpec connection, [[maybe_unused]] slang::SourceRange range)
 	{
 		if (port.isNullPort)
 			return;
@@ -2020,7 +2138,7 @@ public:
 		netlist.add_continuous_driver(internal_signal, connection);
 	}
 
-	void inline_port_connection(const ast::PortSymbol &port, VariableBits connection, slang::SourceRange range)
+	void inline_port_connection(const ast::PortSymbol &port, VariableBits connection, [[maybe_unused]] slang::SourceRange range)
 	{
 		if (port.isNullPort)
 			return;
@@ -2047,7 +2165,7 @@ public:
 		}
 	}
 
-	void inline_port_connection_driver(const ast::PortSymbol &port, RTLIL::SigSpec connection, slang::SourceRange range)
+	void inline_port_connection_driver(const ast::PortSymbol &port, RTLIL::SigSpec connection, [[maybe_unused]] slang::SourceRange range)
 	{
 		if (port.isNullPort)
 			return;
@@ -2273,61 +2391,13 @@ public:
 						continue;
 					}
 
-					const ast::Symbol &iface_instance = *conn->getIfaceConn().first;
-					const ast::ModportSymbol &ref_modport = *conn->getIfaceConn().second;
-					std::span<const slang::ConstantRange> array_range;
+					visit_interface_elements(conn, [&](const ast::ModportSymbol &modport, std::string &hierpath_suffix) {
+						if (inserted) {
+							submodule.scopes_remap[&static_cast<const ast::Scope&>(modport)] =
+								submodule.id(conn->port) + hierpath_suffix;
+						}
 
-					const ast::Scope *iface_scope;
-					switch (iface_instance.kind) {
-					case ast::SymbolKind::InstanceArray: {
-						iface_scope = static_cast<const ast::Scope *>(
-										&iface_instance.as<ast::InstanceArraySymbol>());
-						auto range1 = conn->port.as<ast::InterfacePortSymbol>().getDeclaredRange();
-						ast_invariant(conn->port, range1.has_value());
-						array_range = range1.value();
-						break;
-					}
-					case ast::SymbolKind::Instance:
-						iface_scope = static_cast<const ast::Scope *>(
-										&iface_instance.as<ast::InstanceSymbol>().body);
-						break;
-					default:
-						log_abort();
-						break;
-					}
-
-					std::string hierpath_suffix = "";
-					int array_level = 0;
-
-					iface_instance.visit(ast::makeVisitor(
-						[&](auto &visitor, const ast::InstanceArraySymbol &symbol) {
-							// Mock instance array symbols made up by slang don't contain
-							// the instances as members, but they do contain them as elements
-							std::string save = hierpath_suffix;
-							int i = 0;
-							for (auto &elem : symbol.elements) {
-								auto dim = array_range[array_level];
-								int hdl_index = dim.lower() + i;
-								i++;
-								hierpath_suffix += "[" + std::to_string(hdl_index) + "]";
-								array_level++;
-								elem->visit(visitor);
-								array_level--;
-								hierpath_suffix = save;
-							}
-						},
-						[&](auto &visitor, const ast::ModportSymbol &modport) {
-							// To support interface arrays, we need to match all modports
-							// with the same name as ref_modport
-							if (!modport.name.compare(ref_modport.name)) {
-								if (inserted) {
-									submodule.scopes_remap[&static_cast<const ast::Scope&>(modport)] =
-															submodule.id(conn->port) + hierpath_suffix;
-								}
-								visitor.visitDefault(modport);
-							}
-						},
-						[&](auto&, const ast::ModportPortSymbol &port) {
+						modport.visit(ast::makeVisitor([&](auto&, const ast::ModportPortSymbol &port) {
 							RTLIL::SigSpec port_sig;
 							if (inserted) {
 								port_sig = submodule.add_wire(port);
@@ -2371,8 +2441,8 @@ public:
 								if (port.direction == ast::ArgumentDirection::Out || port.direction == ast::ArgumentDirection::InOut)
 									netlist.register_driven(*port.internalSymbol);
 							}
-						}
-					));
+						}));
+					});
 					break;
 				}
 				case ast::SymbolKind::MultiPort: {
@@ -2440,8 +2510,10 @@ public:
 		netlist.detected_memories = mem_detect.memory_candidates;
 	}
 
-	void add_internal_wires(const ast::InstanceBodySymbol &body)
+	bool add_internal_wires(const ast::InstanceBodySymbol &body)
 	{
+		bool success = true;
+
 		std::unordered_set<const slang::ast::SubroutineSymbol *> visited_subroutines;
 		body.visit(ast::makeVisitor([&](auto&, const ast::ValueSymbol &sym) {
 			if (!sym.getType().isFixedSize())
@@ -2516,6 +2588,37 @@ public:
 				return;
 			visitor.visitDefault(sym);
 		}));
+
+		// For top-level modules with AllowTopLevelIfacePorts, slang creates synthetic
+		// interface instances that live outside the realm body. Set up scopes_remap and
+		// add wires for modport port symbols so expressions and initializers can resolve them.
+		auto *parent_scope = body.parentInstance->getParentScope();
+		bool is_top_level = parent_scope &&
+			parent_scope->asSymbol().kind == ast::SymbolKind::Root;
+		if (is_top_level) {
+			for (auto *conn : body.parentInstance->getPortConnections()) {
+				if (conn->port.kind != ast::SymbolKind::InterfacePort)
+					continue;
+
+				if (!conn->getIfaceConn().second) {
+					netlist.add_diag(diag::ModportRequired, conn->port.location);
+					success = false;
+					continue;
+				}
+
+				visit_interface_elements(conn, [&](const ast::ModportSymbol &modport, std::string &hierpath_suffix) {
+					netlist.scopes_remap[&static_cast<const ast::Scope&>(modport)] =
+								netlist.id(conn->port) + hierpath_suffix;
+					modport.visit(ast::makeVisitor([&](auto &, const ast::ModportPortSymbol &port) {
+						if (!port.getType().isFixedSize())
+							return;
+						netlist.add_wire(port);
+					}));
+				});
+			}
+		}
+
+		return success;
 	}
 
 	void handle(const ast::InstanceBodySymbol &body)
@@ -2525,7 +2628,9 @@ public:
 			// find inferred memories
 			detect_memories(body);
 			// add all internal wires before we enter the body
-			add_internal_wires(body);
+			if (!add_internal_wires(body)) {
+				return;
+			}
 			// Evaluate inline initializers on variables
 			evaluate_decl_initializers(netlist);
 			// Visit the body for the bulk of processing
@@ -2597,7 +2702,54 @@ public:
 	void handle(const ast::VariableSymbol&) {}
 	void handle(const ast::EmptyMemberSymbol&) {}
 	void handle(const ast::ModportSymbol&) {}
-	void handle(const ast::InterfacePortSymbol&) {}
+
+	void handle(const ast::InterfacePortSymbol &symbol)
+	{
+		if (symbol.getParentScope()->getContainingInstance() != &netlist.realm)
+			return;
+
+		// Only handle top-level interface ports. For submodules with interface ports
+		// in keep-hierarchy mode, the parent's processing already sets up port wires.
+		auto *parent_scope = netlist.realm.parentInstance->getParentScope();
+		if (!parent_scope || parent_scope->asSymbol().kind != ast::SymbolKind::Root)
+			return;
+
+		auto [iface_sym, ref_modport] = symbol.getConnection();
+		if (!iface_sym || !ref_modport)
+			return;
+		if (iface_sym->kind != ast::SymbolKind::Instance)
+			return;
+
+		iface_sym->visit(ast::makeVisitor(
+			[&](auto &visitor, const ast::ModportSymbol &modport) {
+				if (!modport.name.compare(ref_modport->name))
+					visitor.visitDefault(modport);
+			},
+			[&](auto &, const ast::ModportPortSymbol &port) {
+				RTLIL::Wire *w = netlist.wire(port).as_wire();
+				log_assert(w);
+				switch (port.direction) {
+				case ast::ArgumentDirection::In:
+					netlist.register_driven(Variable::from_symbol(&port));
+					w->port_input = true;
+					break;
+				case ast::ArgumentDirection::Out:
+					w->port_output = true;
+					break;
+				case ast::ArgumentDirection::InOut:
+					netlist.register_driven(Variable::from_symbol(&port));
+					w->port_input = true;
+					w->port_output = true;
+					break;
+				case ast::ArgumentDirection::Ref:
+					netlist.add_diag(diag::RefUnsupported, port.location);
+					break;
+				default:
+					log_abort();
+				}
+			}
+		));
+	}
 	void handle(const ast::GenericClassDefSymbol&) {}
 	void handle(const ast::LetDeclSymbol&) {}
 	void handle(const ast::SpecparamSymbol&) {}
@@ -2621,7 +2773,7 @@ public:
 		auto id = (!sym.name.compare("")) ? netlist.new_id() : netlist.id(sym);
 		RTLIL::IdString op;
 		bool inv_y = false;
-		RTLIL::Cell *cell;
+		RTLIL::Cell *cell = nullptr;
 		ast_invariant(sym, ports.front()->kind == ast::ExpressionKind::Assignment);
 		auto &assign = ports.front()->as<ast::AssignmentExpression>();
 		auto y = netlist.eval.connection_lhs(assign);
@@ -2692,7 +2844,7 @@ public:
 					transfer_attrs(netlist, sym, cell);
 					const auto& ports = sym.primitiveType.ports;
 
-					for (int i = 0; i < sym.getPortConnections().size(); ++i) {
+					for (size_t i = 0; i < sym.getPortConnections().size(); ++i) {
 						const auto *conn= sym.getPortConnections()[i];
 						if (!conn)
 							continue;
@@ -2766,10 +2918,16 @@ public:
 					cell = pmos; // transfer_attrs to pmos after switch block
 				} else {
 					// bidir (tran/rtran/tranif0/rtranif0/tranif1/rtranif1) are unsupported
-					netlist.add_diag(diag::PrimTypeUnsupported, sym.location);
+					netlist.add_diag(diag::PrimTypeUnsupported, sym.location) << type;
 				}
 			}
 		}
+
+		if (!cell) {
+			// We've encountered an error - let's stop right here
+			return;
+		}
+
 		cell->fixup_parameters();
 		transfer_attrs(netlist, sym, cell);
 		if (inv_y) {
@@ -3092,6 +3250,31 @@ bool NetlistContext::should_dissolve(const ast::InstanceSymbol &sym, slang::Diag
 	if (sym.isInterface())
 		return true;
 
+	if (sym.isModule()) {
+		for (auto *conn : sym.getPortConnections()) {
+			if (conn->port.kind == ast::SymbolKind::Port) {
+				auto &port = conn->port.as<ast::PortSymbol>();
+				if (port.direction != ast::ArgumentDirection::InOut)
+					continue;
+				if (why_not_dissolved) {
+					auto &note = why_not_dissolved->addNote(diag::NoteModuleNotDissolvedBecauseInOut, port.location);
+					note << sym.body.name;
+				}
+				return false;
+			}
+			if (conn->port.kind == ast::SymbolKind::MultiPort) {
+				auto &port = conn->port.as<ast::MultiPortSymbol>();
+				if (port.direction != ast::ArgumentDirection::InOut)
+					continue;
+				if (why_not_dissolved) {
+					auto &note = why_not_dissolved->addNote(diag::NoteModuleNotDissolvedBecauseInOut, port.location);
+					note << sym.body.name;
+				}
+				return false;
+			}
+		}
+	}
+
 	// the rest depends on the hierarchy mode
 	switch (settings.hierarchy_mode()) {
 	case SynthesisSettings::NONE:
@@ -3168,7 +3351,7 @@ const ast::InstanceBodySymbol &NetlistContext::find_common_ancestor(const ast::I
 	auto pa = path(&a);
 	auto pb = path(&b);
 
-	int i = 0;
+	size_t i = 0;
 	for (; i < std::min(pa.size(), pb.size()); i++) {
 		if (pa[i] != pb[i])
 			break;
@@ -3212,10 +3395,15 @@ RTLIL::SigSpec NetlistContext::convert_static(VariableBits bits)
 
 	for (auto vchunk : bits.chunks()) {
 		switch (vchunk.variable.kind) {
-		case Variable::Static:
-			ret.append(wire(*vchunk.variable.get_symbol())
-					.extract((int)vchunk.base, (int)vchunk.length));
+		case Variable::Static: {
+			const RTLIL::SigSpec &signal = wire(*vchunk.variable.get_symbol());
+			// Avoid per-bit SigSpec::extract() work for the normal one-chunk wire case.
+			if (signal.is_chunk())
+				ret.append(signal.as_chunk().extract((int)vchunk.base, (int)vchunk.length));
+			else
+				ret.append(signal.extract((int)vchunk.base, (int)vchunk.length));
 			break;
+		}
 		case Variable::Dummy:
 			ret.append(add_placeholder_signal(vchunk.length, "dummy"));
 			break;
@@ -3258,6 +3446,8 @@ USING_YOSYS_NAMESPACE
 
 struct SlangVersionPass : Pass {
 	SlangVersionPass() : Pass("slang_version", "display revision of slang frontend") {}
+
+	bool replace_existing_pass() const override { return true; }
 
 	void help() override
 	{
@@ -3338,13 +3528,6 @@ std::vector<slang::DiagCode> forbidden_diag_demotions = {
 void catch_forbidden_options(slang::driver::Driver &driver) {
 	slang::DiagnosticEngine &engine = driver.diagEngine;
 
-	auto &flags = driver.options.compilationFlags;
-	if (flags[ast::CompilationFlags::AllowTopLevelIfacePorts]) {
-		slang::Diagnostic diag(diag::NoAllowTopLevelIfacePorts, slang::SourceLocation::NoLocation);
-		engine.issue(diag);
-		flags[ast::CompilationFlags::AllowTopLevelIfacePorts] = false;
-	}
-
 	// FIXME: this doesn't catch demotions which are location specific via pragmas
 	for (auto code : forbidden_diag_demotions) {
 		if (engine.getSeverity(code, slang::SourceLocation::NoLocation) !=
@@ -3359,6 +3542,8 @@ void catch_forbidden_options(slang::driver::Driver &driver) {
 
 struct SlangFrontend : Frontend {
 	SlangFrontend() : Frontend("slang", "read SystemVerilog (slang)") {}
+
+	bool replace_existing_pass() const override { return true; }
 
 	void help() override
 	{
@@ -3598,6 +3783,8 @@ struct SlangFrontend : Frontend {
 struct SlangDefaultsPass : Pass {
 	SlangDefaultsPass() : Pass("slang_defaults", "set default options for read_slang") {}
 
+	bool replace_existing_pass() const override { return true; }
+
 	void help() override
 	{
 		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
@@ -3651,6 +3838,8 @@ struct SlangDefaultsPass : Pass {
 struct TestSlangDiagPass : Pass {
 	TestSlangDiagPass() : Pass("test_slangdiag", "test diagnostics emission by the slang frontend") {}
 
+	bool replace_existing_pass() const override { return true; }
+
 	void help() override
 	{
 		log("Perform internal test of the slang frontend.\n");
@@ -3698,6 +3887,8 @@ public:
 
 struct TestSlangExprPass : Pass {
 	TestSlangExprPass() : Pass("test_slangexpr", "test expression evaluation within slang frontend") {}
+
+	bool replace_existing_pass() const override { return true; }
 
 	void help() override
 	{
