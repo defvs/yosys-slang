@@ -107,3 +107,11 @@ endmodule
 module m_assert_eventually_2(input logic clk_i, input logic x, input logic y);
         named: assert property(@(posedge clk_i) x |-> s_eventually [0:2] y);
 endmodule
+
+module m_assert_throughout_1(input logic clk_i, input logic x, input logic y, input logic z);
+        named: assert property(@(posedge clk_i) x throughout (y ##2 z));
+endmodule
+
+module m_assert_throughout_2(input logic clk_i, input logic x, input logic y, input logic z);
+        named: assert property(@(posedge clk_i) y |-> x throughout (##1 z));
+endmodule

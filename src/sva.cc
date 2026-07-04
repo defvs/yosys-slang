@@ -266,13 +266,33 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 					left.insert(left.end(), right.begin(), right.end());
 					return left;
 				}
+				case ast::BinaryAssertionOperator::Throughout:
+				{
+					if (left.empty() || right.empty()) return {};
+
+					auto condition = collapse_or(left);
+					if (condition.start != 0) {
+						eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+						return {};
+					}
+
+					std::vector<AssertionMatch> results;
+					for (auto path : right) {
+						AssertionMatch guarded = path;
+						for (int t = 0; t <= path.start; t++) {
+							auto condition_at_t = condition.shift(t);
+							guarded = guarded && condition_at_t;
+						}
+						results.push_back(guarded);
+					}
+					return compress_paths(results);
+				}
 				case ast::BinaryAssertionOperator::OverlappedImplication:
 					return not_vec(seq_vec(left, 0, 0, not_vec(right)));
 				case ast::BinaryAssertionOperator::NonOverlappedImplication:
 					return not_vec(seq_vec(left, 1, 1, not_vec(right)));
 
 				case ast::BinaryAssertionOperator::Intersect:
-				case ast::BinaryAssertionOperator::Throughout:
 				case ast::BinaryAssertionOperator::Within:
 				case ast::BinaryAssertionOperator::Iff:
 				case ast::BinaryAssertionOperator::Until:
