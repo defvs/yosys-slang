@@ -13,7 +13,6 @@
 #include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/text/SourceLocation.h"
-#include "slang/util/ScopeGuard.h"
 
 #include "slang_frontend.h"
 #include "statements.h"
@@ -395,8 +394,11 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						else
 							this_disables = disables[t];
 					}
-					if (this_disables.has_value())
-						inner[i] = this_disables.value() || inner[i];
+					if (this_disables.has_value()) {
+						auto disable_window = this_disables.value();
+						auto not_disabled = !disable_window;
+						inner[i].en = eval.netlist.LogicAnd(inner[i].en, not_disabled.sig);
+					}
 				}
 				return inner;
 			}
@@ -453,15 +455,20 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 	log_abort(); // Unreachable
 };
 
-RTLIL::SigSpec evalAssertion(EvalContext& eval, const ast::AssertionExpr& assertion) {
+struct AssertionResult {
+	RTLIL::SigSpec a;
+	RTLIL::SigSpec en;
+};
+
+AssertionResult evalAssertion(EvalContext& eval, const ast::AssertionExpr& assertion) {
 	auto paths = synthesizeAssertionExpr(eval, assertion);
-	if (paths.empty()) return false; // Ran into an error
+	if (paths.empty()) return { false, false }; // Ran into an error
 
 	auto sig = collapse_or(paths);
 
 	auto init_escape = delay_sva_sample(eval, false, sig.start, true, sig.loc);
-	// Checks are disabled until all(?) paths are in the frame
-	return eval.netlist.LogicOr(sig.sig, init_escape);
+	auto frame_ready = eval.netlist.LogicNot(init_escape);
+	return { sig.sig, eval.netlist.LogicAnd(sig.en, frame_ready) };
 }
 
 // Process a 'concurrent assertion'
@@ -475,28 +482,8 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	auto &netlist = procedural.netlist;
 
 	const ast::AssertionExpr *expr = &top_expr;
-	slang::SourceRange source_range = expr->syntax ? expr->syntax->sourceRange() : statement.sourceRange;
 
-	// Extract disable iff condition if present; the extracted switch
-	// needs to live until the end of the function to be picked up
-	// by set_effects_trigger
-	std::optional<SwitchHelper> switch_;
-	auto guard = slang::ScopeGuard([&] {
-		if (switch_.has_value()) {
-			switch_->exit_branch();
-			switch_->finish(netlist);
-		}
-	});
-
-	if (ast::DisableIffAssertionExpr::isKind(expr->kind)) {
-		auto &disable = expr->as<ast::DisableIffAssertionExpr>();
-		switch_.emplace(procedural, netlist.ReduceBool(procedural.eval.sva(disable.condition)));
-		switch_->enter_branch({RTLIL::S0});
-		expr = &disable.expr;
-		source_range = expr->syntax ? expr->syntax->sourceRange() : statement.sourceRange;
-	}
-
-	RTLIL::SigSpec result = evalAssertion(procedural.eval, *expr);
+	AssertionResult result = evalAssertion(procedural.eval, *expr);
 
 	std::string flavor;
 	switch (statement.assertionKind) {
@@ -515,10 +502,12 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 		cell_name = netlist.new_id();
 	}
 
-	RTLIL::SigSpec a = netlist.ReduceBool(result);
+	RTLIL::SigSpec a = netlist.ReduceBool(result.a);
+	RTLIL::SigSpec en = netlist.ReduceBool(result.en);
 
 	auto cell = netlist.canvas->addCell(cell_name, ID($check));
 	procedural.set_effects_trigger(cell);
+	cell->setPort(ID::EN, netlist.LogicAnd(cell->getPort(ID::EN), en));
 	cell->setParam(ID::FLAVOR, flavor);
 	cell->setParam(ID::FORMAT, std::string(""));
 	cell->setParam(ID::ARGS_WIDTH, 0);
