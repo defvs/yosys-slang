@@ -82,6 +82,7 @@ extern slang::DiagCode UnsupportedSystemTask;
 extern slang::DiagCode UnsupportedSVAFeature;
 extern slang::DiagCode RepetitionsUnsupported;
 extern slang::DiagCode SVAClockingRequiresEdge;
+extern slang::DiagCode SVATemporalDelayRequiresClock;
 extern slang::DiagCode ErrorNonconstantArgument;
 extern slang::DiagCode ReadmemFileNotFound;
 extern slang::DiagCode ReadmemInvalidAddress;

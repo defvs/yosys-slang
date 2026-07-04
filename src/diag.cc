@@ -128,6 +128,7 @@ DiagCode UnsupportedSystemTask(DiagSubsystem::Netlist, 1074);
 DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
+DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1085);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
@@ -335,6 +336,9 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(SVAClockingRequiresEdge, "SVA clocking requires a signal edge");
 	engine.setSeverity(SVAClockingRequiresEdge, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVATemporalDelayRequiresClock, "SVA temporal delay requires exactly one clock edge");
+	engine.setSeverity(SVATemporalDelayRequiresClock, DiagnosticSeverity::Error);
 
 	engine.setMessage(ErrorNonconstantArgument, "failed to evaluate system function with non-constant argument");
 	engine.setSeverity(ErrorNonconstantArgument, DiagnosticSeverity::Error);

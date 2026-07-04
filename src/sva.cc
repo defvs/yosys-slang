@@ -24,11 +24,31 @@ namespace slang_frontend {
 // This portion was written by Louis-Emile Ploix "mndstrmr" (c) 2025; ISC licence
 // Brought into Slang head by Mel Young 2026, no additional work
 
-RTLIL::SigSpec past(EvalContext& eval, RTLIL::SigSpec sig, int time, RTLIL::Const init) {
-	for (int i = 0; i < time; i++) {
-		auto next = eval.netlist.canvas->addWire(eval.netlist.new_id(), sig.size());
+static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
+	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
+}
+
+static RTLIL::SigSpec delay_sva_sample(EvalContext& eval, RTLIL::SigSpec sig, int cycles,
+									   RTLIL::Const init,
+									   slang::SourceLocation loc = slang::SourceLocation::NoLocation,
+									   std::string_view name_hint = "sva_delay") {
+	if (cycles == 0)
+		return sig;
+
+	ProceduralContext *procedural = eval.procedural;
+	if (procedural == nullptr || procedural->timing.kind != ProcessTiming::EdgeTriggered ||
+			procedural->timing.triggers.size() != 1) {
+		eval.netlist.add_diag(diag::SVATemporalDelayRequiresClock, loc);
+		return RTLIL::SigSpec(RTLIL::Sx, sig.size());
+	}
+
+	auto &trigger = procedural->timing.triggers[0];
+	for (int i = 0; i < cycles; i++) {
+		auto next = eval.netlist.canvas->addWire(eval.netlist.new_id(std::string(name_hint)), sig.size());
+		next->attributes = eval.netlist.staged_attributes;
 		next->attributes[ID::init] = init;
-		eval.netlist.canvas->addFf(eval.netlist.new_id(), sig, next);
+		eval.netlist.add_dff(eval.netlist.new_id(std::string(name_hint)),
+							 trigger.signal, sig, next, trigger.edge_polarity);
 		sig = next;
 	}
 	return sig;
@@ -37,43 +57,64 @@ RTLIL::SigSpec past(EvalContext& eval, RTLIL::SigSpec sig, int time, RTLIL::Cons
 struct AssertionMatch {
 	EvalContext& eval;
 	RTLIL::SigSpec sig;
+	RTLIL::SigSpec en;
 	int start;
+	slang::SourceLocation loc;
 
-	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_): eval(eval_), sig(sig_), start(0) {}
+	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_,
+				   slang::SourceLocation loc_ = slang::SourceLocation::NoLocation):
+		eval(eval_), sig(sig_), en(true), start(0), loc(loc_) {}
 
 private:
-	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_, int start_): eval(eval_), sig(sig_), start(start_) {}
+	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_, RTLIL::SigSpec en_, int start_,
+				   slang::SourceLocation loc_):
+		eval(eval_), sig(sig_), en(en_), start(start_), loc(loc_) {}
 
 public:
 	void operator=(AssertionMatch other) {
 		sig = other.sig;
+		en = other.en;
 		start = other.start;
+		loc = other.loc;
 	}
 
 	AssertionMatch shift(int time) const {
-		if (sig.is_fully_const()) return { eval, sig, start + time };
-		return { eval, past(eval, sig, time, RTLIL::State::Sx), start + time };
+		RTLIL::SigSpec shifted_sig = sig;
+		RTLIL::SigSpec shifted_en = en;
+		if (!sig.is_fully_const())
+			shifted_sig = delay_sva_sample(eval, sig, time, RTLIL::State::Sx, loc);
+		if (!en.is_fully_const())
+			shifted_en = delay_sva_sample(eval, en, time, RTLIL::State::S0, loc);
+		return { eval, shifted_sig, shifted_en, start + time, loc };
 	}
 
 	AssertionMatch operator||(AssertionMatch& other) const {
-		if (sig.is_fully_const() && sig.as_bool()) return { eval, true, std::max(other.start, start) };
-		if (sig.is_fully_const() && !sig.as_bool()) return { eval, other.sig, std::max(other.start, start) };
-		if (other.sig.is_fully_const() && other.sig.as_bool()) return { eval, true, std::max(other.start, start) };
-		if (other.sig.is_fully_const() && !other.sig.as_bool()) return { eval, sig, std::max(other.start, start) };
-		return { eval, eval.netlist.LogicOr(sig, other.sig), std::max(other.start, start) };
+		RTLIL::SigSpec gated = en.is_fully_const() && en.as_bool() ? sig : eval.netlist.LogicAnd(en, sig);
+		RTLIL::SigSpec other_gated = other.en.is_fully_const() && other.en.as_bool()
+										  ? other.sig
+										  : eval.netlist.LogicAnd(other.en, other.sig);
+		RTLIL::SigSpec result_sig = eval.netlist.LogicOr(gated, other_gated);
+		RTLIL::SigSpec result_en = eval.netlist.LogicOr(en, other.en);
+		return { eval, result_sig, result_en, std::max(other.start, start), loc };
 	}
 
 	AssertionMatch operator&&(AssertionMatch& other) const {
-		if (sig.is_fully_const() && sig.as_bool()) return { eval, other.sig, std::max(other.start, start) };
-		if (sig.is_fully_const() && !sig.as_bool()) return { eval, false, std::max(other.start, start) };
-		if (other.sig.is_fully_const() && other.sig.as_bool()) return { eval, sig, std::max(other.start, start) };
-		if (other.sig.is_fully_const() && !other.sig.as_bool()) return { eval, false, std::max(other.start, start) };
-		return { eval, eval.netlist.LogicAnd(sig, other.sig), std::max(other.start, start) };
+		RTLIL::SigSpec result_en = eval.netlist.LogicAnd(en, other.en);
+		if (sig.is_fully_const() && sig.as_bool())
+			return { eval, other.sig, result_en, std::max(other.start, start), loc };
+		if (sig.is_fully_const() && !sig.as_bool())
+			return { eval, false, result_en, std::max(other.start, start), loc };
+		if (other.sig.is_fully_const() && other.sig.as_bool())
+			return { eval, sig, result_en, std::max(other.start, start), loc };
+		if (other.sig.is_fully_const() && !other.sig.as_bool())
+			return { eval, false, result_en, std::max(other.start, start), loc };
+		return { eval, eval.netlist.LogicAnd(sig, other.sig), eval.netlist.LogicAnd(en, other.en),
+				 std::max(other.start, start), loc };
 	}
 
 	AssertionMatch operator!() const {
-		if (sig.is_fully_const()) return { eval, !sig.as_bool(), start };
-		return { eval, eval.netlist.LogicNot(sig), start };
+		if (sig.is_fully_const()) return { eval, !sig.as_bool(), en, start, loc };
+		return { eval, eval.netlist.LogicNot(sig), en, start, loc };
 	}
 };
 
@@ -162,7 +203,7 @@ static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
 	std::vector<AssertionMatch> repeated;
 	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
 		if (count == 0)
-			repeated.push_back({eval, true});
+			repeated.push_back({eval, true, expr_loc(expr)});
 		else {
 			auto count_paths = repeat_count(paths, (int)count);
 			repeated.insert(repeated.end(), count_paths.begin(), count_paths.end());
@@ -181,7 +222,8 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval.sva(simple.expr) }};
+				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval.sva(simple.expr),
+													   expr_loc(expr) }};
 				if (!apply_repetition(eval, expr, simple.repetition, paths))
 					return {};
 				return paths;
@@ -190,7 +232,7 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 			{
 				const auto& sequence = expr.as<ast::SequenceConcatExpr>();
 				std::vector<AssertionMatch> own_paths;
-				own_paths.push_back({eval, true});
+				own_paths.push_back({eval, true, expr_loc(expr)});
 				for (int i = 0; i < sequence.elements.size(); i++) {
 					auto inner_paths = synthesizeAssertionExpr(eval, *sequence.elements[i].sequence);
 
@@ -219,7 +261,7 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						return {};
 					}
 
-					std::vector<AssertionMatch> true_path = {{eval, true}};
+					std::vector<AssertionMatch> true_path = {{eval, true, expr_loc(expr)}};
 					return seq_vec(true_path, uop.range->min, uop.range->max.value(),
 								   synthesizeAssertionExpr(eval, uop.expr));
 				}
@@ -236,7 +278,7 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						delay = uop.range->min;
 					}
 
-					std::vector<AssertionMatch> true_path = {{eval, true}};
+					std::vector<AssertionMatch> true_path = {{eval, true, expr_loc(expr)}};
 					return seq_vec(true_path, delay, delay, synthesizeAssertionExpr(eval, uop.expr));
 				}
 
@@ -332,14 +374,13 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 			}
 		case slang::ast::AssertionExprKind::Clocking:
 			{
-				const auto& clocking = expr.as<ast::ClockingAssertionExpr>();
-				// Ignore clocking information, since we just use a global clock anyway
-				return synthesizeAssertionExpr(eval, clocking.expr);
+				eval.netlist.add_diag(diag::UnsupportedSVAFeature, expr_loc(expr));
+				return {};
 			}
 		case slang::ast::AssertionExprKind::DisableIff:
 			{
 				const auto& disableiff = expr.as<ast::DisableIffAssertionExpr>();
-				auto disable = (AssertionMatch) {eval, eval(disableiff.condition)};
+				auto disable = (AssertionMatch) {eval, eval(disableiff.condition), expr_loc(expr)};
 				auto inner = synthesizeAssertionExpr(eval, disableiff.expr);
 				std::vector<AssertionMatch> disables;
 				disables.push_back(disable);
@@ -418,7 +459,7 @@ RTLIL::SigSpec evalAssertion(EvalContext& eval, const ast::AssertionExpr& assert
 
 	auto sig = collapse_or(paths);
 
-	auto init_escape = past(eval, false, sig.start, true);
+	auto init_escape = delay_sva_sample(eval, false, sig.start, true, sig.loc);
 	// Checks are disabled until all(?) paths are in the frame
 	return eval.netlist.LogicOr(sig.sig, init_escape);
 }
