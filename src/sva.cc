@@ -211,12 +211,23 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 				case slang::ast::UnaryAssertionOperator::Not:
 					return not_vec(synthesizeAssertionExpr(eval, uop.expr));
 
+				case slang::ast::UnaryAssertionOperator::Eventually:
+				case slang::ast::UnaryAssertionOperator::SEventually:
+				{
+					if (!uop.range.has_value() || !uop.range->max.has_value()) {
+						eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+						return {};
+					}
+
+					std::vector<AssertionMatch> true_path = {{eval, true}};
+					return seq_vec(true_path, uop.range->min, uop.range->max.value(),
+								   synthesizeAssertionExpr(eval, uop.expr));
+				}
+
 				case slang::ast::UnaryAssertionOperator::NextTime:
 				case slang::ast::UnaryAssertionOperator::SNextTime:
 				case slang::ast::UnaryAssertionOperator::Always:
 				case slang::ast::UnaryAssertionOperator::SAlways:
-				case slang::ast::UnaryAssertionOperator::Eventually:
-				case slang::ast::UnaryAssertionOperator::SEventually:
 					eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
 					return {};
 				}

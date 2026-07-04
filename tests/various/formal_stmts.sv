@@ -99,3 +99,11 @@ endmodule
 module m_assert_repeat_3(input logic clk_i, input logic x, input logic y);
         named: assert property(@(posedge clk_i) x |=> y[*1:2]);
 endmodule
+
+module m_assert_eventually_1(input logic clk_i, input logic x);
+        named: assert property(@(posedge clk_i) eventually [1:3] x);
+endmodule
+
+module m_assert_eventually_2(input logic clk_i, input logic x, input logic y);
+        named: assert property(@(posedge clk_i) x |-> s_eventually [0:2] y);
+endmodule
