@@ -226,6 +226,20 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 
 				case slang::ast::UnaryAssertionOperator::NextTime:
 				case slang::ast::UnaryAssertionOperator::SNextTime:
+				{
+					uint32_t delay = 1;
+					if (uop.range.has_value()) {
+						if (!uop.range->max.has_value() || uop.range->min != uop.range->max.value()) {
+							eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+							return {};
+						}
+						delay = uop.range->min;
+					}
+
+					std::vector<AssertionMatch> true_path = {{eval, true}};
+					return seq_vec(true_path, delay, delay, synthesizeAssertionExpr(eval, uop.expr));
+				}
+
 				case slang::ast::UnaryAssertionOperator::Always:
 				case slang::ast::UnaryAssertionOperator::SAlways:
 					eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());

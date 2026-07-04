@@ -131,3 +131,15 @@ endmodule
 module m_assert_first_match_2(input logic clk_i, input logic x, input logic y, input logic z);
         named: assert property(@(posedge clk_i) z |=> first_match((x ##[1:2] y) or (x ##1 z)));
 endmodule
+
+module m_assert_nexttime_1(input logic clk_i, input logic x);
+        named: assert property(@(posedge clk_i) nexttime x);
+endmodule
+
+module m_assert_nexttime_2(input logic clk_i, input logic x);
+        named: assert property(@(posedge clk_i) nexttime [2] x);
+endmodule
+
+module m_assert_nexttime_3(input logic clk_i, input logic x, input logic y);
+        named: assert property(@(posedge clk_i) x |-> s_nexttime [1] y);
+endmodule
