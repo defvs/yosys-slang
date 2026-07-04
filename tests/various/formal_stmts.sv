@@ -115,3 +115,11 @@ endmodule
 module m_assert_throughout_2(input logic clk_i, input logic x, input logic y, input logic z);
         named: assert property(@(posedge clk_i) y |-> x throughout (##1 z));
 endmodule
+
+module m_assert_intersect_1(input logic clk_i, input logic x, input logic y, input logic z);
+        named: assert property(@(posedge clk_i) (x ##1 y) intersect (z ##1 y));
+endmodule
+
+module m_assert_intersect_2(input logic clk_i, input logic x, input logic y, input logic z);
+        named: assert property(@(posedge clk_i) x |=> (y ##[1:2] z) intersect (##2 z));
+endmodule
