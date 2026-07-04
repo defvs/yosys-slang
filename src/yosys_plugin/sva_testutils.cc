@@ -56,7 +56,7 @@ struct TestSlangsvaPass : Pass
 
 				auto test = m->cell(test_name);
 				if (!test || !tests.count(test)) {
-					log_error("No test assertion '%s' found to pair with reference '%s'", test_name,
+					log_error("No test assertion '%s' found to pair with reference '%s'", test_name.c_str(),
 							log_id(ref));
 				}
 				tests.erase(test);
