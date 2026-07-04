@@ -123,3 +123,11 @@ endmodule
 module m_assert_intersect_2(input logic clk_i, input logic x, input logic y, input logic z);
         named: assert property(@(posedge clk_i) x |=> (y ##[1:2] z) intersect (##2 z));
 endmodule
+
+module m_assert_first_match_1(input logic clk_i, input logic x, input logic y);
+        named: assert property(@(posedge clk_i) first_match(x ##[1:3] y));
+endmodule
+
+module m_assert_first_match_2(input logic clk_i, input logic x, input logic y, input logic z);
+        named: assert property(@(posedge clk_i) z |=> first_match((x ##[1:2] y) or (x ##1 z)));
+endmodule

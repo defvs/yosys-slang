@@ -360,6 +360,34 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 				return paths;
 			}
 		case slang::ast::AssertionExprKind::FirstMatch:
+			{
+				const auto& first_match = expr.as<ast::FirstMatchAssertionExpr>();
+				if (!first_match.matchItems.empty()) {
+					eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+					return {};
+				}
+
+				auto paths = compress_paths(synthesizeAssertionExpr(eval, first_match.seq));
+				std::vector<AssertionMatch> results;
+
+				for (auto path : paths) {
+					std::vector<AssertionMatch> earlier_matches;
+					for (auto earlier : paths) {
+						if (earlier.start >= path.start)
+							continue;
+						earlier_matches.push_back(earlier.shift(path.start - earlier.start));
+					}
+
+					if (!earlier_matches.empty()) {
+						auto no_earlier_match = !collapse_or(earlier_matches);
+						path = path && no_earlier_match;
+					}
+
+					results.push_back(path);
+				}
+
+				return compress_paths(results);
+			}
 		case slang::ast::AssertionExprKind::StrongWeak:
 		case slang::ast::AssertionExprKind::Abort:
 		case slang::ast::AssertionExprKind::Conditional:
