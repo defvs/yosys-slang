@@ -31,10 +31,10 @@ struct TestSlangsvaPass : Pass
 		}
 		extra_args(args, argidx, d);
 
-		pool<RTLIL::Cell *> refs;
-		pool<RTLIL::Cell *> tests;
-
 		for (auto m : d->modules()) {
+			pool<RTLIL::Cell *> refs;
+			pool<RTLIL::Cell *> tests;
+
 			for (auto cell : m->cells()) {
 				if (cell->type == ID($check)) {
 					if (cell->name.ends_with("_test")) {
@@ -94,7 +94,7 @@ struct TestSlangsvaPass : Pass
 
 			// Any surviving test assertions are unmatched extras
 			for (auto test : tests) {
-				log_error("No ref assertion found to pair with rest '%s'", log_id(test));
+				log_error("No ref assertion found to pair with test '%s'", log_id(test));
 			}
 		}
 	}
