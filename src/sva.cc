@@ -181,7 +181,7 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval(simple.expr) }};
+				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval.sva(simple.expr) }};
 				if (!apply_repetition(eval, expr, simple.repetition, paths))
 					return {};
 				return paths;
