@@ -87,3 +87,15 @@ endmodule
 module m_assert_seq_7(input logic clk_i, input logic x, input logic y, input logic z);
         named: assert property(@(posedge clk_i) disable iff (~z)  x |-> ##3 ~y);
 endmodule
+
+module m_assert_repeat_1(input logic clk_i, input logic x);
+        named: assert property(@(posedge clk_i) x[*3]);
+endmodule
+
+module m_assert_repeat_2(input logic clk_i, input logic x, input logic y);
+        named: assert property(@(posedge clk_i) (x ##1 y)[*1:2]);
+endmodule
+
+module m_assert_repeat_3(input logic clk_i, input logic x, input logic y);
+        named: assert property(@(posedge clk_i) x |=> y[*1:2]);
+endmodule

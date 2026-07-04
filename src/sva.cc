@@ -102,16 +102,29 @@ static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> pa
 	return grouped;
 }
 
+static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
+	log_assert(!paths.empty());
+
+	int max_start = 0;
+	for (auto path : paths)
+		max_start = std::max(max_start, path.start);
+
+	std::optional<AssertionMatch> collapsed;
+	for (auto path : paths) {
+		if (path.start < max_start)
+			path = path.shift(max_start - path.start);
+
+		if (collapsed.has_value())
+			collapsed = collapsed.value() || path;
+		else
+			collapsed = path;
+	}
+	return collapsed.value();
+}
+
 static std::vector<AssertionMatch> not_vec(std::vector<AssertionMatch> in) {
 	if (in.empty()) return {};
-	AssertionMatch collapsed = in[0];
-	for (int i = 1; i < in.size(); i++) {
-		if (collapsed.start >= in[i].start)
-			collapsed = in[i].shift(collapsed.start - in[i].start) || collapsed;
-		else
-			collapsed = collapsed.shift(in[i].start - collapsed.start) || in[i];
-	}
-	return { !collapsed };
+	return { !collapse_or(in) };
 }
 
 static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int min, int max, std::vector<AssertionMatch> b) {
@@ -125,6 +138,41 @@ static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int mi
 	return compress_paths(new_own_paths);
 }
 
+static std::vector<AssertionMatch> repeat_count(std::vector<AssertionMatch> paths, int count) {
+	if (count == 0)
+		return {};
+
+	std::vector<AssertionMatch> result = paths;
+	for (int i = 1; i < count; i++)
+		result = seq_vec(result, 1, 1, paths);
+	return result;
+}
+
+static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
+							 std::optional<ast::SequenceRepetition> repetition,
+							 std::vector<AssertionMatch>& paths) {
+	if (!repetition.has_value())
+		return true;
+
+	if (repetition->kind != ast::SequenceRepetition::Consecutive || !repetition->range.max.has_value()) {
+		eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+		return false;
+	}
+
+	std::vector<AssertionMatch> repeated;
+	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
+		if (count == 0)
+			repeated.push_back({eval, true});
+		else {
+			auto count_paths = repeat_count(paths, (int)count);
+			repeated.insert(repeated.end(), count_paths.begin(), count_paths.end());
+		}
+	}
+
+	paths = compress_paths(repeated);
+	return true;
+}
+
 // Empty indicates error
 static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, const ast::AssertionExpr& expr) {
 	switch (expr.kind) {
@@ -133,7 +181,10 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-				return {{ eval, simple.isNullExpr ? false : eval(simple.expr) }};
+				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval(simple.expr) }};
+				if (!apply_repetition(eval, expr, simple.repetition, paths))
+					return {};
+				return paths;
 			}
 		case slang::ast::AssertionExprKind::SequenceConcat:
 			{
@@ -255,6 +306,18 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 			}
 
 		case slang::ast::AssertionExprKind::SequenceWithMatch:
+			{
+				const auto& with_match = expr.as<ast::SequenceWithMatchExpr>();
+				if (!with_match.matchItems.empty()) {
+					eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+					return {};
+				}
+
+				auto paths = synthesizeAssertionExpr(eval, with_match.expr);
+				if (!apply_repetition(eval, expr, with_match.repetition, paths))
+					return {};
+				return paths;
+			}
 		case slang::ast::AssertionExprKind::FirstMatch:
 		case slang::ast::AssertionExprKind::StrongWeak:
 		case slang::ast::AssertionExprKind::Abort:
@@ -270,8 +333,7 @@ RTLIL::SigSpec evalAssertion(EvalContext& eval, const ast::AssertionExpr& assert
 	auto paths = synthesizeAssertionExpr(eval, assertion);
 	if (paths.empty()) return false; // Ran into an error
 
-	auto sig = paths[0];
-	for (size_t i = 1; i < paths.size(); i++) sig = sig || paths[i];
+	auto sig = collapse_or(paths);
 
 	auto init_escape = past(eval, false, sig.start, true);
 	// Checks are disabled until all(?) paths are in the frame
