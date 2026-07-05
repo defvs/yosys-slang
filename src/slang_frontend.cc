@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <optional>
 #include <vector>
+#include <algorithm>
 
 #include "slang/ast/ASTVisitor.h"
 #include "kernel/yosys_common.h"
@@ -861,6 +862,54 @@ RTLIL::SigSpec handle_past(EvalContext &eval, const ast::CallExpression &call)
 	return past_wire;
 }
 
+RTLIL::SigSpec handle_sampled_value_function(EvalContext &eval, const ast::CallExpression &call)
+{
+	NetlistContext &netlist = eval.netlist;
+	std::string_view name = call.getSubroutineName();
+
+	if (call.arguments().size() != 1) {
+		unimplemented(call);
+	}
+
+	auto current = eval(*call.arguments()[0]);
+	auto past = handle_past(eval, call);
+
+	if (name == "$stable")
+		return netlist.Eq(current, past);
+	if (name == "$changed")
+		return netlist.LogicNot(netlist.Eq(current, past));
+
+	// IEEE 1800 defines $rose/$fell in terms of the least significant bit.
+	RTLIL::SigSpec current_lsb = current[0];
+	RTLIL::SigSpec past_lsb = past[0];
+	if (name == "$rose")
+		return netlist.LogicAnd(current_lsb, netlist.LogicNot(past_lsb));
+	if (name == "$fell")
+		return netlist.LogicAnd(netlist.LogicNot(current_lsb), past_lsb);
+
+	log_abort();
+}
+
+RTLIL::SigSpec handle_onehot_function(EvalContext &eval, const ast::CallExpression &call)
+{
+	NetlistContext &netlist = eval.netlist;
+	std::string_view name = call.getSubroutineName();
+
+	if (call.arguments().size() != 1) {
+		unimplemented(call);
+	}
+
+	auto sig = eval(*call.arguments()[0]);
+	int count_width = std::max(1, ceil_log2(sig.size() + 1));
+	auto count = netlist.CountOnes(sig, count_width);
+	if (name == "$onehot")
+		return netlist.Eq(count, RTLIL::Const(1, count_width));
+	if (name == "$onehot0")
+		return netlist.Le(count, RTLIL::Const(1, count_width), false);
+
+	log_abort();
+}
+
 static const RTLIL::Const reverse_data(RTLIL::Const &orig, int width)
 {
 	std::vector<RTLIL::State> bits;
@@ -1619,6 +1668,11 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 					ret = netlist.Clog2(sig, (int)call.type->getBitstreamWidth());
 				} else if (name == "$past") {
 					ret = handle_past(*this, call);
+				} else if (name == "$rose" || name == "$fell" ||
+						   name == "$stable" || name == "$changed") {
+					ret = handle_sampled_value_function(*this, call);
+				} else if (name == "$onehot" || name == "$onehot0") {
+					ret = handle_onehot_function(*this, call);
 				} else if (name == "$signed" || name == "$unsigned") {
 					require(expr, call.arguments().size() == 1);
 					ret = (*this)(*call.arguments()[0]);
