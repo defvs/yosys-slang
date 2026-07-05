@@ -88,3 +88,21 @@ foreach(test_script ${ALL_TESTS})
             ${YOSYS_BINDIR}/yosys -m $<TARGET_FILE:yosys-slang> ${test_fullpath}
     )
 endforeach()
+
+option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
+
+if (ENABLE_OPENTITAN_SVA_STRESS)
+    add_test(
+        NAME opentitan_sva_stress
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress
+        COMMAND
+            ${CMAKE_COMMAND} -E env
+            PLUGIN=$<TARGET_FILE:yosys-slang>
+            ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress/run_all.sh
+    )
+    set_tests_properties(
+        opentitan_sva_stress
+        PROPERTIES
+            LABELS "opentitan;sva;stress"
+    )
+endif()

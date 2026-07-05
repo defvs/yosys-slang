@@ -2,18 +2,14 @@
 # Copyright (c) 2026 The yosys-slang contributors
 # SPDX-License-Identifier: ISC
 
-set -u
+set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TESTDIR="$ROOT/tests/opentitan_tlul"
-OT="$ROOT/tests/third_party/opentitan"
-BUILD="$TESTDIR/build"
-PLUGIN="${PLUGIN:-$ROOT/build/slang.so}"
-YOSYS="${YOSYS:-yosys}"
-SMTBMC="${SMTBMC:-yosys-smtbmc}"
-SOLVER="${SOLVER:-yices}"
+CASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPTH="${DEPTH:-8}"
-ASSUME_LEGAL_D2H="${ASSUME_LEGAL_D2H:-0}"
+source "$CASE_DIR/../common/common.sh"
+
+BUILD="$BUILD_ROOT/tlul"
+ASSUME_LEGAL_D2H="${ASSUME_LEGAL_D2H:-1}"
 ASSUME_LEGAL_D2H_IMMEDIATE="${ASSUME_LEGAL_D2H_IMMEDIATE:-0}"
 EXPLICIT_TLUL_CLOCKING="${EXPLICIT_TLUL_CLOCKING:-0}"
 SLANG_DEFINES=()
@@ -30,6 +26,7 @@ SYNTH_LOG="$BUILD/synth.log"
 SMT="$BUILD/tlul_sva.smt2"
 BMC_LOG="$BUILD/bmc.log"
 SUMMARY="$BUILD/summary.md"
+RESULT="$BUILD/result.txt"
 
 mkdir -p "$BUILD"
 
@@ -41,7 +38,7 @@ if [ "$EXPLICIT_TLUL_CLOCKING" = 1 ]; then
   PREPARE_ARGS+=(--explicit-clocking)
 fi
 
-python3 "$TESTDIR/prepare_tlul_assert.py" \
+python3 "$CASE_DIR/prepare_tlul_assert.py" \
   "${PREPARE_ARGS[@]}"
 
 cat > "$BUILD/tlul_sva.ys" <<EOF
@@ -53,7 +50,7 @@ read_slang --no-synthesis-define --ignore-timing --single-unit --top tlul_sva_ha
   $OT/hw/ip/prim/rtl/prim_secded_pkg.sv \\
   $OT/hw/ip/tlul/rtl/tlul_pkg.sv \\
   $TLUL_ASSERT_FILTERED \\
-  $TESTDIR/tlul_sva_harness.sv
+  $CASE_DIR/harness.sv
 prep -top tlul_sva_harness
 async2sync
 dffunmap
@@ -138,6 +135,17 @@ fi
     echo "Skipped because synthesis failed."
   fi
 } > "$SUMMARY"
+
+{
+  echo "tlul|$synth_status|$bmc_status|$BUILD"
+  if [ "$synth_status" = FAIL ]; then
+    grep -E 'ERROR:|Assert failed|Unsupported|internal error|Exception' "$SYNTH_LOG" | head -20 || true
+  elif [ "$bmc_status" = FAIL ]; then
+    grep -E 'Assert failed|Status:|BMC failed|FAILED' "$BMC_LOG" || true
+  else
+    grep -E 'Status:|PASSED' "$BMC_LOG" || true
+  fi
+} > "$RESULT"
 
 echo "$SUMMARY"
 exit $([ "$synth_status" = PASS ] && [ "$bmc_status" = PASS ] && echo 0 || echo 1)
