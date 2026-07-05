@@ -9,9 +9,12 @@
 #include <optional>
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/SemanticFacts.h"
+#include "slang/ast/Compilation.h"
+#include "slang/ast/TimingControl.h"
 #include "kernel/rtlil.h"
 #include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/text/SourceLocation.h"
 
 #include "slang_frontend.h"
@@ -517,64 +520,97 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	transfer_attrs<const ast::Statement>(netlist, statement, cell);
 }
 
+static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingControl &clocking,
+									 ProcessTiming &timing)
+{
+	if (ast::EventListControl::isKind(clocking.kind)) {
+		const auto &event_list = clocking.as<ast::EventListControl>();
+		if (event_list.events.size() != 1) {
+			netlist.add_diag(diag::UnsupportedSVAFeature, clocking.sourceRange);
+			return false;
+		}
+		return timing_from_sva_clocking(netlist, *event_list.events[0], timing);
+	}
+
+	if (!ast::SignalEventControl::isKind(clocking.kind)) {
+		netlist.add_diag(diag::UnsupportedSVAFeature, clocking.sourceRange);
+		return false;
+	}
+
+	const auto &signal_event = clocking.as<ast::SignalEventControl>();
+	switch (signal_event.edge) {
+	case ast::EdgeKind::None:
+		netlist.add_diag(diag::SVAClockingRequiresEdge, signal_event.sourceRange);
+		return false;
+
+	case ast::EdgeKind::PosEdge:
+	case ast::EdgeKind::NegEdge:
+		timing.triggers.push_back(ProcessTiming::Sensitivity {
+			.signal = netlist.eval(signal_event.expr),
+			.edge_polarity = (signal_event.edge == ast::EdgeKind::PosEdge),
+			.ast_node = &clocking
+		});
+		break;
+
+	case ast::EdgeKind::BothEdges:
+		netlist.add_diag(diag::BothEdgesUnsupported, signal_event.sourceRange);
+		return false;
+	}
+
+	if (signal_event.iffCondition) {
+		// TODO
+		netlist.add_diag(diag::IffUnsupported, signal_event.iffCondition->sourceRange);
+	}
+
+	return true;
+}
+
+static void process_clocked_sva_property(NetlistContext &netlist,
+										 const ast::ConcurrentAssertionStatement &statement,
+										 const ast::StatementBlockSymbol *block,
+										 const ast::TimingControl &clocking,
+										 const ast::AssertionExpr &expr)
+{
+	ProcessTiming timing(ProcessTiming::EdgeTriggered);
+	if (!timing_from_sva_clocking(netlist, clocking, timing))
+		return;
+
+	ProceduralContext procedure(netlist, timing);
+	process_sva_property(statement, block, procedure, expr);
+
+	RTLIL::Process *rtlil_proc = netlist.canvas->addProcess(netlist.new_id());
+	transfer_attrs<const ast::Statement>(netlist, statement, rtlil_proc);
+	procedure.copy_case_tree_into(rtlil_proc->root_case);
+}
+
 void process_freestanding_sva_property(NetlistContext &netlist,
 									   const ast::ConcurrentAssertionStatement &statement,
-						  			   const ast::StatementBlockSymbol *block)
+						  			   const ast::StatementBlockSymbol *block,
+									   const ast::Scope *scope)
 {
 	const ast::AssertionExpr &spec = statement.propertySpec;
 
 	if (ast::ClockingAssertionExpr::isKind(spec.kind)) {
 		// Need to strip clocking
 		const auto &clocking_expr = spec.as<ast::ClockingAssertionExpr>();
-		const auto &clocking = clocking_expr.clocking;
-
-		if (!ast::SignalEventControl::isKind(clocking.kind)) {
-			netlist.add_diag(diag::UnsupportedSVAFeature, clocking.sourceRange);
+		process_clocked_sva_property(netlist, statement, block, clocking_expr.clocking,
+									 clocking_expr.expr);
+		return;
+	} else if (scope) {
+		if (auto default_clocking = scope->getCompilation().getDefaultClocking(*scope)) {
+			const auto &clocking = default_clocking->as<ast::ClockingBlockSymbol>().getEvent();
+			process_clocked_sva_property(netlist, statement, block, clocking, spec);
 			return;
 		}
-
-		const auto &signal_event = clocking.as<ast::SignalEventControl>();
-
-		ProcessTiming timing(ProcessTiming::EdgeTriggered);
-		switch (signal_event.edge) {
-		case ast::EdgeKind::None:
-			netlist.add_diag(diag::SVAClockingRequiresEdge, signal_event.sourceRange);
-			return;
-
-		case ast::EdgeKind::PosEdge:
-		case ast::EdgeKind::NegEdge:
-			timing.triggers.push_back(ProcessTiming::Sensitivity {
-				.signal = netlist.eval(signal_event.expr),
-				.edge_polarity = (signal_event.edge == ast::EdgeKind::PosEdge),
-				.ast_node = &clocking
-			});
-			break;
-
-		case ast::EdgeKind::BothEdges:
-			netlist.add_diag(diag::BothEdgesUnsupported, signal_event.sourceRange);
-			return;
-		}
-
-		if (signal_event.iffCondition) {
-			// TODO
-			netlist.add_diag(diag::IffUnsupported, signal_event.iffCondition->sourceRange);
-		}
-
-		ProceduralContext procedure(netlist, timing);
-		process_sva_property(statement, block, procedure, clocking_expr.expr);
-
-		RTLIL::Process *rtlil_proc = netlist.canvas->addProcess(netlist.new_id());
-		transfer_attrs<const ast::Statement>(netlist, statement, rtlil_proc);
-		procedure.copy_case_tree_into(rtlil_proc->root_case);
-	} else {
-		// No clocking
-		ProceduralContext procedure(netlist, ProcessTiming::implicit);
-		process_sva_property(statement, block, procedure, spec);
-
-		RTLIL::Process *rtlil_proc = netlist.canvas->addProcess(netlist.new_id());
-		transfer_attrs<const ast::Statement>(netlist, statement, rtlil_proc);
-		procedure.copy_case_tree_into(rtlil_proc->root_case);
 	}
+
+	// No clocking
+	ProceduralContext procedure(netlist, ProcessTiming::implicit);
+	process_sva_property(statement, block, procedure, spec);
+
+	RTLIL::Process *rtlil_proc = netlist.canvas->addProcess(netlist.new_id());
+	transfer_attrs<const ast::Statement>(netlist, statement, rtlil_proc);
+	procedure.copy_case_tree_into(rtlil_proc->root_case);
 }
 
 };

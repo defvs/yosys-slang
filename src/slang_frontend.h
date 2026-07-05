@@ -747,6 +747,7 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 						  ProceduralContext &procedural, const ast::AssertionExpr &expr);
 void process_freestanding_sva_property(NetlistContext &netlist,
 									   const ast::ConcurrentAssertionStatement &statement,
-						  			   const ast::StatementBlockSymbol *block);
+						  			   const ast::StatementBlockSymbol *block,
+									   const ast::Scope *scope);
 
 };

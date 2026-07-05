@@ -2052,7 +2052,7 @@ public:
 			if (!netlist.settings.ignore_assertions.value_or(false)) {
 				if (ast::ConcurrentAssertionStatement::isKind(body->kind)) {
 					process_freestanding_sva_property(netlist, body->as<ast::ConcurrentAssertionStatement>(),
-													  block_symbol);
+													  block_symbol, symbol.getParentScope());
 				} else {
 					ProceduralContext procedure(netlist, ProcessTiming::implicit);
 					symbol.getBody().visit(StatementExecutor(procedure));
@@ -2688,6 +2688,12 @@ public:
 	}
 
 	void handle(const ast::ClockingBlockSymbol& symbol) {
+		if (symbol.isDefault)
+			return;
+		if (auto scope = symbol.getParentScope()) {
+			if (symbol.getCompilation().getDefaultClocking(*scope) == &symbol)
+				return;
+		}
 		if (!netlist.settings.ignore_timing.value_or(false))
 			netlist.add_diag(diag::GenericTimingUnsyn, symbol.location);
 	}
