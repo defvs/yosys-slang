@@ -12,18 +12,13 @@ UNSUPPORTED_PATTERNS = (
     " throughout ",
     "[->",
     "[*",
-    "$changed",
-    "$rose",
-    "$fell",
-    "$stable",
-    "$onehot(",
 )
 
 DISABLED_REASON = {
     "prim_alert_rxtx_assert_fpv.sv": {
         "PingEn_M": "uses throughout and goto repetition",
         "FullHandshake_S": "named sequence used by unsupported sequence composition tests",
-        "PingHs_A": "uses $changed and named sequence reference",
+        "PingHs_A": "uses named sequence reference",
         "AlertHs_A": "uses named sequence reference",
         "AlertTestHs_A": "uses named sequence reference",
         "AlertReqAck_A": "uses unbounded strong eventuality",
@@ -37,14 +32,6 @@ DISABLED_REASON = {
         "EscDeassert_A": "uses unbounded strong eventuality and consecutive repetition",
         "FsmLivenessSender_A": "uses unbounded strong eventuality",
         "FsmLivenessReceiver_A": "uses unbounded strong eventuality",
-    },
-    "clkmgr_gated_clock_sva_if.sv": {
-        "GateOpen_A": "uses $changed",
-        "GateClose_A": "uses $changed",
-    },
-    "clkmgr_cg_en_sva_if.sv": {
-        "CgEnOn_A": "uses $fell, which currently reaches slang as an unsupported system task",
-        "CgEnOff_A": "uses $rose, which currently reaches slang as an unsupported system task",
     },
     "sha3pad_assert_if.sv": {
         "ProcessToRun_A": "uses unbounded strong eventuality",
@@ -156,6 +143,16 @@ def filter_source(src, dst):
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.Idle",
             "3'd0",
         )
+        text = text.replace(
+            "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase1",
+            "3'd3",
+        )
+        text = text.replace(
+            "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase2",
+            "3'd4",
+        )
+    if source_name == "clkmgr_cg_en_sva_if.sv":
+        text = text.replace("scanmode == prim_mubi_pkg::MuBi4True", "scanmode == 4'h6")
         text = text.replace("$onehot0({ping_err_pi, ping_err_ni})", "!(ping_err_pi && ping_err_ni)")
         text = text.replace("$onehot0({ack_err_pi, ack_err_ni})", "!(ack_err_pi && ack_err_ni)")
         text = text.replace("$onehot0({alert_err_pi, alert_err_ni})", "!(alert_err_pi && alert_err_ni)")
