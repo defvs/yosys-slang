@@ -171,6 +171,12 @@ static std::vector<AssertionMatch> not_vec(std::vector<AssertionMatch> in) {
 	return { !collapse_or(in) };
 }
 
+static RTLIL::SigSpec gated_signal(const AssertionMatch& path) {
+	if (path.sig.is_fully_const())
+		return path.sig.as_bool() ? path.en : RTLIL::SigSpec(false);
+	return path.eval.netlist.LogicAnd(path.en, path.sig);
+}
+
 static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int min, int max, std::vector<AssertionMatch> b) {
 	std::vector<AssertionMatch> new_own_paths;
 	for (auto path : a) {
@@ -394,11 +400,18 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 				const auto& disableiff = expr.as<ast::DisableIffAssertionExpr>();
 				auto disable = (AssertionMatch) {eval, eval(disableiff.condition), expr_loc(expr)};
 				auto inner = synthesizeAssertionExpr(eval, disableiff.expr);
+				if (inner.empty()) return {};
+
+				int max_start = 0;
+				for (auto path : inner)
+					max_start = std::max(max_start, path.start);
+
 				std::vector<AssertionMatch> disables;
 				disables.push_back(disable);
-				for (int i = 0; i < inner.size(); i++) {
+				std::vector<AssertionMatch> disable_windows;
+				for (int i = 0; i <= max_start; i++) {
 					std::optional<AssertionMatch> this_disables = {};
-					for (int t = 0; t <= inner[i].start; t++) {
+					for (int t = 0; t <= i; t++) {
 						while (disables.size() <= t)
 							disables.push_back(disables[disables.size() - 1].shift(1));
 
@@ -407,13 +420,26 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						else
 							this_disables = disables[t];
 					}
-					if (this_disables.has_value()) {
-						auto disable_window = this_disables.value();
-						auto not_disabled = !disable_window;
-						inner[i].en = eval.netlist.LogicAnd(inner[i].en, not_disabled.sig);
-					}
+					disable_windows.push_back(this_disables.value());
 				}
-				return inner;
+
+				std::vector<AssertionMatch> results;
+				for (auto path : inner) {
+					auto not_disabled = !disable_windows[path.start];
+					auto success = (AssertionMatch) {eval, true, path.loc};
+					success.en = eval.netlist.LogicAnd(gated_signal(path), not_disabled.sig);
+					success.start = path.start;
+					results.push_back(success);
+				}
+
+				auto base = collapse_or(inner);
+				auto not_disabled_to_end = !disable_windows[max_start];
+				auto check_failure = (AssertionMatch) {eval, false, expr_loc(expr)};
+				check_failure.en = eval.netlist.LogicAnd(base.en, not_disabled_to_end.sig);
+				check_failure.start = max_start;
+				results.push_back(check_failure);
+
+				return compress_paths(results);
 			}
 
 		case slang::ast::AssertionExprKind::SequenceWithMatch:
