@@ -1,0 +1,6 @@
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module unsupported_sampled_clocking(input logic clk, input logic clk2, input logic a);
+	sampled_clock_test: assert property (@(posedge clk) $rose(a, @(posedge clk2)));
+endmodule
+EOF

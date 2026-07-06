@@ -873,8 +873,11 @@ RTLIL::SigSpec handle_sampled_value_function(EvalContext &eval, const ast::CallE
 	NetlistContext &netlist = eval.netlist;
 	std::string_view name = call.getSubroutineName();
 
-	if (call.arguments().size() != 1) {
-		unimplemented(call);
+	if (call.arguments().size() > 2 ||
+			(call.arguments().size() == 2 &&
+				 !ast::EmptyArgumentExpression::isKind(call.arguments()[1]->kind))) {
+		netlist.add_diag(diag::UnsupportedSVAFeature, call.sourceRange);
+		return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
 	}
 
 	auto current = eval(*call.arguments()[0]);

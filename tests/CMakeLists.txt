@@ -25,6 +25,7 @@ endif()
 
 set(ALL_TESTS
     sva/seqequiv.tcl
+    sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
     unit/async.ys
     unit/dualedge.ys
