@@ -44,8 +44,11 @@ static RTLIL::Const resize_init_const(RTLIL::Const init, int width) {
 		if (init[0] == RTLIL::State::S1)
 			return RTLIL::Const(RTLIL::State::S1, width);
 	}
-	init.resize(width, RTLIL::State::S0);
-	return init;
+	std::vector<RTLIL::State> bits;
+	bits.reserve(width);
+	for (int i = 0; i < width; i++)
+		bits.push_back(i < init.size() ? init[i] : RTLIL::State::S0);
+	return RTLIL::Const(bits);
 }
 
 static RTLIL::SigSpec delay_sva_sample(EvalContext& eval, RTLIL::SigSpec sig, int cycles,
