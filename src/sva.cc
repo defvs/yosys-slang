@@ -245,11 +245,14 @@ static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int mi
 	for (auto path : a) {
 		for (int offset = min; offset <= max; offset++) {
 			for (auto inner : b) {
-				if (path.empty && inner.empty)
+				if (path.empty && inner.empty) {
+					if (offset > 0)
+						new_own_paths.push_back(AssertionMatch(path.eval, true, path.loc).shift(path.start + offset - 1));
 					continue;
+				}
 				if (path.empty) {
 					if (offset > 0)
-						new_own_paths.push_back(inner.shift(offset - 1));
+						new_own_paths.push_back(AssertionMatch(path.eval, true, path.loc).shift(path.start + offset - 1 + inner.start) && inner);
 					continue;
 				}
 				if (inner.empty) {
@@ -270,10 +273,12 @@ static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, int min, in
 	std::vector<AssertionMatch> paths;
 	for (int offset = min; offset <= max; offset++) {
 		for (auto inner : b) {
-			if (inner.empty)
-				paths.push_back(inner.shift(offset));
-			else
+			if (inner.empty) {
+				if (offset > 0)
+					paths.push_back(AssertionMatch(eval, true, loc).shift(offset - 1));
+			} else {
 				paths.push_back(AssertionMatch(eval, true, loc).shift(offset + inner.start) && inner);
+			}
 		}
 	}
 	return compress_paths(paths);
