@@ -684,6 +684,25 @@ static void process_clocked_sva_property(NetlistContext &netlist,
 	procedure.copy_case_tree_into(rtlil_proc->root_case);
 }
 
+static const ast::ClockingAssertionExpr *get_top_clocking_expr(const ast::AssertionExpr &expr)
+{
+	if (ast::ClockingAssertionExpr::isKind(expr.kind))
+		return &expr.as<ast::ClockingAssertionExpr>();
+
+	if (expr.kind != ast::AssertionExprKind::Simple)
+		return nullptr;
+
+	const auto &simple = expr.as<ast::SimpleAssertionExpr>();
+	if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+		return nullptr;
+
+	const auto &instance = simple.expr.as<ast::AssertionInstanceExpression>();
+	if (instance.isRecursiveProperty)
+		return nullptr;
+
+	return get_top_clocking_expr(instance.body);
+}
+
 void process_freestanding_sva_property(NetlistContext &netlist,
 									   const ast::ConcurrentAssertionStatement &statement,
 						  			   const ast::StatementBlockSymbol *block,
@@ -691,11 +710,10 @@ void process_freestanding_sva_property(NetlistContext &netlist,
 {
 	const ast::AssertionExpr &spec = statement.propertySpec;
 
-	if (ast::ClockingAssertionExpr::isKind(spec.kind)) {
+	if (auto clocking_expr = get_top_clocking_expr(spec)) {
 		// Need to strip clocking
-		const auto &clocking_expr = spec.as<ast::ClockingAssertionExpr>();
-		process_clocked_sva_property(netlist, statement, block, clocking_expr.clocking,
-									 clocking_expr.expr);
+		process_clocked_sva_property(netlist, statement, block, clocking_expr->clocking,
+									 clocking_expr->expr);
 		return;
 	} else if (scope) {
 		if (auto default_clocking = scope->getCompilation().getDefaultClocking(*scope)) {
