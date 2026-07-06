@@ -819,10 +819,16 @@ RTLIL::SigSpec handle_past(EvalContext &eval, const ast::CallExpression &call)
 
 	// $past(expr) - returns the value of expr from the previous clock cycle
 	// $past(expr, num_cycles) - returns the value from num_cycles ago
-	// Note: Full signature is $past(expr, num_ticks, gating_expr, clocking_event) but we only support first 2 args
-	if (call.arguments().size() > 2) {
+	// Note: Full signature is $past(expr, num_ticks, gating_expr, clocking_event).
+	if (call.arguments().size() > 4) {
 		netlist.add_diag(diag::PastGatingClockingUnsupported, call.sourceRange);
 		return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+	}
+	for (size_t i = 2; i < call.arguments().size(); i++) {
+		if (!ast::EmptyArgumentExpression::isKind(call.arguments()[i]->kind)) {
+			netlist.add_diag(diag::PastGatingClockingUnsupported, call.arguments()[i]->sourceRange);
+			return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+		}
 	}
 	if (procedural == nullptr || procedural->timing.kind == ProcessTiming::Implicit || procedural->timing.triggers.size() != 1) {
 		netlist.add_diag(diag::SystemFunctionRequireClockedBlock, call.sourceRange) << call.getSubroutineName();
@@ -831,7 +837,7 @@ RTLIL::SigSpec handle_past(EvalContext &eval, const ast::CallExpression &call)
 
 	// Check num_cycles if specified (2nd argument)
 	int num_cycles = 1;
-	if (call.arguments().size() >= 2) {
+	if (call.arguments().size() >= 2 && !ast::EmptyArgumentExpression::isKind(call.arguments()[1]->kind)) {
 		auto cycles_result = call.arguments()[1]->eval(eval.const_);
 		ast_invariant(call, cycles_result.isInteger());
 		auto cycles_int = cycles_result.integer().as<int>();

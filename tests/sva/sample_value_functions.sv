@@ -8,6 +8,7 @@ module sample_value_functions(input clk_i, input logic a, input logic [1:0] b);
 		fell_ref: assert(!valid || (!a && a_q));
 		stable_ref: assert(!valid || (b == b_q));
 		changed_ref: assert(!valid || (b != b_q));
+		past_empty_tick_ref: assert(!valid || ($past(a) == a_q));
 
 		valid <= 1'b1;
 		a_q <= a;
@@ -18,4 +19,5 @@ module sample_value_functions(input clk_i, input logic a, input logic [1:0] b);
 	fell_test: assert property(@(posedge clk_i) disable iff (!valid) $fell(a));
 	stable_test: assert property(@(posedge clk_i) disable iff (!valid) $stable(b));
 	changed_test: assert property(@(posedge clk_i) disable iff (!valid) $changed(b));
+	past_empty_tick_test: assert property(@(posedge clk_i) disable iff (!valid) $past(a,) == a_q);
 endmodule
