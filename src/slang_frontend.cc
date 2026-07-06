@@ -3003,11 +3003,9 @@ public:
 		}
 	}
 
-	void handle(const ast::PropertySymbol &sym) {
-		if (!netlist.settings.ignore_assertions.value_or(false)) {
-			netlist.add_diag(diag::SVAUnsupported, sym.location);
-		}
-	}
+	void handle(const ast::SequenceSymbol &) {}
+
+	void handle(const ast::PropertySymbol &) {}
 
 	void handle(const ast::Symbol &sym)
 	{

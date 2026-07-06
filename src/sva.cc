@@ -13,6 +13,7 @@
 #include "slang/ast/TimingControl.h"
 #include "kernel/rtlil.h"
 #include "slang/ast/expressions/AssertionExpr.h"
+#include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/text/SourceLocation.h"
@@ -224,8 +225,17 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-				std::vector<AssertionMatch> paths = {{ eval, simple.isNullExpr ? false : eval.sva(simple.expr),
-													   expr_loc(expr) }};
+				std::vector<AssertionMatch> paths;
+				if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
+					const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+					if (instance.isRecursiveProperty) {
+						eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
+						return {};
+					}
+					paths = synthesizeAssertionExpr(eval, instance.body);
+				} else {
+					paths = {{ eval, simple.isNullExpr ? false : eval.sva(simple.expr), expr_loc(expr) }};
+				}
 				if (!apply_repetition(eval, expr, simple.repetition, paths))
 					return {};
 				return paths;
