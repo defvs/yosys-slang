@@ -563,6 +563,45 @@ struct AssertionResult {
 	RTLIL::SigSpec en;
 };
 
+static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingControl &clocking,
+									 ProcessTiming &timing);
+
+static const ast::ClockingAssertionExpr *get_top_clocking_expr(const ast::AssertionExpr &expr)
+{
+	if (ast::ClockingAssertionExpr::isKind(expr.kind))
+		return &expr.as<ast::ClockingAssertionExpr>();
+
+	if (expr.kind != ast::AssertionExprKind::Simple)
+		return nullptr;
+
+	const auto &simple = expr.as<ast::SimpleAssertionExpr>();
+	if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+		return nullptr;
+
+	const auto &instance = simple.expr.as<ast::AssertionInstanceExpression>();
+	if (instance.isRecursiveProperty)
+		return nullptr;
+
+	return get_top_clocking_expr(instance.body);
+}
+
+static bool timing_matches_process(const ProcessTiming &expected, const ProcessTiming &actual)
+{
+	if (expected.kind != actual.kind)
+		return false;
+	if (expected.triggers.size() != actual.triggers.size())
+		return false;
+
+	for (size_t i = 0; i < expected.triggers.size(); i++) {
+		if (expected.triggers[i].edge_polarity != actual.triggers[i].edge_polarity)
+			return false;
+		if (expected.triggers[i].signal != actual.triggers[i].signal)
+			return false;
+	}
+
+	return true;
+}
+
 AssertionResult evalAssertion(EvalContext& eval, const ast::AssertionExpr& assertion) {
 	auto paths = synthesizeAssertionExpr(eval, assertion);
 	if (paths.empty()) return { false, false }; // Ran into an error
@@ -585,6 +624,16 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	auto &netlist = procedural.netlist;
 
 	const ast::AssertionExpr *expr = &top_expr;
+	if (auto clocking_expr = get_top_clocking_expr(*expr)) {
+		ProcessTiming timing(ProcessTiming::EdgeTriggered);
+		if (!timing_from_sva_clocking(netlist, clocking_expr->clocking, timing))
+			return;
+		if (!timing_matches_process(timing, procedural.timing)) {
+			netlist.add_diag(diag::UnsupportedSVAFeature, expr_loc(*expr));
+			return;
+		}
+		expr = &clocking_expr->expr;
+	}
 
 	AssertionResult result = evalAssertion(procedural.eval, *expr);
 
@@ -682,25 +731,6 @@ static void process_clocked_sva_property(NetlistContext &netlist,
 	RTLIL::Process *rtlil_proc = netlist.canvas->addProcess(netlist.new_id());
 	transfer_attrs<const ast::Statement>(netlist, statement, rtlil_proc);
 	procedure.copy_case_tree_into(rtlil_proc->root_case);
-}
-
-static const ast::ClockingAssertionExpr *get_top_clocking_expr(const ast::AssertionExpr &expr)
-{
-	if (ast::ClockingAssertionExpr::isKind(expr.kind))
-		return &expr.as<ast::ClockingAssertionExpr>();
-
-	if (expr.kind != ast::AssertionExprKind::Simple)
-		return nullptr;
-
-	const auto &simple = expr.as<ast::SimpleAssertionExpr>();
-	if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
-		return nullptr;
-
-	const auto &instance = simple.expr.as<ast::AssertionInstanceExpression>();
-	if (instance.isRecursiveProperty)
-		return nullptr;
-
-	return get_top_clocking_expr(instance.body);
 }
 
 void process_freestanding_sva_property(NetlistContext &netlist,
