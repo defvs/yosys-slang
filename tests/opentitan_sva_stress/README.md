@@ -25,7 +25,6 @@ Unsupported or rewritten OpenTitan constructs:
 | Source | Disabled / rewritten | Reason |
 | --- | --- | --- |
 | `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M`, `AlertPingIgnored_A` | `throughout`, goto repetition |
-| `prim_alert_rxtx_assert_fpv.sv` | `FullHandshake_S`, `PingHs_A`, `AlertHs_A`, `AlertTestHs_A` | named sequence composition/reference |
 | `prim_alert_rxtx_assert_fpv.sv` | `AlertReqAck_A`, `AlertCheck1_A`, `FsmLiveness*_A` | unbounded `strong(##[1:$] ...)` |
 | `prim_esc_rxtx_assert_fpv.sv` | `EscDeassert_A`, `FsmLiveness*_A` | unbounded `strong`, repetition |
 | `sha3pad_assert_if.sv` | `ProcessToRun_A`, `RunThenComplete_M` | unbounded `strong(##[N:$] ...)` |

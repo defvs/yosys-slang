@@ -57,7 +57,6 @@ done
   echo "| Source | Item | Reason |"
   echo "| --- | --- | --- |"
   echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | throughout and goto repetition |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | FullHandshake_S / PingHs_A / AlertHs_A / AlertTestHs_A | named sequence composition/reference |"
   echo "| prim_alert_rxtx_assert_fpv.sv | AlertReqAck_A / AlertCheck1_A / FsmLiveness*_A | unbounded strong eventuality |"
   echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A / AlertCheck0_A | throughout/goto or consecutive repetition |"
   echo "| prim_esc_rxtx_assert_fpv.sv | EscDeassert_A / FsmLiveness*_A | unbounded strong eventuality and/or consecutive repetition |"

@@ -17,10 +17,6 @@ UNSUPPORTED_PATTERNS = (
 DISABLED_REASON = {
     "prim_alert_rxtx_assert_fpv.sv": {
         "PingEn_M": "uses throughout and goto repetition",
-        "FullHandshake_S": "named sequence used by unsupported sequence composition tests",
-        "PingHs_A": "uses named sequence reference",
-        "AlertHs_A": "uses named sequence reference",
-        "AlertTestHs_A": "uses named sequence reference",
         "AlertReqAck_A": "uses unbounded strong eventuality",
         "AlertPingIgnored_A": "uses throughout and goto repetition",
         "AlertCheck0_A": "uses consecutive repetition",
@@ -141,6 +137,10 @@ def filter_source(src, dst):
         text = text.replace("mubi4_test_true_strict(init_trig_i)", "(init_trig_i == 4'h6)")
         text = text.replace(
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.Idle",
+            "3'd0",
+        )
+        text = text.replace(
+            "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_receiver.Idle",
             "3'd0",
         )
         text = text.replace(
