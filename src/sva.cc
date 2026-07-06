@@ -33,6 +33,21 @@ static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
 	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
 }
 
+static RTLIL::Const resize_init_const(RTLIL::Const init, int width) {
+	if (init.size() == width)
+		return init;
+	if (init.size() == 1) {
+		if (init[0] == RTLIL::State::Sx)
+			return RTLIL::Const(RTLIL::State::Sx, width);
+		if (init[0] == RTLIL::State::S0)
+			return RTLIL::Const(RTLIL::State::S0, width);
+		if (init[0] == RTLIL::State::S1)
+			return RTLIL::Const(RTLIL::State::S1, width);
+	}
+	init.resize(width, RTLIL::State::S0);
+	return init;
+}
+
 static RTLIL::SigSpec delay_sva_sample(EvalContext& eval, RTLIL::SigSpec sig, int cycles,
 									   RTLIL::Const init,
 									   slang::SourceLocation loc = slang::SourceLocation::NoLocation,
@@ -51,7 +66,7 @@ static RTLIL::SigSpec delay_sva_sample(EvalContext& eval, RTLIL::SigSpec sig, in
 	for (int i = 0; i < cycles; i++) {
 		auto next = eval.netlist.canvas->addWire(eval.netlist.new_id(std::string(name_hint)), sig.size());
 		next->attributes = eval.netlist.staged_attributes;
-		next->attributes[ID::init] = init;
+		next->attributes[ID::init] = resize_init_const(init, sig.size());
 		eval.netlist.add_dff(eval.netlist.new_id(std::string(name_hint)),
 							 trigger.signal, sig, next, trigger.edge_polarity);
 		sig = next;

@@ -28,6 +28,7 @@ set(ALL_TESTS
     sva/range_guard.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
+    sva/vector_delay_init.ys
     unit/async.ys
     unit/dualedge.ys
     unit/function_call.ys

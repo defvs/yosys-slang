@@ -1,0 +1,9 @@
+read_slang --no-proc <<EOF
+module vector_delay_init(input logic clk, input logic [7:0] bus, input logic cond);
+	vector_delay_test: assert property (@(posedge clk) bus ##1 cond);
+endmodule
+EOF
+
+write_rtlil vector_delay_init.rtlil
+exec -- grep -q "attribute \\\\init 8'x" vector_delay_init.rtlil
+exec -- rm -f vector_delay_init.rtlil
