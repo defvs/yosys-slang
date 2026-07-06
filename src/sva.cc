@@ -62,66 +62,91 @@ struct AssertionMatch {
 	RTLIL::SigSpec sig;
 	RTLIL::SigSpec en;
 	int start;
+	bool empty;
 	slang::SourceLocation loc;
 
 	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_,
 				   slang::SourceLocation loc_ = slang::SourceLocation::NoLocation):
-		eval(eval_), sig(sig_), en(true), start(0), loc(loc_) {}
+		eval(eval_), sig(sig_), en(true), start(0), empty(false), loc(loc_) {}
 
 private:
-	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_, RTLIL::SigSpec en_, int start_,
+	AssertionMatch(EvalContext& eval_, RTLIL::SigSpec sig_, RTLIL::SigSpec en_, int start_, bool empty_,
 				   slang::SourceLocation loc_):
-		eval(eval_), sig(sig_), en(en_), start(start_), loc(loc_) {}
+		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), loc(loc_) {}
 
 public:
+	static AssertionMatch Empty(EvalContext& eval, slang::SourceLocation loc) {
+		return { eval, true, true, 0, true, loc };
+	}
+
 	void operator=(AssertionMatch other) {
 		sig = other.sig;
 		en = other.en;
 		start = other.start;
+		empty = other.empty;
 		loc = other.loc;
 	}
 
 	AssertionMatch shift(int time) const {
+		if (empty)
+			return { eval, sig, en, start + time, true, loc };
+
 		RTLIL::SigSpec shifted_sig = sig;
 		RTLIL::SigSpec shifted_en = en;
 		if (!sig.is_fully_const())
 			shifted_sig = delay_sva_sample(eval, sig, time, RTLIL::State::Sx, loc);
 		if (!en.is_fully_const())
 			shifted_en = delay_sva_sample(eval, en, time, RTLIL::State::S0, loc);
-		return { eval, shifted_sig, shifted_en, start + time, loc };
+		return { eval, shifted_sig, shifted_en, start + time, false, loc };
 	}
 
 	AssertionMatch operator||(AssertionMatch& other) const {
+		log_assert(!empty && !other.empty);
+
 		RTLIL::SigSpec gated = en.is_fully_const() && en.as_bool() ? sig : eval.netlist.LogicAnd(en, sig);
 		RTLIL::SigSpec other_gated = other.en.is_fully_const() && other.en.as_bool()
 										  ? other.sig
 										  : eval.netlist.LogicAnd(other.en, other.sig);
 		RTLIL::SigSpec result_sig = eval.netlist.LogicOr(gated, other_gated);
 		RTLIL::SigSpec result_en = eval.netlist.LogicOr(en, other.en);
-		return { eval, result_sig, result_en, std::max(other.start, start), loc };
+		return { eval, result_sig, result_en, std::max(other.start, start), false, loc };
 	}
 
 	AssertionMatch operator&&(AssertionMatch& other) const {
+		log_assert(!empty && !other.empty);
+
 		RTLIL::SigSpec result_en = eval.netlist.LogicAnd(en, other.en);
 		if (sig.is_fully_const() && sig.as_bool())
-			return { eval, other.sig, result_en, std::max(other.start, start), loc };
+			return { eval, other.sig, result_en, std::max(other.start, start), false, loc };
 		if (sig.is_fully_const() && !sig.as_bool())
-			return { eval, false, result_en, std::max(other.start, start), loc };
+			return { eval, false, result_en, std::max(other.start, start), false, loc };
 		if (other.sig.is_fully_const() && other.sig.as_bool())
-			return { eval, sig, result_en, std::max(other.start, start), loc };
+			return { eval, sig, result_en, std::max(other.start, start), false, loc };
 		if (other.sig.is_fully_const() && !other.sig.as_bool())
-			return { eval, false, result_en, std::max(other.start, start), loc };
+			return { eval, false, result_en, std::max(other.start, start), false, loc };
 		return { eval, eval.netlist.LogicAnd(sig, other.sig), eval.netlist.LogicAnd(en, other.en),
-				 std::max(other.start, start), loc };
+				 std::max(other.start, start), false, loc };
 	}
 
 	AssertionMatch operator!() const {
-		if (sig.is_fully_const()) return { eval, !sig.as_bool(), en, start, loc };
-		return { eval, eval.netlist.LogicNot(sig), en, start, loc };
+		log_assert(!empty);
+
+		if (sig.is_fully_const()) return { eval, !sig.as_bool(), en, start, false, loc };
+		return { eval, eval.netlist.LogicNot(sig), en, start, false, loc };
 	}
 };
 
 static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> paths) {
+	std::vector<AssertionMatch> empty_paths;
+	std::vector<AssertionMatch> non_empty_paths;
+	for (auto path : paths) {
+		if (path.empty)
+			empty_paths.push_back(path);
+		else
+			non_empty_paths.push_back(path);
+	}
+	paths = non_empty_paths;
+
 	struct amcmp {
 		bool operator()(AssertionMatch& a, AssertionMatch& b) const {
 			return a.start > b.start;
@@ -142,12 +167,19 @@ static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> pa
 		}
 	}
 	if (group.has_value()) grouped.push_back(group.value());
+	if (!empty_paths.empty())
+		grouped.push_back(empty_paths[0]);
 
 	return grouped;
 }
 
 static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
 	log_assert(!paths.empty());
+
+	for (auto path : paths) {
+		if (path.empty)
+			return { path.eval, true, path.loc };
+	}
 
 	int max_start = 0;
 	for (auto path : paths)
@@ -172,6 +204,8 @@ static std::vector<AssertionMatch> not_vec(std::vector<AssertionMatch> in) {
 }
 
 static RTLIL::SigSpec gated_signal(const AssertionMatch& path) {
+	log_assert(!path.empty);
+
 	if (path.sig.is_fully_const())
 		return path.sig.as_bool() ? path.en : RTLIL::SigSpec(false);
 	return path.eval.netlist.LogicAnd(path.en, path.sig);
@@ -181,11 +215,39 @@ static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int mi
 	std::vector<AssertionMatch> new_own_paths;
 	for (auto path : a) {
 		for (int offset = min; offset <= max; offset++) {
-			for (auto inner : b)
+			for (auto inner : b) {
+				if (path.empty && inner.empty)
+					continue;
+				if (path.empty) {
+					if (offset > 0)
+						new_own_paths.push_back(inner.shift(offset - 1));
+					continue;
+				}
+				if (inner.empty) {
+					if (offset > 0)
+						new_own_paths.push_back(path.shift(offset - 1));
+					continue;
+				}
 				new_own_paths.push_back(path.shift(offset + inner.start) && inner);
+			}
 		}
 	}
 	return compress_paths(new_own_paths);
+}
+
+static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, int min, int max,
+												  std::vector<AssertionMatch> b,
+												  slang::SourceLocation loc) {
+	std::vector<AssertionMatch> paths;
+	for (int offset = min; offset <= max; offset++) {
+		for (auto inner : b) {
+			if (inner.empty)
+				paths.push_back(inner.shift(offset));
+			else
+				paths.push_back(AssertionMatch(eval, true, loc).shift(offset + inner.start) && inner);
+		}
+	}
+	return compress_paths(paths);
 }
 
 static std::vector<AssertionMatch> repeat_count(std::vector<AssertionMatch> paths, int count) {
@@ -212,7 +274,7 @@ static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
 	std::vector<AssertionMatch> repeated;
 	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
 		if (count == 0)
-			repeated.push_back({eval, true, expr_loc(expr)});
+			repeated.push_back(AssertionMatch::Empty(eval, expr_loc(expr)));
 		else {
 			auto count_paths = repeat_count(paths, (int)count);
 			repeated.insert(repeated.end(), count_paths.begin(), count_paths.end());
@@ -250,7 +312,6 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 			{
 				const auto& sequence = expr.as<ast::SequenceConcatExpr>();
 				std::vector<AssertionMatch> own_paths;
-				own_paths.push_back({eval, true, expr_loc(expr)});
 				for (int i = 0; i < sequence.elements.size(); i++) {
 					auto inner_paths = synthesizeAssertionExpr(eval, *sequence.elements[i].sequence);
 
@@ -260,7 +321,10 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						return {};
 					}
 
-					own_paths = seq_vec(own_paths, delay.min, delay.max.value(), inner_paths);
+					if (i == 0)
+						own_paths = seq_prefix_vec(eval, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
+					else
+						own_paths = seq_vec(own_paths, delay.min, delay.max.value(), inner_paths);
 				}
 				return own_paths;
 			}
