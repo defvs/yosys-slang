@@ -660,6 +660,7 @@ static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingC
 	if (signal_event.iffCondition) {
 		// TODO
 		netlist.add_diag(diag::IffUnsupported, signal_event.iffCondition->sourceRange);
+		return false;
 	}
 
 	return true;

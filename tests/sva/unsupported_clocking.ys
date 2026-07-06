@@ -1,0 +1,8 @@
+test_slangdiag -expect "iff qualifier will not be synthesized"
+read_slang <<EOF
+module unsupported_clocking(input logic clk, input logic en, input logic a);
+	iff_test: assert property (@(posedge clk iff en) a);
+endmodule
+EOF
+
+select -assert-none t:$check
