@@ -1,0 +1,15 @@
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module range_guard(input logic clk, input logic a, input logic b);
+	large_delay_test: assert property (@(posedge clk) a ##[0:1025] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module repetition_guard(input logic clk, input logic a);
+	large_repetition_test: assert property (@(posedge clk) a[*1:1025]);
+endmodule
+EOF

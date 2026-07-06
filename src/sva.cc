@@ -27,6 +27,8 @@ namespace slang_frontend {
 // This portion was written by Louis-Emile Ploix "mndstrmr" (c) 2025; ISC licence
 // Brought into Slang head by Mel Young 2026, no additional work
 
+static constexpr uint32_t SVA_ENUMERATION_LIMIT = 1024;
+
 static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
 	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
 }
@@ -211,6 +213,15 @@ static RTLIL::SigSpec gated_signal(const AssertionMatch& path) {
 	return path.eval.netlist.LogicAnd(path.en, path.sig);
 }
 
+static bool check_finite_range(EvalContext& eval, const ast::AssertionExpr& expr,
+							   uint32_t min, uint32_t max) {
+	if (max < min || max > SVA_ENUMERATION_LIMIT) {
+		eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
+		return false;
+	}
+	return true;
+}
+
 static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int min, int max, std::vector<AssertionMatch> b) {
 	std::vector<AssertionMatch> new_own_paths;
 	for (auto path : a) {
@@ -270,6 +281,8 @@ static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
 		eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
 		return false;
 	}
+	if (!check_finite_range(eval, expr, repetition->range.min, repetition->range.max.value()))
+		return false;
 
 	std::vector<AssertionMatch> repeated;
 	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
@@ -320,6 +333,8 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
 						return {};
 					}
+					if (!check_finite_range(eval, expr, delay.min, delay.max.value()))
+						return {};
 
 					if (i == 0)
 						own_paths = seq_prefix_vec(eval, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
@@ -342,6 +357,8 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 						eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
 						return {};
 					}
+					if (!check_finite_range(eval, expr, uop.range->min, uop.range->max.value()))
+						return {};
 
 					std::vector<AssertionMatch> true_path = {{eval, true, expr_loc(expr)}};
 					return seq_vec(true_path, uop.range->min, uop.range->max.value(),
@@ -357,6 +374,8 @@ static std::vector<AssertionMatch> synthesizeAssertionExpr(EvalContext& eval, co
 							eval.netlist.add_diag(diag::AssertionUnsupported, expr.syntax->sourceRange().start());
 							return {};
 						}
+						if (!check_finite_range(eval, expr, uop.range->min, uop.range->max.value()))
+							return {};
 						delay = uop.range->min;
 					}
 
