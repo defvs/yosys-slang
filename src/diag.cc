@@ -129,6 +129,9 @@ DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
 DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1085);
+DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1086);
+DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1087);
+DiagCode SVALivenessCoverUnsupported(DiagSubsystem::Netlist, 1088);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
@@ -200,6 +203,18 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(AssertionUnsupported, "unsupported assertion statement");
 	engine.setSeverity(AssertionUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVALivenessAcceptanceUnsupported,
+		"liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells");
+	engine.setSeverity(SVALivenessAcceptanceUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAMatchItemsUnsupported,
+		"SVA match items and local-variable actions are not synthesizable");
+	engine.setSeverity(SVAMatchItemsUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVALivenessCoverUnsupported,
+		"covering an unbounded liveness property is not a finite reachability check");
+	engine.setSeverity(SVALivenessCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);
