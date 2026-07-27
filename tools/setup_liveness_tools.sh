@@ -32,5 +32,15 @@ if [[ ! -x "${suprove}" ]]; then
 		oss-cad-suite/license
 fi
 
-"${suprove}" +simple_liveness </dev/null >/dev/null
+smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-suprove.XXXXXXXX")
+cleanup() {
+	rm -rf -- "${smoke_dir:?}"
+}
+trap cleanup EXIT
+(
+	cd -- "${smoke_dir}"
+	"${suprove}" +simple_liveness </dev/null >/dev/null
+)
+cleanup
+trap - EXIT
 printf 'SUPROVE_EXECUTABLE=%s\n' "${suprove}"
