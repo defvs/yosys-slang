@@ -80,6 +80,13 @@ Sample usage:
 
     read_slang picorv32.v --top picorv32 -D DEBUG
 
+### Formal assertions
+
+The synthesizable SVA subset includes finite safety properties and unbounded
+liveness/fairness properties lowered to Yosys formal cells. See
+[Synthesizable SVA liveness](docs/liveness.md) for supported operators,
+semantic boundaries, proof-tool setup, and the solver-backed test flow.
+
 ## Contributing
 
 Contributions are welcome! If you intent to develop a particular feature, feel free to get in touch and consult on the appropriate approach.
