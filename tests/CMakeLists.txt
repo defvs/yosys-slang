@@ -53,6 +53,11 @@ set(ALL_TESTS
     various/expr.ys
     various/flop_naming.ys
     various/formal_stmts.ys
+    various/hierarchical_enum_assert.ys
+    various/best_effort_sva.ys
+    various/parameter_array_assert.ys
+    various/enum_next.ys
+    various/async_reset_no_else.ys
     various/hierref_error.ys
     various/huge_reg.ys
     various/ignore_asserts.ys

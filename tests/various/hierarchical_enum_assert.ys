@@ -1,0 +1,4 @@
+read_slang --top hierarchical_enum_assert hierarchical_enum_assert.sv
+
+select -assert-count 1 hierarchical_enum_assert/t:$check
+select -assert-count 1 hierarchical_enum_assert/t:$check n:*EnumLiteral_A %i

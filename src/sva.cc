@@ -33,6 +33,73 @@ static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
 	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
 }
 
+static bool assertion_has_match_items(const ast::AssertionExpr& expr)
+{
+	switch (expr.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+				return false;
+			const auto& instance =
+				simple.expr.as<ast::AssertionInstanceExpression>();
+			return !instance.isRecursiveProperty &&
+				   assertion_has_match_items(instance.body);
+		}
+	case ast::AssertionExprKind::SequenceConcat:
+		for (const auto& element : expr.as<ast::SequenceConcatExpr>().elements)
+			if (assertion_has_match_items(*element.sequence))
+				return true;
+		return false;
+	case ast::AssertionExprKind::SequenceWithMatch:
+		{
+			const auto& match = expr.as<ast::SequenceWithMatchExpr>();
+			return !match.matchItems.empty() ||
+				   assertion_has_match_items(match.expr);
+		}
+	case ast::AssertionExprKind::FirstMatch:
+		{
+			const auto& match = expr.as<ast::FirstMatchAssertionExpr>();
+			return !match.matchItems.empty() ||
+				   assertion_has_match_items(match.seq);
+		}
+	case ast::AssertionExprKind::Unary:
+		return assertion_has_match_items(expr.as<ast::UnaryAssertionExpr>().expr);
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = expr.as<ast::BinaryAssertionExpr>();
+			return assertion_has_match_items(binary.left) ||
+				   assertion_has_match_items(binary.right);
+		}
+	case ast::AssertionExprKind::Clocking:
+		return assertion_has_match_items(expr.as<ast::ClockingAssertionExpr>().expr);
+	case ast::AssertionExprKind::StrongWeak:
+		return assertion_has_match_items(expr.as<ast::StrongWeakAssertionExpr>().expr);
+	case ast::AssertionExprKind::Abort:
+		return assertion_has_match_items(expr.as<ast::AbortAssertionExpr>().expr);
+	case ast::AssertionExprKind::Conditional:
+		{
+			const auto& conditional = expr.as<ast::ConditionalAssertionExpr>();
+			return assertion_has_match_items(conditional.ifExpr) ||
+				   (conditional.elseExpr &&
+					assertion_has_match_items(*conditional.elseExpr));
+		}
+	case ast::AssertionExprKind::Case:
+		{
+			const auto& case_expr = expr.as<ast::CaseAssertionExpr>();
+			for (const auto& item : case_expr.items)
+				if (assertion_has_match_items(*item.body))
+					return true;
+			return case_expr.defaultCase &&
+				   assertion_has_match_items(*case_expr.defaultCase);
+		}
+	case ast::AssertionExprKind::DisableIff:
+		return assertion_has_match_items(expr.as<ast::DisableIffAssertionExpr>().expr);
+	default:
+		return false;
+	}
+}
+
 static RTLIL::Const resize_init_const(RTLIL::Const init, int width) {
 	if (init.size() == width)
 		return init;
@@ -2816,6 +2883,7 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 						  ProceduralContext &procedural, const ast::AssertionExpr &top_expr)
 {
 	auto &netlist = procedural.netlist;
+	size_t diagnostics_before = netlist.issued_diagnostics.size();
 
 	const ast::AssertionExpr *expr = &top_expr;
 	if (auto clocking_expr = get_top_clocking_expr(*expr)) {
@@ -2828,8 +2896,20 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 		}
 		expr = &clocking_expr->expr;
 	}
+	if (assertion_has_match_items(*expr)) {
+		netlist.add_diag(diag::SVAMatchItemsUnsupported, expr_loc(*expr));
+		return;
+	}
 
 	PropertyResult result = lower_property(procedural.eval, *expr);
+	if (netlist.settings.best_effort_sva.value_or(false) &&
+		netlist.issued_diagnostics.size() != diagnostics_before) {
+		// Unsupported lowering paths can return a conservative placeholder in
+		// addition to issuing a diagnostic.  That is useful for strict mode,
+		// where the design will be rejected, but a compatibility census must
+		// never count the placeholder as a successfully lowered property.
+		return;
+	}
 	if (!result.valid)
 		return;
 	for (const auto& obligation : result.obligations) {

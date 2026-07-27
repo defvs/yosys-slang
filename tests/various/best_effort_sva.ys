@@ -1,0 +1,9 @@
+test_slangdiag -expect "unsupported assertion statement"
+read_slang --best-effort-sva --top best_effort_sva best_effort_sva.sv
+
+select -assert-count 2 best_effort_sva/t:$check
+select -assert-count 1 best_effort_sva/t:$check n:*Supported_A %i
+select -assert-count 0 best_effort_sva/t:$check n:*Unsupported_A %i
+select -assert-count 0 best_effort_sva/t:$check n:*Knownness_A %i
+select -assert-count 1 best_effort_sva/t:$check n:*Bits_A %i
+select -assert-count 2 best_effort_sva/t:$check a:src %i

@@ -1,0 +1,68 @@
+read_slang --top async_reset_no_else async_reset_no_else.sv
+select -assert-count 1 async_reset_no_else/t:$aldff
+rename async_reset_no_else async_reset_no_else_gate
+read_verilog -sv <<EOF
+module async_reset_no_else_gold(
+	input logic clk,
+	input logic rst_n,
+	output logic q
+);
+	always_ff @(posedge clk or negedge rst_n)
+		if (!rst_n)
+			q <= 1'b0;
+endmodule
+EOF
+proc
+async2sync
+equiv_make async_reset_no_else_gold async_reset_no_else_gate async_reset_no_else_equiv
+equiv_induct async_reset_no_else_equiv
+equiv_status -assert
+
+design -reset
+read_slang --top async_inverted_event async_reset_no_else.sv
+select -assert-count 1 async_inverted_event/t:$aldff
+rename async_inverted_event async_inverted_event_gate
+read_verilog -sv <<EOF
+module async_inverted_event_gold(
+	input logic clk,
+	input logic rst_n,
+	input logic d,
+	output logic q
+);
+	always_ff @(posedge clk or negedge rst_n)
+		if (!rst_n)
+			q <= 1'b0;
+		else
+			q <= d;
+endmodule
+EOF
+proc
+async2sync
+equiv_make async_inverted_event_gold async_inverted_event_gate async_inverted_event_equiv
+equiv_induct async_inverted_event_equiv
+equiv_status -assert
+
+design -reset
+read_slang --top async_reset_composite_condition async_reset_no_else.sv
+select -assert-count 1 async_reset_composite_condition/t:$aldff
+rename async_reset_composite_condition async_reset_composite_condition_gate
+read_verilog -sv <<EOF
+module async_reset_composite_condition_gold(
+	input logic clk,
+	input logic rst_n,
+	input logic enable,
+	input logic d,
+	output logic q
+);
+	always_ff @(posedge clk or negedge rst_n)
+		if (!rst_n)
+			q <= d;
+		else if (enable)
+			q <= d;
+endmodule
+EOF
+proc
+async2sync
+equiv_make async_reset_composite_condition_gold async_reset_composite_condition_gate async_reset_composite_condition_equiv
+equiv_induct async_reset_composite_condition_equiv
+equiv_status -assert

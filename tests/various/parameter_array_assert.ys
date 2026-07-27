@@ -1,0 +1,5 @@
+read_slang --top parameter_array_assert parameter_array_assert.sv
+
+select -assert-count 3 parameter_array_assert/t:$check
+select -assert-count 1 parameter_array_assert/t:$check n:*ArrayParameter_A %i
+select -assert-count 2 parameter_array_assert/t:$check n:*GenvarParameter_A %i

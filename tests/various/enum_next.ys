@@ -1,0 +1,6 @@
+read_slang --top enum_next enum_next.sv
+prep -top enum_next
+sat -set in 0 -prove next1 2 -prove next2 3 -prove prev1 3 -prove prev2 2
+sat -set in 2 -prove next1 3 -prove next2 0 -prove prev1 0 -prove prev2 3
+sat -set in 3 -prove next1 0 -prove next2 2 -prove prev1 2 -prove prev2 0
+sat -set in 1 -prove next1 0 -prove next2 0 -prove prev1 0 -prove prev2 0

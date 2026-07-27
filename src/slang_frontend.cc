@@ -98,6 +98,9 @@ void SynthesisSettings::addOptions(slang::CommandLine &cmdLine) {
 				"Ignore initial blocks for synthesis");
 	cmdLine.add("--ignore-assertions", ignore_assertions,
 				"Ignore assertions and formal statements in input");
+	cmdLine.add("--best-effort-sva", best_effort_sva,
+				"Continue after unsupported SVA constructs, reporting each as a warning "
+				"and omitting only the affected property (for compatibility censuses)");
 	cmdLine.add("--unroll-limit", unroll_limit_,
 				"Set unrolling limit (default: 4000)", "<limit>");
 	cmdLine.add("--no-implicit-memories", no_implicit_memories,
@@ -153,6 +156,9 @@ slang::SourceRange source_location(const ast::TimingControl &stmt)	{ return stmt
 std::string format_src(slang::SourceRange sr)
 {
 	auto sm = global_sourcemgr;
+	sr = slang::SourceRange(
+		sm->getFullyExpandedLoc(sr.start()),
+		sm->getFullyExpandedLoc(sr.end()));
 
 	if (!sm->isFileLoc(sr.start()) || !sm->isFileLoc(sr.end()))
 		return "";
@@ -315,6 +321,7 @@ void transfer_attrs(NetlistContext &netlist, T &from, RTLIL::AttrObject *to)
 	}
 }
 template void transfer_attrs<const ast::Symbol>(NetlistContext &netlist, const ast::Symbol &from, RTLIL::AttrObject *to);
+template void transfer_attrs<const ast::Statement>(NetlistContext &netlist, const ast::Statement &from, RTLIL::AttrObject *to);
 
 template<typename T>
 void transfer_attrs(NetlistContext &netlist, T &from, AttributeGuard &guard)
@@ -919,6 +926,59 @@ RTLIL::SigSpec handle_onehot_function(EvalContext &eval, const ast::CallExpressi
 	log_abort();
 }
 
+RTLIL::SigSpec handle_enum_next_prev(EvalContext &eval, const ast::CallExpression &call)
+{
+	auto args = call.arguments();
+	ast_invariant(call, !args.empty());
+	const auto &enum_type = args[0]->type->getCanonicalType().as<ast::EnumType>();
+	std::vector<RTLIL::Const> values;
+	for (const auto &enumerand : enum_type.values()) {
+		auto converted = eval.netlist.convert_const(
+			enumerand.getValue(), enumerand.location);
+		if (!converted)
+			return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+		values.push_back(*converted);
+	}
+	if (values.empty())
+		return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+
+	int64_t count = 1;
+	if (args.size() == 2) {
+		auto constant = args[1]->eval(eval.const_);
+		if (!constant.isInteger()) {
+			eval.netlist.add_diag(diag::ErrorNonconstantArgument,
+								  args[1]->sourceRange);
+			return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+		}
+		auto reduced =
+			constant.integer() % slang::SVInt(static_cast<int64_t>(values.size()));
+		auto reduced_count = reduced.as<int64_t>();
+		if (!reduced_count) {
+			eval.netlist.add_diag(diag::ErrorNonconstantArgument,
+								  args[1]->sourceRange);
+			return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+		}
+		count = *reduced_count;
+	}
+	if (call.getKnownSystemName() == slang::parsing::KnownSystemName::Prev)
+		count = -count;
+
+	RTLIL::SigSpec current = eval(*args[0]);
+	auto default_value = eval.netlist.convert_const(
+		enum_type.getDefaultValue(), call.sourceRange.start());
+	if (!default_value)
+		return RTLIL::SigSpec(RTLIL::Sx, (int) call.type->getBitstreamWidth());
+	RTLIL::SigSpec result = *default_value;
+	int64_t size = (int64_t) values.size();
+	for (int64_t index = size - 1; index >= 0; index--) {
+		int64_t target = ((index + count) % size + size) % size;
+		result = eval.netlist.Mux(
+			result, values[target],
+			eval.netlist.Eq(current, values[index]));
+	}
+	return result;
+}
+
 static const RTLIL::Const reverse_data(RTLIL::Const &orig, int width)
 {
 	std::vector<RTLIL::State> bits;
@@ -1331,29 +1391,39 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 			ret.extend_u0(expr.type->getBitstreamWidth());
 			break;
 		}
-	case ast::ExpressionKind::HierarchicalValue:
-		{
-			const ast::ValueSymbol &symbol = expr.as<ast::ValueExpressionBase>().symbol;
-			if (!netlist.scopes_remap.count(symbol.getParentScope())
-					&& !netlist.check_hier_ref(symbol, expr.sourceRange)) {
-				goto error;
-			}
+		case ast::ExpressionKind::HierarchicalValue:
+			{
+				const ast::ValueSymbol &symbol = expr.as<ast::ValueExpressionBase>().symbol;
+				if (ast::EnumValueSymbol::isKind(symbol.kind)) {
+					const auto &value = symbol.as<ast::EnumValueSymbol>().getValue(expr.sourceRange);
+					require(expr, value.isInteger());
+					return convert_svint(value.integer());
+				}
+				if (!netlist.scopes_remap.count(symbol.getParentScope())
+						&& !netlist.check_hier_ref(symbol, expr.sourceRange)) {
+					goto error;
+				}
 		}
 		[[fallthrough]];
-	case ast::ExpressionKind::NamedValue:
-		{
-			const ast::Symbol &symbol = expr.as<ast::ValueExpressionBase>().symbol;
-			if (netlist.is_inferred_memory(symbol)) {
-				netlist.add_diag(diag::BadMemoryExpr, expr.sourceRange);
-				goto error;
+		case ast::ExpressionKind::NamedValue:
+			{
+				const ast::Symbol &symbol = expr.as<ast::ValueExpressionBase>().symbol;
+				if (ast::EnumValueSymbol::isKind(symbol.kind)) {
+					const auto &value = symbol.as<ast::EnumValueSymbol>().getValue(expr.sourceRange);
+					require(expr, value.isInteger());
+					return convert_svint(value.integer());
+				}
+				if (netlist.is_inferred_memory(symbol)) {
+					netlist.add_diag(diag::BadMemoryExpr, expr.sourceRange);
+					goto error;
 			}
 
 			if (ast::ParameterSymbol::isKind(symbol.kind)) {
-				auto &valsym = symbol.as<ast::ValueSymbol>();
-				require(valsym, valsym.getInitializer());
-				auto exprconst = valsym.getInitializer()->eval(this->const_);
-				require(valsym, exprconst.isInteger());
-				return convert_svint(exprconst.integer());
+				auto &param = symbol.as<ast::ParameterSymbol>();
+				if (auto converted = netlist.convert_const(
+						param.getValue(), expr.sourceRange.start()))
+					return *converted;
+				goto error;
 			}
 
 			if (ast::ModportPortSymbol::isKind(symbol.kind) &&
@@ -1675,6 +1745,14 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 					auto arg = call.arguments()[0];
 					auto sig = (*this)(*arg);
 					ret = netlist.Clog2(sig, (int)call.type->getBitstreamWidth());
+				} else if (name == "$bits") {
+					auto constant = call.eval(const_);
+					if (!constant.isInteger()) {
+						netlist.add_diag(diag::ErrorNonconstantArgument,
+										  expr.sourceRange);
+						goto error;
+					}
+					ret = convert_svint(constant.integer());
 				} else if (name == "$past") {
 					ret = handle_past(*this, call);
 				} else if (name == "$rose" || name == "$fell" ||
@@ -1682,6 +1760,18 @@ RTLIL::SigSpec EvalContext::operator()(ast::Expression const &expr)
 					ret = handle_sampled_value_function(*this, call);
 				} else if (name == "$onehot" || name == "$onehot0") {
 					ret = handle_onehot_function(*this, call);
+				} else if (name == "$isunknown" && in_sva_expression) {
+					// Four-state knownness has no faithful two-state Yosys
+					// representation. Attribute it to the affected property so
+					// compatibility-census mode can omit that property without
+					// blocking unrelated obligations in the same module.
+					netlist.add_diag(diag::UnsupportedSVAFeature, expr.sourceRange);
+					goto error;
+				} else if (call.getKnownSystemName() ==
+							   slang::parsing::KnownSystemName::Next ||
+						   call.getKnownSystemName() ==
+							   slang::parsing::KnownSystemName::Prev) {
+					ret = handle_enum_next_prev(*this, call);
 				} else if (name == "$signed" || name == "$unsigned") {
 					require(expr, call.arguments().size() == 1);
 					ret = (*this)(*call.arguments()[0]);
@@ -3610,6 +3700,24 @@ void catch_forbidden_options(slang::driver::Driver &driver) {
 	}
 }
 
+void enable_best_effort_sva(slang::DiagnosticEngine &engine)
+{
+	for (auto code : {
+			diag::AssertionUnsupported,
+			diag::SVAUnsupported,
+			diag::UnsupportedSVAFeature,
+			diag::RepetitionsUnsupported,
+			diag::SVAClockingRequiresEdge,
+			diag::SVATemporalDelayRequiresClock,
+			diag::SVALivenessAcceptanceUnsupported,
+			diag::SVAMatchItemsUnsupported,
+			diag::SVALivenessCoverUnsupported,
+			diag::PastGatingClockingUnsupported,
+		}) {
+		engine.setSeverity(code, slang::DiagnosticSeverity::Warning);
+	}
+}
+
 struct SlangFrontend : Frontend {
 	SlangFrontend() : Frontend("slang", "read SystemVerilog (slang)") {}
 
@@ -3728,6 +3836,8 @@ struct SlangFrontend : Frontend {
 		if (!driver.processOptions())
 			log_cmd_error("Bad command\n");
 		catch_forbidden_options(driver);
+		if (settings.best_effort_sva.value_or(false))
+			enable_best_effort_sva(driver.diagEngine);
 
 		try {
 			if (!driver.parseAllSources())

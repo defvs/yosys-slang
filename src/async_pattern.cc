@@ -185,8 +185,7 @@ void TimingPatternInterpretor::interpret_async_pattern(const ast::ProceduralBloc
 		if (stmt->kind != ast::StatementKind::Conditional ||
 				stmt->as<ast::ConditionalStatement>().check != ast::UniquePriorityCheck::None ||
 				stmt->as<ast::ConditionalStatement>().conditions.size() != 1 ||
-				stmt->as<ast::ConditionalStatement>().conditions[0].pattern ||
-				!stmt->as<ast::ConditionalStatement>().ifFalse) {
+				stmt->as<ast::ConditionalStatement>().conditions[0].pattern) {
 			auto &diag = issuer.add_diag(diag::ExpectingIfElseAload, stmt->sourceRange);
 			diag.addNote(diag::NoteDuplicateEdgeSense, timed.timing.sourceRange);
 			return;
@@ -194,6 +193,7 @@ void TimingPatternInterpretor::interpret_async_pattern(const ast::ProceduralBloc
 
 		auto &cond_stmt = stmt->as<ast::ConditionalStatement>();
 		const ast::Expression *condition = cond_stmt.conditions[0].expr;
+		const ast::Expression *whole_condition = condition;
 
 		bool did_something = true, polarity = true;
 		while (did_something) {
@@ -244,12 +244,31 @@ void TimingPatternInterpretor::interpret_async_pattern(const ast::ProceduralBloc
 		if (condition1.bitwidth() == 1 && !condition1.has_dummy_bits()) {
 			auto found = std::find_if(
 					triggers.begin(), triggers.end(), [&](const ast::SignalEventControl *trigger) {
-						return eval.lhs(trigger->expr, /* silent= */ true) == condition1;
+						const ast::Expression *trigger_expr = &trigger->expr;
+						while (trigger_expr->kind == ast::ExpressionKind::UnaryOp &&
+								(trigger_expr->as<ast::UnaryExpression>().op ==
+										ast::UnaryOperator::LogicalNot ||
+								 trigger_expr->as<ast::UnaryExpression>().op ==
+										ast::UnaryOperator::BitwiseNot))
+							trigger_expr =
+								&trigger_expr->as<ast::UnaryExpression>().operand();
+						return eval.lhs(*trigger_expr, /* silent= */ true) == condition1;
 					});
 
 			if (found != triggers.end()) {
-				if ((*found)->edge !=
-						(polarity ? ast::EdgeKind::PosEdge : ast::EdgeKind::NegEdge)) {
+				bool trigger_polarity =
+					(*found)->edge == ast::EdgeKind::PosEdge;
+				const ast::Expression *trigger_expr = &(*found)->expr;
+				while (trigger_expr->kind == ast::ExpressionKind::UnaryOp &&
+						(trigger_expr->as<ast::UnaryExpression>().op ==
+								ast::UnaryOperator::LogicalNot ||
+						 trigger_expr->as<ast::UnaryExpression>().op ==
+								ast::UnaryOperator::BitwiseNot)) {
+					trigger_polarity = !trigger_polarity;
+					trigger_expr =
+						&trigger_expr->as<ast::UnaryExpression>().operand();
+				}
+				if (trigger_polarity != polarity) {
 					auto &diag = issuer.add_diag(
 							diag::IfElseAloadPolarity, cond_stmt.conditions[0].expr->sourceRange);
 					diag.addNote(diag::NoteSignalEvent, (*found)->sourceRange);
@@ -259,10 +278,84 @@ void TimingPatternInterpretor::interpret_async_pattern(const ast::ProceduralBloc
 
 				found_async.push_back({condition1[0], polarity, cond_stmt.ifTrue});
 				triggers.erase(found);
-				stmt = cond_stmt.ifFalse;
+				// A missing else means "hold value" on the synchronous edge.
+				// Keep the original conditional as the synchronous body so its
+				// assigned variables remain registered and the executor builds
+				// that hold behavior, while also recording the async branch.
+				stmt = cond_stmt.ifFalse ? cond_stmt.ifFalse : &cond_stmt;
 				continue;
 			}
 		}
+
+		// A reset term can be ORed with synchronous conditions:
+		//   always_ff @(posedge clk or negedge rst_n)
+		//     if (!rst_n || sync_condition) ...
+		// The reset term still unambiguously defines the async load, while the
+		// complete conditional must remain as the synchronous body.
+		std::vector<const ast::Expression *> terms{whole_condition};
+		bool matched_composite = false;
+		while (!terms.empty() && !matched_composite) {
+			const ast::Expression *term = terms.back();
+			terms.pop_back();
+			if (term->kind == ast::ExpressionKind::BinaryOp &&
+					(term->as<ast::BinaryExpression>().op ==
+						ast::BinaryOperator::LogicalOr ||
+					 term->as<ast::BinaryExpression>().op ==
+						 ast::BinaryOperator::BinaryOr)) {
+				terms.push_back(&term->as<ast::BinaryExpression>().left());
+				terms.push_back(&term->as<ast::BinaryExpression>().right());
+				continue;
+			}
+
+			bool term_polarity = true;
+			while (term->kind == ast::ExpressionKind::UnaryOp &&
+					(term->as<ast::UnaryExpression>().op ==
+						 ast::UnaryOperator::LogicalNot ||
+					 term->as<ast::UnaryExpression>().op ==
+						 ast::UnaryOperator::BitwiseNot)) {
+				term_polarity = !term_polarity;
+				term = &term->as<ast::UnaryExpression>().operand();
+			}
+			VariableBits term_bits = eval.lhs(*term, /* silent= */ true);
+			if (term_bits.bitwidth() != 1 || term_bits.has_dummy_bits())
+				continue;
+
+			auto found = std::find_if(
+				triggers.begin(), triggers.end(),
+				[&](const ast::SignalEventControl *trigger) {
+					const ast::Expression *trigger_expr = &trigger->expr;
+					while (trigger_expr->kind == ast::ExpressionKind::UnaryOp &&
+							(trigger_expr->as<ast::UnaryExpression>().op ==
+								 ast::UnaryOperator::LogicalNot ||
+							 trigger_expr->as<ast::UnaryExpression>().op ==
+								 ast::UnaryOperator::BitwiseNot))
+						trigger_expr =
+							&trigger_expr->as<ast::UnaryExpression>().operand();
+					return eval.lhs(*trigger_expr, /* silent= */ true) == term_bits;
+				});
+			if (found == triggers.end())
+				continue;
+
+			bool trigger_polarity = (*found)->edge == ast::EdgeKind::PosEdge;
+			const ast::Expression *trigger_expr = &(*found)->expr;
+			while (trigger_expr->kind == ast::ExpressionKind::UnaryOp &&
+					(trigger_expr->as<ast::UnaryExpression>().op ==
+						 ast::UnaryOperator::LogicalNot ||
+					 trigger_expr->as<ast::UnaryExpression>().op ==
+						 ast::UnaryOperator::BitwiseNot)) {
+				trigger_polarity = !trigger_polarity;
+				trigger_expr = &trigger_expr->as<ast::UnaryExpression>().operand();
+			}
+			if (trigger_polarity != term_polarity)
+				continue;
+
+			found_async.push_back({term_bits[0], term_polarity, cond_stmt.ifTrue});
+			triggers.erase(found);
+			stmt = &cond_stmt;
+			matched_composite = true;
+		}
+		if (matched_composite)
+			continue;
 
 		auto &diag = issuer.add_diag(diag::IfElseAloadMismatch, stmt->sourceRange);
 		diag.addNote(diag::NoteDuplicateEdgeSense, timed.timing.sourceRange);
