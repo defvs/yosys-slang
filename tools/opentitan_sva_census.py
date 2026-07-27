@@ -684,7 +684,7 @@ def write_reports(
     )
 
     with (output / "targets.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(
             [
                 "id",
@@ -759,7 +759,12 @@ def write_reports(
             "severity",
             "message",
         ]
-        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fields,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(unsupported_rows)
 
