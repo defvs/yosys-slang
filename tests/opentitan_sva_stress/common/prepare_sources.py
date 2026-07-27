@@ -8,30 +8,15 @@ from pathlib import Path
 
 
 UNSUPPORTED_PATTERNS = (
-    "strong(",
-    " throughout ",
     "[->",
-    "[*",
 )
 
 DISABLED_REASON = {
     "prim_alert_rxtx_assert_fpv.sv": {
         "PingEn_M": "uses throughout and goto repetition",
-        "AlertReqAck_A": "uses unbounded strong eventuality",
         "AlertPingIgnored_A": "uses throughout and goto repetition",
-        "AlertCheck0_A": "uses consecutive repetition",
-        "AlertCheck1_A": "uses unbounded strong eventuality",
-        "FsmLivenessSender_A": "uses unbounded strong eventuality",
-        "FsmLivenessReceiver_A": "uses unbounded strong eventuality",
     },
     "prim_esc_rxtx_assert_fpv.sv": {
-        "EscDeassert_A": "uses unbounded strong eventuality and consecutive repetition",
-        "FsmLivenessSender_A": "uses unbounded strong eventuality",
-        "FsmLivenessReceiver_A": "uses unbounded strong eventuality",
-    },
-    "sha3pad_assert_if.sv": {
-        "ProcessToRun_A": "uses unbounded strong eventuality",
-        "RunThenComplete_M": "uses unbounded strong eventuality",
     },
 }
 
@@ -150,6 +135,15 @@ def filter_source(src, dst):
         text = text.replace(
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase2",
             "3'd4",
+        )
+    if source_name == "prim_esc_rxtx_assert_fpv.sv":
+        text = text.replace(
+            "prim_esc_rxtx_sva_harness.u_tb.u_prim_esc_sender.Idle",
+            "3'd0",
+        )
+        text = text.replace(
+            "prim_esc_rxtx_sva_harness.u_tb.u_prim_esc_receiver.Idle",
+            "3'd0",
         )
     if source_name == "clkmgr_cg_en_sva_if.sv":
         text = text.replace("scanmode == prim_mubi_pkg::MuBi4True", "scanmode == 4'h6")

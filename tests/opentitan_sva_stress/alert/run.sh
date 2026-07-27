@@ -14,7 +14,7 @@ prepare_source "$OT/hw/ip/prim/rtl/prim_alert_sender.sv" "$FILTERED/prim_alert_s
 prepare_source "$OT/hw/ip/prim/rtl/prim_alert_receiver.sv" "$FILTERED/prim_alert_receiver.sv"
 prepare_source "$OT/hw/ip/prim/rtl/prim_diff_decode.sv" "$FILTERED/prim_diff_decode.sv"
 
-run_case alert prim_alert_rxtx_sva_harness "$DEPTH" \
+EXPECT_LIVENESS=1 run_case alert prim_alert_rxtx_sva_harness "$DEPTH" \
   "$OT/hw/ip/prim/rtl/prim_util_pkg.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop_en.sv" \

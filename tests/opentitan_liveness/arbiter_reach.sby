@@ -1,0 +1,15 @@
+[options]
+mode cover
+depth 8
+
+[engines]
+smtbmc z3
+
+[script]
+read_rtlil arbiter_pass.il
+chformal -live -remove
+chformal -assert -remove
+prep -top opentitan_arbiter_liveness_harness
+
+[files]
+arbiter_pass.il

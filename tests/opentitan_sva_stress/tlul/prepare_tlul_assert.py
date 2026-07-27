@@ -11,10 +11,6 @@ DISABLED_ASSERTIONS = {
     "aDataKnown_M": "uses $isunknown, which current yosys-slang does not synthesize",
     "dDataKnown_A": "uses $isunknown, which current yosys-slang does not synthesize",
     "dDataKnown_M": "uses $isunknown, which current yosys-slang does not synthesize",
-    "legalAOpcodeErr_A": "uses unbounded s_eventually, which yosys-slang does not synthesize",
-    "sizeGTEMaskErr_A": "uses unbounded s_eventually, which yosys-slang does not synthesize",
-    "sizeMatchesMaskErr_A": "uses unbounded s_eventually, which yosys-slang does not synthesize",
-    "addrSizeAlignedErr_A": "uses unbounded s_eventually, which yosys-slang does not synthesize",
 }
 
 SEQUENCE_EXPR = {
@@ -36,6 +32,11 @@ SEQUENCE_EXPR = {
     "respMustHaveReq_S": "(curr_fwd | pend_req[d2h.d_source].pend)",
     "dDataKnown_pre_S": "(d2h.d_opcode == 3'h1)",
     "dDataKnown_S": "(((!d_mask[0]) || (d_mask[0] && !$isunknown(d_data[8*0 +: 8]))) && ((!d_mask[1]) || (d_mask[1] && !$isunknown(d_data[8*1 +: 8]))) && ((!d_mask[2]) || (d_mask[2] && !$isunknown(d_data[8*2 +: 8]))) && ((!d_mask[3]) || (d_mask[3] && !$isunknown(d_data[8*3 +: 8]))) && ((!d_mask[4]) || (d_mask[4] && !$isunknown(d_data[8*4 +: 8]))) && ((!d_mask[5]) || (d_mask[5] && !$isunknown(d_data[8*5 +: 8]))) && ((!d_mask[6]) || (d_mask[6] && !$isunknown(d_data[8*6 +: 8]))) && ((!d_mask[7]) || (d_mask[7] && !$isunknown(d_data[8*7 +: 8]))))",
+    "d_error_pre_S": "(h2d.a_valid && d2h.a_ready)",
+    "legalAOpcodeErr_S": "(!(h2d.a_opcode inside {3'h0, 3'h4, 3'h1}))",
+    "sizeGTEMaskErr_S": "((1 << h2d.a_size) < $countones(h2d.a_mask))",
+    "sizeMatchesMaskErr_S": "((h2d.a_opcode == 3'h0) && ((1 << h2d.a_size) != $countones(h2d.a_mask)))",
+    "addrSizeAlignedErr_S": "((h2d.a_address & ((1 << h2d.a_size)-1)) != '0)",
 }
 
 

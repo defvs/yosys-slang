@@ -1,0 +1,47 @@
+[tasks]
+alert_pass
+alert_fail
+esc_pass
+esc_fail
+sha3_pass
+sha3_fail
+tlul_pass
+tlul_fail
+
+[options]
+mode live
+alert_fail: expect fail
+esc_fail: expect fail
+sha3_fail: expect fail
+tlul_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+alert_pass: read_rtlil alert_pattern_pass.il
+alert_pass: prep -top alert_pattern_pass
+alert_fail: read_rtlil alert_pattern_fail.il
+alert_fail: prep -top alert_pattern_fail
+esc_pass: read_rtlil esc_pattern_pass.il
+esc_pass: prep -top esc_pattern_pass
+esc_fail: read_rtlil esc_pattern_fail.il
+esc_fail: prep -top esc_pattern_fail
+sha3_pass: read_rtlil sha3_pattern_pass.il
+sha3_pass: prep -top sha3_pattern_pass
+sha3_fail: read_rtlil sha3_pattern_fail.il
+sha3_fail: prep -top sha3_pattern_fail
+tlul_pass: read_rtlil tlul_pattern_pass.il
+tlul_pass: prep -top tlul_pattern_pass
+tlul_fail: read_rtlil tlul_pattern_fail.il
+tlul_fail: prep -top tlul_pattern_fail
+
+[files]
+alert_pattern_pass.il
+alert_pattern_fail.il
+esc_pattern_pass.il
+esc_pattern_fail.il
+sha3_pattern_pass.il
+sha3_pattern_fail.il
+tlul_pattern_pass.il
+tlul_pattern_fail.il

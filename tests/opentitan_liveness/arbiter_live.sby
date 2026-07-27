@@ -1,0 +1,21 @@
+[tasks]
+pass
+fail
+
+[options]
+mode live
+fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+pass: read_rtlil arbiter_pass.il
+fail: read_rtlil arbiter_liveness_fail.il
+chformal -assert -remove
+chformal -cover -remove
+prep -top opentitan_arbiter_liveness_harness
+
+[files]
+arbiter_pass.il
+arbiter_liveness_fail.il

@@ -24,6 +24,7 @@ TLUL_ASSERT_SRC="$OT/hw/ip/tlul/rtl/tlul_assert.sv"
 TLUL_ASSERT_FILTERED="$BUILD/tlul_assert.filtered.sv"
 SYNTH_LOG="$BUILD/synth.log"
 SMT="$BUILD/tlul_sva.smt2"
+FULL_IL="$BUILD/tlul_sva.full.il"
 BMC_LOG="$BUILD/bmc.log"
 SUMMARY="$BUILD/summary.md"
 RESULT="$BUILD/result.txt"
@@ -54,11 +55,19 @@ read_slang --no-synthesis-define --ignore-timing --single-unit --top tlul_sva_ha
 prep -top tlul_sva_harness
 async2sync
 dffunmap
+chformal -lower
+write_rtlil $FULL_IL
+chformal -live -remove
+chformal -fair -remove
 write_smt2 -wires $SMT
 EOF
 
 synth_status=PASS
 if ! "$YOSYS" -m "$PLUGIN" "$BUILD/tlul_sva.ys" >"$SYNTH_LOG" 2>&1; then
+  synth_status=FAIL
+fi
+if [ "$synth_status" = PASS ] && ! grep -Eq 'cell \$(live|fair) ' "$FULL_IL"; then
+  echo "Expected liveness/fairness cells were not generated" >>"$SYNTH_LOG"
   synth_status=FAIL
 fi
 
@@ -92,10 +101,6 @@ fi
   echo '| aDataKnown_A / aDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
   echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
   echo '| aKnown_A / dKnown_A / aReadyKnown_A / dReadyKnown_A | OpenTitan knownness macros expand to $isunknown |'
-  echo "| legalAOpcodeErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| sizeGTEMaskErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| sizeMatchesMaskErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| addrSizeAlignedErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
   echo "| TLUL cover properties | coverage-only, and some cover sequences use unsupported match-item locals / goto repetition |"
   echo
   echo "## Synthesized assertions"

@@ -1,0 +1,23 @@
+[tasks]
+pass
+fail
+
+[options]
+mode prove
+depth 12
+fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+pass: read_rtlil arbiter_pass.il
+pass: chformal -live -remove
+pass: prep -top opentitan_arbiter_liveness_harness
+fail: read_rtlil arbiter_safety_fail.il
+fail: chformal -live -remove
+fail: prep -top opentitan_arbiter_liveness_harness
+
+[files]
+arbiter_pass.il
+arbiter_safety_fail.il

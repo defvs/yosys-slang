@@ -1,0 +1,32 @@
+[tasks]
+alert
+esc
+sha3
+tlul
+
+[options]
+mode cover
+depth 8
+
+[engines]
+smtbmc z3
+
+[script]
+alert: read_rtlil alert_pattern_pass.il
+alert: chformal -live -remove
+alert: prep -top alert_pattern_pass
+esc: read_rtlil esc_pattern_pass.il
+esc: chformal -live -remove
+esc: prep -top esc_pattern_pass
+sha3: read_rtlil sha3_pattern_pass.il
+sha3: chformal -live -remove
+sha3: prep -top sha3_pattern_pass
+tlul: read_rtlil tlul_pattern_pass.il
+tlul: chformal -live -remove
+tlul: prep -top tlul_pattern_pass
+
+[files]
+alert_pattern_pass.il
+esc_pattern_pass.il
+sha3_pattern_pass.il
+tlul_pattern_pass.il

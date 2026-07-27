@@ -27,6 +27,7 @@ run_case() {
   local case_dir="$BUILD_ROOT/$name"
   local ys="$case_dir/$name.ys"
   local smt="$case_dir/$name.smt2"
+  local full_il="$case_dir/$name.full.il"
   local synth_log="$case_dir/synth.log"
   local bmc_log="$case_dir/bmc.log"
   mkdir -p "$case_dir"
@@ -52,6 +53,10 @@ EOF
 prep -top $top
 async2sync
 dffunmap
+chformal -lower
+write_rtlil $full_il
+chformal -live -remove
+chformal -fair -remove
 write_smt2 -wires $smt
 EOF
   } > "$ys"
@@ -59,6 +64,12 @@ EOF
   local synth_status=PASS
   if ! "$YOSYS" -m "$PLUGIN" "$ys" >"$synth_log" 2>&1; then
     synth_status=FAIL
+  fi
+  if [ "$synth_status" = PASS ] && [ "${EXPECT_LIVENESS:-0}" = 1 ]; then
+    if ! grep -Eq 'cell \$(live|fair) ' "$full_il"; then
+      echo "Expected liveness/fairness cells were not generated" >>"$synth_log"
+      synth_status=FAIL
+    fi
   fi
 
   local bmc_status=SKIP
