@@ -24,6 +24,12 @@ if (WITH_COVERAGE)
 endif()
 
 set(ALL_TESTS
+    liveness/lowering.ys
+    liveness/composition.ys
+    liveness/equivalence.ys
+    liveness/unsupported.ys
+    liveness/unbounded_sequences.ys
+    liveness/regular_sequences.ys
     sva/seqequiv.tcl
     sva/range_guard.ys
     sva/unsupported_sampled_clocking.ys
@@ -92,6 +98,75 @@ foreach(test_script ${ALL_TESTS})
             ${YOSYS_BINDIR}/yosys -m $<TARGET_FILE:yosys-slang> ${test_fullpath}
     )
 endforeach()
+
+# Distribution packages do not consistently name the standalone ABC binary.
+# Keep the test local to the discovered executable instead of installing a
+# global yosys-abc compatibility symlink.
+find_program(YOSYS_ABC_EXECUTABLE
+    NAMES yosys-abc abc
+    HINTS ${YOSYS_BINDIR}
+)
+if (YOSYS_ABC_EXECUTABLE)
+    set_tests_properties(sva/seqequiv.tcl PROPERTIES
+        ENVIRONMENT "YOSYS_ABC=${YOSYS_ABC_EXECUTABLE}"
+    )
+endif()
+
+option(ENABLE_LIVENESS_PROOFS
+       "Enable unbounded SVA liveness proofs with the external suprove engine"
+       OFF)
+set(SUPROVE_EXECUTABLE "" CACHE FILEPATH
+    "Path to a pinned suprove executable for ENABLE_LIVENESS_PROOFS")
+
+if (ENABLE_LIVENESS_PROOFS)
+    if (NOT EXISTS "${SUPROVE_EXECUTABLE}")
+        message(FATAL_ERROR
+            "ENABLE_LIVENESS_PROOFS requires SUPROVE_EXECUTABLE; "
+            "run tools/setup_liveness_tools.sh or select an existing pinned binary")
+    endif()
+    add_test(
+        NAME liveness/response_proof
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/liveness
+        COMMAND
+            ${CMAKE_CURRENT_SOURCE_DIR}/liveness/run_response_proof.sh
+            $<TARGET_FILE:yosys-slang>
+            ${SUPROVE_EXECUTABLE}
+    )
+    set_tests_properties(
+        liveness/response_proof
+        PROPERTIES
+            LABELS "formal;liveness"
+            TIMEOUT 120
+    )
+    add_test(
+        NAME opentitan_liveness/arbiter
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_liveness
+        COMMAND
+            ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_liveness/run_arbiter.sh
+            $<TARGET_FILE:yosys-slang>
+            ${SUPROVE_EXECUTABLE}
+    )
+    set_tests_properties(
+        opentitan_liveness/arbiter
+        PROPERTIES
+            LABELS "formal;liveness;opentitan"
+            TIMEOUT 180
+    )
+    add_test(
+        NAME opentitan_liveness/stress_targets
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_liveness
+        COMMAND
+            ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_liveness/run_stress_targets.sh
+            $<TARGET_FILE:yosys-slang>
+            ${SUPROVE_EXECUTABLE}
+    )
+    set_tests_properties(
+        opentitan_liveness/stress_targets
+        PROPERTIES
+            LABELS "formal;liveness;opentitan;stress"
+            TIMEOUT 600
+    )
+endif()
 
 option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
 

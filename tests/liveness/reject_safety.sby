@@ -1,0 +1,25 @@
+[tasks]
+pass
+fail
+
+[options]
+mode prove
+depth 10
+fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+pass: read_rtlil reject_abort_pass.il
+pass: chformal -live -remove
+pass: chformal -fair -remove
+pass: prep -top reject_abort_pass
+fail: read_rtlil reject_abort_fail.il
+fail: chformal -live -remove
+fail: chformal -fair -remove
+fail: prep -top reject_abort_fail
+
+[files]
+reject_abort_pass.il
+reject_abort_fail.il

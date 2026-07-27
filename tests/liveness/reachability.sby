@@ -1,0 +1,15 @@
+[options]
+mode cover
+depth 5
+
+[engines]
+smtbmc z3
+
+[script]
+read_rtlil response_pass.il
+chformal -live -remove
+chformal -fair -remove
+prep -top response_proof
+
+[files]
+response_pass.il

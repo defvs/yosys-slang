@@ -1,0 +1,14 @@
+read_slang lowering.sv
+
+select -assert-count 6 liveness_lowering/t:$check
+select -assert-count 4 liveness_lowering/t:$check r:FLAVOR=live %i
+select -assert-count 1 liveness_lowering/t:$check r:FLAVOR=fair %i
+select -assert-count 1 liveness_lowering/t:$check r:FLAVOR=assert %i
+
+async2sync
+formalff -clk2ff
+chformal -lower
+select -assert-count 4 liveness_lowering/t:$live
+select -assert-count 1 liveness_lowering/t:$fair
+select -assert-count 1 liveness_lowering/t:$assert
+check -assert

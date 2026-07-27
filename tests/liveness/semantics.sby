@@ -1,0 +1,51 @@
+[tasks]
+disable_pass
+disable_fail
+minimum_pass
+minimum_fail
+fairness_pass
+fairness_fail
+suffix_overlap_pass
+suffix_pretrigger_fail
+overlapping_requests_pass
+
+[options]
+mode live
+disable_fail: expect fail
+minimum_fail: expect fail
+fairness_fail: expect fail
+suffix_pretrigger_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+disable_pass: read_rtlil disable_abort_pass.il
+disable_pass: prep -top disable_abort_pass
+disable_fail: read_rtlil disable_abort_fail.il
+disable_fail: prep -top disable_abort_fail
+minimum_pass: read_rtlil minimum_delay_pass.il
+minimum_pass: prep -top minimum_delay_pass
+minimum_fail: read_rtlil minimum_delay_fail.il
+minimum_fail: prep -top minimum_delay_fail
+fairness_pass: read_rtlil fairness_pass.il
+fairness_pass: prep -top fairness_pass
+fairness_fail: read_rtlil fairness_fail.il
+fairness_fail: prep -top fairness_fail
+suffix_overlap_pass: read_rtlil suffix_overlap_pass.il
+suffix_overlap_pass: prep -top suffix_overlap_pass
+suffix_pretrigger_fail: read_rtlil suffix_pretrigger_fail.il
+suffix_pretrigger_fail: prep -top suffix_pretrigger_fail
+overlapping_requests_pass: read_rtlil overlapping_requests_pass.il
+overlapping_requests_pass: prep -top overlapping_requests_pass
+
+[files]
+disable_abort_pass.il
+disable_abort_fail.il
+minimum_delay_pass.il
+minimum_delay_fail.il
+fairness_pass.il
+fairness_fail.il
+suffix_overlap_pass.il
+suffix_pretrigger_fail.il
+overlapping_requests_pass.il

@@ -1,0 +1,15 @@
+read_slang regular_sequences.sv
+
+# Seven generalized regular-language obligations use an auxiliary selector
+# fairness constraint. The sequence "and" decomposes into two justice
+# obligations and does not require selection.
+select -assert-count 16 liveness_regular_sequences/t:$check
+select -assert-count 9 liveness_regular_sequences/t:$check r:FLAVOR=live %i
+select -assert-count 7 liveness_regular_sequences/t:$check r:FLAVOR=fair %i
+
+async2sync
+formalff -clk2ff
+chformal -lower
+select -assert-count 9 liveness_regular_sequences/t:$live
+select -assert-count 7 liveness_regular_sequences/t:$fair
+check -assert

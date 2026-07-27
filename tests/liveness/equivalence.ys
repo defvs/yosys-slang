@@ -1,0 +1,14 @@
+read_slang equivalence.sv
+
+setparam -set FLAVOR "live" liveness_equivalence/direct_ref
+setparam -set FLAVOR "fair" liveness_equivalence/fair_ref
+test_slangsva
+
+select -assert-count 2 liveness_equivalence/t:$check
+select -assert-count 2 liveness_equivalence/t:$check r:FLAVOR=assert %i
+
+async2sync
+formalff -clk2ff
+chformal -lower
+prep -top liveness_equivalence
+sat -verify -prove-asserts -seq 4

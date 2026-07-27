@@ -1,0 +1,55 @@
+[tasks]
+pass
+fail
+intersect_pass
+intersect_fail
+goto_pass
+goto_fail
+within_pass
+within_fail
+
+[options]
+mode live
+fail: expect fail
+intersect_fail: expect fail
+goto_fail: expect fail
+within_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+pass: read_rtlil regular_sequence_pass.il
+pass: chformal -cover -remove
+pass: prep -top regular_sequence_pass
+fail: read_rtlil regular_sequence_fail.il
+fail: chformal -cover -remove
+fail: prep -top regular_sequence_fail
+intersect_pass: read_rtlil regular_intersect_pass.il
+intersect_pass: chformal -cover -remove
+intersect_pass: prep -top regular_intersect_pass
+intersect_fail: read_rtlil regular_intersect_fail.il
+intersect_fail: chformal -cover -remove
+intersect_fail: prep -top regular_intersect_fail
+goto_pass: read_rtlil regular_goto_pass.il
+goto_pass: chformal -cover -remove
+goto_pass: prep -top regular_goto_pass
+goto_fail: read_rtlil regular_goto_fail.il
+goto_fail: chformal -cover -remove
+goto_fail: prep -top regular_goto_fail
+within_pass: read_rtlil regular_within_pass.il
+within_pass: chformal -cover -remove
+within_pass: prep -top regular_within_pass
+within_fail: read_rtlil regular_within_fail.il
+within_fail: chformal -cover -remove
+within_fail: prep -top regular_within_fail
+
+[files]
+regular_sequence_pass.il
+regular_sequence_fail.il
+regular_intersect_pass.il
+regular_intersect_fail.il
+regular_goto_pass.il
+regular_goto_fail.il
+regular_within_pass.il
+regular_within_fail.il

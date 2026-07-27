@@ -1,0 +1,34 @@
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module unsupported_generalized_liveness(
+	input logic clk,
+	input logic a,
+	input logic b
+);
+	assume property (@(posedge clk) strong(a ##[0:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "covering an unbounded liveness property is not a finite reachability check"
+read_slang <<EOF
+module unsupported_liveness_cover(input logic clk, input logic a);
+	cover property (@(posedge clk) s_eventually a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA match items and local-variable actions are not synthesizable"
+read_slang <<EOF
+module unsupported_match_item(
+	input logic clk,
+	input logic a,
+	input logic b
+);
+	function void note_match();
+	endfunction
+	assert property (@(posedge clk) strong((a, note_match()) ##1 b));
+endmodule
+EOF

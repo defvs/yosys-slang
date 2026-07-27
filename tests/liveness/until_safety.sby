@@ -1,0 +1,34 @@
+[tasks]
+until_pass
+until_fail
+until_with_pass
+until_with_fail
+
+[options]
+mode prove
+depth 10
+until_fail: expect fail
+until_with_fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+until_pass: read_rtlil until_pass.il
+until_pass: chformal -live -remove
+until_pass: prep -top until_pass
+until_fail: read_rtlil until_fail.il
+until_fail: chformal -live -remove
+until_fail: prep -top until_fail
+until_with_pass: read_rtlil until_with_pass.il
+until_with_pass: chformal -live -remove
+until_with_pass: prep -top until_with_pass
+until_with_fail: read_rtlil until_with_fail.il
+until_with_fail: chformal -live -remove
+until_with_fail: prep -top until_with_fail
+
+[files]
+until_pass.il
+until_fail.il
+until_with_pass.il
+until_with_fail.il

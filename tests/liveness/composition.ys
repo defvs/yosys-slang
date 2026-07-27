@@ -1,0 +1,8 @@
+read_slang composition.sv
+
+# The composed properties produce twelve justice obligations and seven
+# safety obligations, including the reject_on pending-attempt check.
+select -assert-count 19 liveness_composition/t:$check
+select -assert-count 12 liveness_composition/t:$check r:FLAVOR=live %i
+select -assert-count 7 liveness_composition/t:$check r:FLAVOR=assert %i
+check -assert

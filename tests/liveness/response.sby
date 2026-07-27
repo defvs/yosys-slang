@@ -1,0 +1,20 @@
+[tasks]
+pass
+fail
+
+[options]
+mode live
+pass: expect pass
+fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+pass: read_rtlil response_pass.il
+fail: read_rtlil response_fail.il
+prep -top response_proof
+
+[files]
+response_pass.il
+response_fail.il

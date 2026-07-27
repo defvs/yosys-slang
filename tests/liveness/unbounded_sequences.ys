@@ -1,0 +1,10 @@
+read_slang unbounded_sequences.sv
+
+select -assert-count 3 unbounded_sequences/t:$check
+select -assert-count 3 unbounded_sequences/t:$check r:FLAVOR=live %i
+
+async2sync
+formalff -clk2ff
+chformal -lower
+select -assert-count 3 unbounded_sequences/t:$live
+check -assert

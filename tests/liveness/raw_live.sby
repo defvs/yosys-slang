@@ -1,0 +1,20 @@
+[tasks]
+pass
+fail
+
+[options]
+mode live
+pass: expect pass
+fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+pass: read_rtlil raw_live_pass.il
+fail: read_rtlil raw_live_fail.il
+prep -top top
+
+[files]
+raw_live_pass.il
+raw_live_fail.il

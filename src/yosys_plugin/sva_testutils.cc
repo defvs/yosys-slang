@@ -78,15 +78,30 @@ struct TestSlangsvaPass : Pass
 						ref->name.substr(0, ref->name.size() - 4) + "_compare", ID($check));
 
 				compare->parameters = ref->parameters;
+				// The comparison itself is always a cycle-by-cycle safety
+				// assertion, even when the paired cells are live/fair.
+				// Comparing only EN & !A is sufficient for safety failures,
+				// but is not sufficient for justice.  For live/fair cells,
+				// compare the goal and enable waveforms independently.
+				auto flavor = ref->getParam(ID::FLAVOR).decode_string();
+				compare->setParam(ID::FLAVOR, std::string("assert"));
 				compare->setParam(ID::PRIORITY, 0);
 				compare->setPort(ID::TRG, ref->getPort(ID::TRG));
 				compare->setPort(ID::EN, RTLIL::S1);
 				compare->setPort(ID::ARGS, {});
-				compare->setPort(ID::A, m->Eqx(NEW_ID,
-												m->And(NEW_ID, test->getPort(ID::EN),
-														m->Not(NEW_ID, test->getPort(ID::A))),
-												m->And(NEW_ID, ref->getPort(ID::EN),
-														m->Not(NEW_ID, ref->getPort(ID::A)))));
+				if (flavor == "live" || flavor == "fair") {
+					compare->setPort(ID::A, m->And(NEW_ID,
+						m->Eqx(NEW_ID, test->getPort(ID::A),
+							   ref->getPort(ID::A)),
+						m->Eqx(NEW_ID, test->getPort(ID::EN),
+							   ref->getPort(ID::EN))));
+				} else {
+					compare->setPort(ID::A, m->Eqx(NEW_ID,
+						m->And(NEW_ID, test->getPort(ID::EN),
+							   m->Not(NEW_ID, test->getPort(ID::A))),
+						m->And(NEW_ID, ref->getPort(ID::EN),
+							   m->Not(NEW_ID, ref->getPort(ID::A)))));
+				}
 
 				m->remove(ref);
 				m->remove(test);
