@@ -10,6 +10,7 @@ plugin=$1
 suprove=$2
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "${test_dir}/../.." && pwd)
+suprove_driver="${root}/tools/suprove_all_justice.py"
 stress_dir="${root}/tests/opentitan_sva_stress"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-ot-live.XXXXXXXX")
 cleanup() {
@@ -49,7 +50,8 @@ done
 
 (
 	cd -- "${pattern_dir}"
-	sby --suprove "${suprove}" --prefix "${pattern_dir}/live" \
+	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	sby --suprove "${suprove_driver}" --prefix "${pattern_dir}/live" \
 		-f target_patterns_live.sby
 	sby --prefix "${pattern_dir}/reach" -f target_patterns_reach.sby
 )

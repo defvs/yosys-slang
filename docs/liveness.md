@@ -147,6 +147,13 @@ Distribution packages do not consistently name the standalone ABC executable.
 CTest discovers either `yosys-abc` or `abc` and passes the exact path only to
 the equivalence test; no global compatibility symlink is installed.
 
+Suprove reports one status per AIGER justice property, while the tested
+SymbiYosys release consumes only the first status from an AIGER engine.
+Solver-backed tests therefore route multi-justice designs through
+`tools/suprove_all_justice.py`. The wrapper verifies that the pinned backend
+reported every justice property and gives SBY one aggregate PASS only when all
+of them passed. Single-justice runs execute suprove directly.
+
 Configure and run the complete controlled proof set with the path printed by
 the installer:
 
@@ -166,10 +173,14 @@ age tracking, overlapping requests, regular-sequence composition, strong-until
 safety, and antecedent reachability.
 
 The OpenTitan tests use vendored RTL. The arbiter test proves safety,
-reachability, and starvation freedom, then requires a mutated arbiter to fail.
-The opt-in stress targets lower and inspect the real alert-handler,
-escalation-timer, SHA3 padding, and TL-UL properties, checking their emitted
-live/fair structure and running the applicable safety and liveness tasks.
+reachability, and starvation freedom on the real arbiter, then requires
+separate safety and liveness mutations to fail. The opt-in stress targets lower
+and inspect the real alert-handler, escalation-timer, SHA3 padding, and TL-UL
+properties and run their bounded safety portions after retaining evidence of
+the emitted live/fair cells. Small target-specific models separately prove the
+corresponding liveness shapes, antecedent reachability, and intentional
+non-progress failures. The unconstrained whole peripheral harnesses are not
+claimed as end-to-end liveness proofs.
 
 ## Inspecting generated obligations
 

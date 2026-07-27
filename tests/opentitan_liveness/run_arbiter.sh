@@ -10,6 +10,7 @@ plugin=$1
 suprove=$2
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "${test_dir}/../.." && pwd)
+suprove_driver="${root}/tools/suprove_all_justice.py"
 ot="${root}/tests/third_party/opentitan"
 prim_rtl="${ot}/hw/ip/prim/rtl"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-ot-arbiter.XXXXXXXX")
@@ -47,7 +48,8 @@ build_variant "-DMUTATE_SAFETY" arbiter_safety_fail.il
 
 (
 	cd -- "${work_dir}"
-	sby --suprove "${suprove}" --prefix "${work_dir}/live" \
+	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/live" \
 		-f arbiter_live.sby
 	sby --prefix "${work_dir}/safety" -f arbiter_safety.sby
 	sby --prefix "${work_dir}/reach" -f arbiter_reach.sby

@@ -9,6 +9,7 @@ fi
 plugin=$1
 suprove=$2
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+suprove_driver=$(cd -- "${test_dir}/../../tools" && pwd)/suprove_all_justice.py
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-live.XXXXXXXX")
 cleanup() {
 	rm -rf -- "${work_dir:?}"
@@ -16,6 +17,9 @@ cleanup() {
 trap cleanup EXIT
 
 cp -- "${test_dir}/response.sby" "${work_dir}/response.sby"
+cp -- "${test_dir}/raw_live.sby" "${work_dir}/raw_live.sby"
+cp -- "${test_dir}/raw_live_pass.il" "${work_dir}/raw_live_pass.il"
+cp -- "${test_dir}/raw_live_fail.il" "${work_dir}/raw_live_fail.il"
 cp -- "${test_dir}/semantics.sby" "${work_dir}/semantics.sby"
 cp -- "${test_dir}/reachability.sby" "${work_dir}/reachability.sby"
 cp -- "${test_dir}/until_safety.sby" "${work_dir}/until_safety.sby"
@@ -66,7 +70,19 @@ for top in \
 	regular_goto_pass \
 	regular_goto_fail \
 	regular_within_pass \
-	regular_within_fail
+	regular_within_fail \
+	regular_and_pass \
+	regular_and_fail \
+	regular_or_pass \
+	regular_or_fail \
+	regular_throughout_pass \
+	regular_throughout_fail \
+	regular_nonconsecutive_pass \
+	regular_nonconsecutive_fail \
+	regular_consecutive_pass \
+	regular_consecutive_fail \
+	regular_empty_fusion_pass \
+	regular_empty_fusion_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/regular_proof.sv;
@@ -104,13 +120,16 @@ yosys -q -m "${plugin}" -p "
 
 (
 	cd -- "${work_dir}"
-	sby --suprove "${suprove}" --prefix "${work_dir}/response" \
+	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/raw_live" \
+		-f raw_live.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/response" \
 		-f response.sby
-	sby --suprove "${suprove}" --prefix "${work_dir}/semantics" \
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/semantics" \
 		-f semantics.sby
 	sby --prefix "${work_dir}/reachability" -f reachability.sby
 	sby --prefix "${work_dir}/until_safety" -f until_safety.sby
-	sby --suprove "${suprove}" --prefix "${work_dir}/regular" \
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/regular" \
 		-f regular.sby
 	sby --prefix "${work_dir}/regular_reachability" \
 		-f regular_reachability.sby

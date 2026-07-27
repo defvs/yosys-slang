@@ -7,6 +7,18 @@ goto_pass
 goto_fail
 within_pass
 within_fail
+and_pass
+and_fail
+or_pass
+or_fail
+throughout_pass
+throughout_fail
+nonconsecutive_pass
+nonconsecutive_fail
+consecutive_pass
+consecutive_fail
+empty_fusion_pass
+empty_fusion_fail
 
 [options]
 mode cover
@@ -48,6 +60,54 @@ within_fail: read_rtlil regular_within_fail.il
 within_fail: chformal -live -remove
 within_fail: chformal -fair -remove
 within_fail: prep -top regular_within_fail
+and_pass: read_rtlil regular_and_pass.il
+and_pass: chformal -live -remove
+and_pass: chformal -fair -remove
+and_pass: prep -top regular_and_pass
+and_fail: read_rtlil regular_and_fail.il
+and_fail: chformal -live -remove
+and_fail: chformal -fair -remove
+and_fail: prep -top regular_and_fail
+or_pass: read_rtlil regular_or_pass.il
+or_pass: chformal -live -remove
+or_pass: chformal -fair -remove
+or_pass: prep -top regular_or_pass
+or_fail: read_rtlil regular_or_fail.il
+or_fail: chformal -live -remove
+or_fail: chformal -fair -remove
+or_fail: prep -top regular_or_fail
+throughout_pass: read_rtlil regular_throughout_pass.il
+throughout_pass: chformal -live -remove
+throughout_pass: chformal -fair -remove
+throughout_pass: prep -top regular_throughout_pass
+throughout_fail: read_rtlil regular_throughout_fail.il
+throughout_fail: chformal -live -remove
+throughout_fail: chformal -fair -remove
+throughout_fail: prep -top regular_throughout_fail
+nonconsecutive_pass: read_rtlil regular_nonconsecutive_pass.il
+nonconsecutive_pass: chformal -live -remove
+nonconsecutive_pass: chformal -fair -remove
+nonconsecutive_pass: prep -top regular_nonconsecutive_pass
+nonconsecutive_fail: read_rtlil regular_nonconsecutive_fail.il
+nonconsecutive_fail: chformal -live -remove
+nonconsecutive_fail: chformal -fair -remove
+nonconsecutive_fail: prep -top regular_nonconsecutive_fail
+consecutive_pass: read_rtlil regular_consecutive_pass.il
+consecutive_pass: chformal -live -remove
+consecutive_pass: chformal -fair -remove
+consecutive_pass: prep -top regular_consecutive_pass
+consecutive_fail: read_rtlil regular_consecutive_fail.il
+consecutive_fail: chformal -live -remove
+consecutive_fail: chformal -fair -remove
+consecutive_fail: prep -top regular_consecutive_fail
+empty_fusion_pass: read_rtlil regular_empty_fusion_pass.il
+empty_fusion_pass: chformal -live -remove
+empty_fusion_pass: chformal -fair -remove
+empty_fusion_pass: prep -top regular_empty_fusion_pass
+empty_fusion_fail: read_rtlil regular_empty_fusion_fail.il
+empty_fusion_fail: chformal -live -remove
+empty_fusion_fail: chformal -fair -remove
+empty_fusion_fail: prep -top regular_empty_fusion_fail
 
 [files]
 regular_sequence_pass.il
@@ -58,3 +118,15 @@ regular_goto_pass.il
 regular_goto_fail.il
 regular_within_pass.il
 regular_within_fail.il
+regular_and_pass.il
+regular_and_fail.il
+regular_or_pass.il
+regular_or_fail.il
+regular_throughout_pass.il
+regular_throughout_fail.il
+regular_nonconsecutive_pass.il
+regular_nonconsecutive_fail.il
+regular_consecutive_pass.il
+regular_consecutive_fail.il
+regular_empty_fusion_pass.il
+regular_empty_fusion_fail.il

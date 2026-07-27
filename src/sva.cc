@@ -7,8 +7,6 @@
 // clang-format off
 #include <string>
 #include <optional>
-#include <functional>
-#include <limits>
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Compilation.h"
@@ -444,6 +442,97 @@ class SvaSequenceBuilder {
 		return parse_nonconsecutive(start, body, *repetition, owner);
 	}
 
+	bool is_zero_consecutive(const ast::AssertionExpr& expr) const {
+		if (expr.kind == ast::AssertionExprKind::Simple) {
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (!simple.repetition.has_value() &&
+				simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
+				const auto& instance =
+					simple.expr.as<ast::AssertionInstanceExpression>();
+				return !instance.isRecursiveProperty &&
+					   is_zero_consecutive(instance.body);
+			}
+			return simple.repetition.has_value() &&
+				   simple.repetition->kind ==
+					   ast::SequenceRepetition::Consecutive &&
+				   simple.repetition->range.min == 0;
+		}
+		if (expr.kind == ast::AssertionExprKind::SequenceWithMatch) {
+			const auto& with_match =
+				expr.as<ast::SequenceWithMatchExpr>();
+			return with_match.matchItems.empty() &&
+				   with_match.repetition.has_value() &&
+				   with_match.repetition->kind ==
+					   ast::SequenceRepetition::Consecutive &&
+				   with_match.repetition->range.min == 0;
+		}
+		return false;
+	}
+
+	int parse_zero_consecutive(int start, const ast::AssertionExpr& expr,
+							   bool allow_empty, bool add_pre_delay,
+							   bool add_post_delay) {
+		if (expr.kind == ast::AssertionExprKind::Simple) {
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (!simple.repetition.has_value() &&
+				simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
+				const auto& instance =
+					simple.expr.as<ast::AssertionInstanceExpression>();
+				if (!instance.isRecursiveProperty)
+					return parse_zero_consecutive(
+						start, instance.body, allow_empty,
+						add_pre_delay, add_post_delay);
+			}
+			log_assert(simple.repetition.has_value());
+			ast::SimpleAssertionExpr body(simple.expr, std::nullopt,
+										 simple.isNullExpr);
+			body.syntax = expr.syntax;
+			return parse_zero_consecutive_body(
+				start, body, simple.repetition->range, expr,
+				allow_empty, add_pre_delay, add_post_delay);
+		}
+
+		const auto& with_match = expr.as<ast::SequenceWithMatchExpr>();
+		log_assert(with_match.matchItems.empty());
+		log_assert(with_match.repetition.has_value());
+		return parse_zero_consecutive_body(
+			start, with_match.expr, with_match.repetition->range, expr,
+			allow_empty, add_pre_delay, add_post_delay);
+	}
+
+	int parse_zero_consecutive_body(
+			int start, const ast::AssertionExpr& body,
+			const ast::SequenceRange& original_range,
+			const ast::AssertionExpr& owner, bool allow_empty,
+			bool add_pre_delay, bool add_post_delay) {
+		int result = fsm.create_node();
+		if (allow_empty)
+			fsm.create_link(start, result);
+
+		if (!original_range.max.has_value() ||
+			original_range.max.value() > 0) {
+			int node = start;
+			if (add_pre_delay) {
+				int next = fsm.create_node();
+				fsm.create_edge(node, next);
+				node = next;
+			}
+
+			ast::SequenceRange nonempty {
+				1, original_range.max
+			};
+			node = parse_consecutive(node, body, nonempty, owner);
+
+			if (add_post_delay) {
+				int next = fsm.create_node();
+				fsm.create_edge(node, next);
+				node = next;
+			}
+			fsm.create_link(node, result);
+		}
+		return result;
+	}
+
 public:
 	SvaSequenceBuilder(EvalContext& eval_, SvaSequenceNfa& fsm_):
 		eval(eval_), fsm(fsm_) {}
@@ -487,9 +576,47 @@ public:
 			{
 				const auto& concat = expr.as<ast::SequenceConcatExpr>();
 				int node = start;
-				for (const auto& element : concat.elements) {
-					node = add_delay(node, element.delay, expr);
-					node = parse(node, *element.sequence);
+				bool reduce_delay = false;
+				for (size_t index = 0;
+					 index < concat.elements.size(); index++) {
+					const auto& element = concat.elements[index];
+					ast::SequenceRange delay = element.delay;
+					if (reduce_delay) {
+						log_assert(delay.min > 0);
+						delay.min--;
+						if (delay.max.has_value()) {
+							log_assert(delay.max.value() > 0);
+							delay.max = delay.max.value() - 1;
+						}
+					}
+					reduce_delay = false;
+
+					bool zero_repeat =
+						is_zero_consecutive(*element.sequence);
+					bool add_pre_delay =
+						zero_repeat && delay.min > 0;
+					bool add_post_delay =
+						zero_repeat && !add_pre_delay && index == 0 &&
+						index + 1 < concat.elements.size() &&
+						concat.elements[index + 1].delay.min > 0;
+					bool allow_empty =
+						add_pre_delay || add_post_delay;
+
+					if (add_pre_delay) {
+						delay.min--;
+						if (delay.max.has_value())
+							delay.max = delay.max.value() - 1;
+					}
+					if (add_post_delay)
+						reduce_delay = true;
+
+					node = add_delay(node, delay, expr);
+					if (zero_repeat && concat.elements.size() > 1)
+						node = parse_zero_consecutive(
+							node, *element.sequence, allow_empty,
+							add_pre_delay, add_post_delay);
+					else
+						node = parse(node, *element.sequence);
 				}
 				return node;
 			}
@@ -1396,7 +1523,7 @@ AssertionResult evalAssertion(EvalContext& eval, const ast::AssertionExpr& asser
 	auto sig = collapse_or(paths);
 
 	auto init_escape = delay_sva_sample(
-		eval, false, sig.history, true, sig.loc);
+		eval, RTLIL::State::S0, sig.history, RTLIL::State::S1, sig.loc);
 	auto frame_ready = eval.netlist.LogicNot(init_escape);
 	return { sig.sig, eval.netlist.LogicAnd(sig.en, frame_ready) };
 }
@@ -1461,7 +1588,8 @@ finite_eventual_candidates(EvalContext& eval, const ast::AssertionExpr& sequence
 		RTLIL::SigBit frame_ready = sva_not(
 			eval,
 			eval.netlist.ReduceBool(delay_sva_sample(
-				eval, false, path.history, true, path.loc)).as_bit());
+				eval, RTLIL::State::S0, path.history,
+				RTLIL::State::S1, path.loc)).as_bit());
 		RTLIL::SigBit match = sva_and(
 			eval, eval.netlist.ReduceBool(path.sig).as_bit(),
 			eval.netlist.ReduceBool(path.en).as_bit());
@@ -1554,7 +1682,8 @@ suffix_eventual_candidates(EvalContext& eval,
 		RTLIL::SigBit frame_ready = sva_not(
 			eval,
 			eval.netlist.ReduceBool(delay_sva_sample(
-				eval, false, path.history, true, path.loc)).as_bit());
+				eval, RTLIL::State::S0, path.history,
+				RTLIL::State::S1, path.loc)).as_bit());
 		RTLIL::SigBit match = sva_and(
 			eval, eval.netlist.ReduceBool(path.sig).as_bit(),
 			eval.netlist.ReduceBool(path.en).as_bit());
@@ -1981,8 +2110,9 @@ static PropertyResult lower_finite_property_from_trigger(
 		return result;
 	}
 	auto match = collapse_or(paths);
-	auto init_escape = delay_sva_sample(eval, false, match.history, true,
-										match.loc);
+	auto init_escape = delay_sva_sample(
+		eval, RTLIL::State::S0, match.history,
+		RTLIL::State::S1, match.loc);
 	RTLIL::SigBit frame_ready =
 		sva_not(eval, eval.netlist.ReduceBool(init_escape).as_bit());
 	RTLIL::SigBit enable = delayed_abortable_trigger(
