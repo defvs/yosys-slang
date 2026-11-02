@@ -261,3 +261,35 @@ module eventual_throughout_fail ((* gclk *) input logic clk);
 	wire d = phase != 1;
 	assert property (@(posedge clk) s_eventually strong(d throughout (a ##[1:$] c)));
 endmodule
+
+// strong(L and R) with a finite L is strong(L) and strong(R), but for an empty
+// match of L, which makes one of the `and` with any match of R
+module and_empty_finite_pass ((* gclk *) input logic clk);
+	logic [1:0] phase = 0;
+	always_ff @(posedge clk)
+		phase <= phase + 1'b1;
+	wire b = 1'b0;
+	wire c = phase == 2;
+	assert property (@(posedge clk) strong(b[*0:1] and (##[0:$] c)));
+	assert property (@(posedge clk) strong((##[0:$] c) and b[*0:2]));
+endmodule
+
+// That leaves the match of R to be had
+module and_empty_finite_fail ((* gclk *) input logic clk);
+	logic [1:0] phase = 0;
+	always_ff @(posedge clk)
+		phase <= phase + 1'b1;
+	wire b = 1'b0;
+	wire c = 1'b0;
+	assert property (@(posedge clk) strong(b[*0:1] and (##[0:$] c)));
+endmodule
+
+// A non-empty match of the finite operand is still needed where it has no empty one
+module and_finite_fail ((* gclk *) input logic clk);
+	logic [1:0] phase = 0;
+	always_ff @(posedge clk)
+		phase <= phase + 1'b1;
+	wire b = 1'b0;
+	wire c = phase == 2;
+	assert property (@(posedge clk) strong((##[0:$] c) and b[*1:2]));
+endmodule

@@ -34,6 +34,8 @@ cp -- "${test_dir}/abort.sby" "${work_dir}/abort.sby"
 cp -- "${test_dir}/abort_safety.sby" "${work_dir}/abort_safety.sby"
 cp -- "${test_dir}/constants.sby" "${work_dir}/constants.sby"
 cp -- "${test_dir}/composition.sby" "${work_dir}/composition.sby"
+cp -- "${test_dir}/composition_safety.sby" \
+	"${work_dir}/composition_safety.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -264,7 +266,10 @@ for top in \
 	first_match_attempts_fail \
 	intersect_attempts_pass \
 	eventual_throughout_pass \
-	eventual_throughout_fail
+	eventual_throughout_fail \
+	and_empty_finite_pass \
+	and_empty_finite_fail \
+	and_finite_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/composition_proof.sv;
@@ -315,4 +320,6 @@ yosys -q -m "${plugin}" -p "
 		-f constants.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/composition" \
 		-f composition.sby
+	sby --prefix "${work_dir}/composition_safety" \
+		-f composition_safety.sby
 )

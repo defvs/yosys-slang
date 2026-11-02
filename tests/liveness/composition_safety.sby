@@ -1,0 +1,25 @@
+[tasks]
+and_empty_finite_pass
+and_finite_fail
+
+[options]
+mode prove
+depth 10
+and_finite_fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+and_empty_finite_pass: read_rtlil and_empty_finite_pass.il
+and_empty_finite_pass: chformal -live -remove
+and_empty_finite_pass: chformal -fair -remove
+and_empty_finite_pass: prep -top and_empty_finite_pass
+and_finite_fail: read_rtlil and_finite_fail.il
+and_finite_fail: chformal -live -remove
+and_finite_fail: chformal -fair -remove
+and_finite_fail: prep -top and_finite_fail
+
+[files]
+and_empty_finite_pass: and_empty_finite_pass.il
+and_finite_fail: and_finite_fail.il

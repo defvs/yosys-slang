@@ -2414,21 +2414,29 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 									 const PropertyAborts& aborts);
 
 // The paths of `expr` get the letters of the aborts the way eval_assertion() does, as of
-// the trigger tick, so a failure settled ahead of a disable stands
+// the trigger tick, so a failure settled ahead of a disable stands. `admits_empty` tells
+// if a sequence has an empty match, which meets no property.
 static PropertyResult lower_finite_property_from_trigger(
 		EvalContext& eval, const ast::AssertionExpr& expr,
-		ir::Net trigger, bool attempt_tick, const PropertyAborts& aborts) {
+		ir::Net trigger, bool attempt_tick, const PropertyAborts& aborts,
+		bool *admits_empty = nullptr) {
 	PropertyResult result;
 	slang::SourceLocation loc = expr_loc(expr);
 	ir::Net abort = aborts.any(eval);
 	DisableSpans spans(AssertionMatch(eval, abort, loc));
+	if (admits_empty)
+		*admits_empty = false;
 	auto synthesize = [&](bool dual) {
 		AttemptContext ctx;
 		if (abort != ir::S0)
 			ctx.abort = &spans;
 		ctx.dual = dual;
 		ctx.late = !attempt_tick;
-		return collapse_or(property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, expr), loc));
+		auto paths = synthesize_assertion_expr(eval, ctx, expr);
+		for (const auto& path : paths)
+			if (admits_empty && path.empty)
+				*admits_empty = true;
+		return collapse_or(property_paths(eval, ctx, std::move(paths), loc));
 	};
 	bool cover = aborts.cover_disable != ir::S0;
 	AssertionMatch match = synthesize(cover && aborts.accept == ir::S0);
@@ -2948,8 +2956,13 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				 is_suffix_eventual_sequence(binary.left)) &&
 				(!assertion_has_unbounded_sequence(binary.right) ||
 				 is_suffix_eventual_sequence(binary.right))) {
+				// A match of each operand from the attempt makes one of the `and`. An
+				// empty match of the finite one puts no constraint on the other one
+				// (IEEE Std 1800-2017 section F.3.4.2.4), which never has one, so
+				// the attempt then needs a match of the other one only.
 				PropertyResult left;
 				PropertyResult right;
+				bool empty = false;
 				if (assertion_has_unbounded_sequence(binary.left)) {
 					auto candidates =
 						suffix_eventual_candidates(eval, binary.left);
@@ -2960,7 +2973,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						expr_loc(binary.left));
 				} else {
 					left = lower_finite_property_from_trigger(
-						eval, binary.left, trigger, attempt_tick, aborts);
+						eval, binary.left, trigger, attempt_tick, aborts, &empty);
+					if (empty)
+						left.obligations.clear();
 				}
 				if (assertion_has_unbounded_sequence(binary.right)) {
 					auto candidates =
@@ -2972,7 +2987,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						expr_loc(binary.right));
 				} else {
 					right = lower_finite_property_from_trigger(
-						eval, binary.right, trigger, attempt_tick, aborts);
+						eval, binary.right, trigger, attempt_tick, aborts, &empty);
+					if (empty)
+						right.obligations.clear();
 				}
 				left.valid = left.valid && right.valid;
 				left.obligations.insert(left.obligations.end(),

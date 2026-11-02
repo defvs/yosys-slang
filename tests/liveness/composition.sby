@@ -23,6 +23,8 @@ first_match_attempts_fail
 intersect_attempts_pass
 eventual_throughout_pass
 eventual_throughout_fail
+and_empty_finite_pass
+and_empty_finite_fail
 
 [options]
 mode live
@@ -38,6 +40,7 @@ within_empty_fail: expect fail
 within_throughout_fail: expect fail
 first_match_attempts_fail: expect fail
 eventual_throughout_fail: expect fail
+and_empty_finite_fail: expect fail
 
 [engines]
 aiger suprove
@@ -91,6 +94,10 @@ eventual_throughout_pass: read_rtlil eventual_throughout_pass.il
 eventual_throughout_pass: prep -top eventual_throughout_pass
 eventual_throughout_fail: read_rtlil eventual_throughout_fail.il
 eventual_throughout_fail: prep -top eventual_throughout_fail
+and_empty_finite_pass: read_rtlil and_empty_finite_pass.il
+and_empty_finite_pass: prep -top and_empty_finite_pass
+and_empty_finite_fail: read_rtlil and_empty_finite_fail.il
+and_empty_finite_fail: prep -top and_empty_finite_fail
 
 [files]
 strong_assumed_pass: strong_assumed_pass.il
@@ -117,3 +124,5 @@ first_match_attempts_fail: first_match_attempts_fail.il
 intersect_attempts_pass: intersect_attempts_pass.il
 eventual_throughout_pass: eventual_throughout_pass.il
 eventual_throughout_fail: eventual_throughout_fail.il
+and_empty_finite_pass: and_empty_finite_pass.il
+and_empty_finite_fail: and_empty_finite_fail.il
