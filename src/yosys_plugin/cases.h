@@ -16,6 +16,9 @@
 
 namespace slang_frontend {
 
+// Lower a ValuePattern to an RTLIL::SigSpec (wildcards become RTLIL::Sa)
+RTLIL::SigSpec lower_pattern(const ValuePattern &pat);
+
 // These structures are modeled after RTLIL's SwitchRule and CaseRule, to which
 // they are eventually lowered.
 //
@@ -34,14 +37,14 @@ struct Switch
 	int level;
 	const ast::Statement *statement = nullptr;
 
-	RTLIL::SigSpec signal;
+	ir::Value signal;
 	std::vector<Case *> cases;
 
 	bool full_case = false;
 	bool parallel_case = false;
 
 	~Switch();
-	Case *add_case(std::vector<RTLIL::SigSpec> compare);
+	Case *add_case(std::vector<ValuePattern> compare);
 	RTLIL::SwitchRule *lower(NetlistContext &netlist);
 
 	// trivial switch has signal={}, one case, and no special attributes
@@ -58,10 +61,10 @@ struct Case
 		slang::SourceLocation loc;
 
 		VariableBits lvalue;
-		RTLIL::SigSpec mask;
-		RTLIL::SigSpec unmasked_rvalue;
+		ir::Value mask;
+		ir::Value unmasked_rvalue;
 	};
-	std::vector<RTLIL::SigSpec> compare;
+	std::vector<ValuePattern> compare;
 	std::vector<Action> actions;
 	std::vector<Switch *> switches;
 	std::vector<RTLIL::SigSig> aux_actions;
@@ -72,7 +75,7 @@ struct Case
 			delete switch_;
 	}
 
-	Switch *add_switch(RTLIL::SigSpec signal)
+	Switch *add_switch(ir::Value signal)
 	{
 		Switch *sw = new Switch;
 		sw->signal = signal;
@@ -86,7 +89,8 @@ struct Case
 		if (statement)
 			transfer_attrs(netlist, *statement, rule);
 
-		rule->compare = compare;
+		for (auto &pat : compare)
+			rule->compare.push_back(lower_pattern(pat));
 		rule->actions.insert(rule->actions.end(), aux_actions.begin(), aux_actions.end());
 
 		std::vector<Switch *>::iterator it, ite;
@@ -120,14 +124,14 @@ struct Case
 	}
 
 	void insert_latch_signaling(
-			DiagnosticIssuer &issuer, Yosys::dict<VariableBit, RTLIL::SigSig> &map)
+			DiagnosticIssuer &issuer, hashlib::dict<VariableBit, RTLIL::SigSig> &map)
 	{
 		std::vector<Switch *> prepended_switches;
 		std::set<VariableBit> has_mask_switches;
 
 		for (auto &action : actions) {
 			VariableBits lvalue;
-			RTLIL::SigSpec enables, lstaging, rvalue;
+			ir::Value enables, lstaging, rvalue;
 
 			for (uint64_t i = 0; i < action.lvalue.bitwidth(); i++) {
 				VariableBit lbit = action.lvalue[i];
@@ -135,29 +139,32 @@ struct Case
 				if (map.count(lbit)) {
 					auto &mapped = map.at(lbit);
 
-					if (action.mask[i] == RTLIL::S1 && !has_mask_switches.count(lbit)) {
+					if (action.mask[i] == ir::S1 && !has_mask_switches.count(lbit)) {
 						lvalue.append(lbit);
-						lstaging.append(mapped.second);
-						enables.append(mapped.first);
+						lstaging.append(ir::Net(mapped.second));
+						enables.append(ir::Net(mapped.first));
 						rvalue.append(action.unmasked_rvalue[i]);
 					} else {
 						Switch *sw = new Switch;
-						sw->signal = action.mask[i];
+						sw->signal = ir::Net(action.mask[i]);
 						sw->level = level + 1;
 						sw->statement = statement;
 						prepended_switches.push_back(sw);
-						Case *case_ = sw->add_case({RTLIL::S1});
+						Case *case_ = sw->add_case({ir::S1});
 						case_->statement = statement;
-						case_->aux_actions.push_back({mapped.second, action.unmasked_rvalue[i]});
-						case_->aux_actions.push_back({mapped.first, RTLIL::S1});
+						case_->aux_actions.push_back(RTLIL::SigSig(RTLIL::SigSpec(mapped.second),
+								ir::Value(action.unmasked_rvalue[i])));
+						case_->aux_actions.push_back(RTLIL::SigSig(
+								RTLIL::SigSpec(mapped.first), RTLIL::SigSpec(RTLIL::S1)));
 						has_mask_switches.insert(lbit);
 					}
 				}
 			}
 
 			if (!lstaging.empty()) {
-				aux_actions.push_back({lstaging, rvalue});
-				aux_actions.push_back({enables, RTLIL::SigSpec(RTLIL::S1, enables.size())});
+				aux_actions.push_back({RTLIL::SigSpec(lstaging), RTLIL::SigSpec(rvalue)});
+				aux_actions.push_back(
+						{RTLIL::SigSpec(enables), RTLIL::SigSpec(ir::S1, enables.size())});
 			}
 		}
 

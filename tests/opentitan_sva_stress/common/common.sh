@@ -12,6 +12,8 @@ SMTBMC="${SMTBMC:-yosys-smtbmc}"
 SOLVER="${SOLVER:-yices}"
 FILTERED="$BUILD_ROOT/filtered"
 
+"$STRESS_DIR/common/fetch_opentitan.sh" "$OT"
+
 prepare_source() {
   local src="$1"
   local dst="$2"

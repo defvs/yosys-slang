@@ -30,14 +30,8 @@ foreach fn [glob *.sv] {
 		# Strip backslash from the start of $m
 		set m [string range $m 1 end]
 		write_aiger -zinit "$fn-$m.aig"
-		set flag "$fn-$m.aig.flag"
-		file delete $flag
-		yosys exec -- $abc_exec -c "\"read $fn-$m.aig; pdr -v; write_cex '$fn-$m.aig.flag'\""
-
-		if {[file exists $flag]} {
-		    puts stderr "Property failed to prove: counterexample exists"
-		    exit 1
-		}
+		# Insist on a positive verdict so a missing solver can't pass for a proof
+		yosys exec -expect-return 0 -expect-stdout "Property proved" -- $abc_exec -c "\"read $fn-$m.aig; pdr -v\""
 
 		log -pop
 	}

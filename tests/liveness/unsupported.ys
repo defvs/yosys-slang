@@ -11,7 +11,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "covering an unbounded liveness property is not a finite reachability check"
+test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
 read_slang <<EOF
 module unsupported_liveness_cover(input logic clk, input logic a);
 	cover property (@(posedge clk) s_eventually a);
@@ -30,5 +30,37 @@ module unsupported_match_item(
 	function void note_match();
 	endfunction
 	assert property (@(posedge clk) strong((a, note_match()) ##1 b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
+read_slang <<EOF
+module unsupported_bounded_always_cover(input logic clk, input logic a);
+	cover property (@(posedge clk) always [0:2] a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
+read_slang <<EOF
+module unsupported_split_cover(input logic clk, input logic a, input logic b);
+	cover property (@(posedge clk) (a until b) and (b until a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unsupported_unbounded_first_match(
+	input logic clk,
+	input logic a,
+	input logic b,
+	input logic c
+);
+	assert property (@(posedge clk) first_match(a ##[1:$] b) |-> c);
 endmodule
 EOF

@@ -4,7 +4,6 @@
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
 //
-#include "kernel/log.h"
 #include "slang/ast/Scope.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/Type.h"
@@ -39,7 +38,7 @@ static void subfield_names(VariableChunk chunk, uint64_t type_offset, const ast:
 					prefix + "." + std::string(field.name), ret);
 		}
 	} else if (type->isArray() && !type->isSimpleBitVector()) {
-		log_assert(type->hasFixedRange());
+		assert_invariant(type->hasFixedRange());
 		auto range = type->getFixedRange();
 		const ast::Type *el_type = type->getArrayElementType();
 		uint64_t stride = el_type->getBitstreamWidth();
@@ -56,7 +55,7 @@ static void subfield_names(VariableChunk chunk, uint64_t type_offset, const ast:
 							  ? std::min(chunk.base + chunk.bitwidth() - type_offset, width)
 							  : 0;
 
-		log_assert(hi > lo);
+		assert_invariant(hi > lo);
 		if (lo == 0 && hi == width)
 			ret.emplace_back(VariableChunk{chunk.variable, type_offset, width}, prefix);
 		else
@@ -68,9 +67,9 @@ static void subfield_names(VariableChunk chunk, uint64_t type_offset, const ast:
 
 std::vector<NamedChunk> generate_subfield_names(VariableChunk chunk, const ast::Type *type)
 {
-	log_assert((bool)chunk.variable);
-	log_assert(type->isBitstreamType() && type->isFixedSize());
-	log_assert(chunk.variable.bitwidth() == type->getBitstreamWidth());
+	assert_invariant((bool)chunk.variable);
+	assert_invariant(type->isBitstreamType() && type->isFixedSize());
+	assert_invariant(chunk.variable.bitwidth() == type->getBitstreamWidth());
 
 	std::vector<NamedChunk> ret;
 	subfield_names(chunk, 0, type, "", ret);
@@ -78,7 +77,7 @@ std::vector<NamedChunk> generate_subfield_names(VariableChunk chunk, const ast::
 	uint64_t sum = 0;
 	for (auto pair : ret)
 		sum += pair.first.bitwidth();
-	log_assert(sum == chunk.bitwidth());
+	assert_invariant(sum == chunk.bitwidth());
 
 	return ret;
 }

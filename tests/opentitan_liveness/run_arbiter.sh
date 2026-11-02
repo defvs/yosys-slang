@@ -19,6 +19,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+"${root}/tests/opentitan_sva_stress/common/fetch_opentitan.sh" "${ot}"
+
 cp -- "${test_dir}/arbiter_live.sby" "${work_dir}/arbiter_live.sby"
 cp -- "${test_dir}/arbiter_safety.sby" "${work_dir}/arbiter_safety.sby"
 cp -- "${test_dir}/arbiter_reach.sby" "${work_dir}/arbiter_reach.sby"

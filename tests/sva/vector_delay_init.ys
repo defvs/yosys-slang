@@ -4,6 +4,6 @@ module vector_delay_init(input logic clk, input logic [7:0] bus, input logic con
 endmodule
 EOF
 
-write_rtlil vector_delay_init.rtlil
-exec -- grep -q "attribute \\\\init 8'x" vector_delay_init.rtlil
-exec -- rm -f vector_delay_init.rtlil
+# Sampled data stays uninitialized, only the 1-bit enable is given a value
+select -assert-none a:init x:8 %i
+check -assert

@@ -7,7 +7,7 @@ load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_license//rules:license.bzl", "license")
 load(
-    "@yosys-slang//:dependency_support/slang_ext.bzl",
+    "@sv-elab//:dependency_support/slang_ext.bzl",
     "SLANG_VERSION_HASH",
     "SLANG_VERSION_MAJOR",
     "SLANG_VERSION_MINOR",
@@ -63,6 +63,7 @@ genrule(
         "slang/diagnostics/CompilationDiags.h",
         "slang/diagnostics/ConstEvalDiags.h",
         "slang/diagnostics/DeclarationsDiags.h",
+        "slang/diagnostics/DriverDiags.h",
         "slang/diagnostics/ExpressionsDiags.h",
         "slang/diagnostics/GeneralDiags.h",
         "slang/diagnostics/LexerDiags.h",
@@ -136,6 +137,7 @@ cc_library(
         ":slang/diagnostics/CompilationDiags.h",
         ":slang/diagnostics/ConstEvalDiags.h",
         ":slang/diagnostics/DeclarationsDiags.h",
+        ":slang/diagnostics/DriverDiags.h",
         ":slang/diagnostics/ExpressionsDiags.h",
         ":slang/diagnostics/GeneralDiags.h",
         ":slang/diagnostics/LexerDiags.h",
@@ -161,12 +163,15 @@ cc_library(
         "-std=c++20",
         "-Wno-unused-parameter",
     ],
-    defines = ["SLANG_BOOST_SINGLE_HEADER"],
     includes = [
         "external",
         "include",
         "source/ast/builtins",
     ],
-    visibility = ["@yosys-slang//:__subpackages__"],
-    deps = ["@fmt"],
+    visibility = ["@sv-elab//:__subpackages__"],
+    deps = [
+        "@fmt",
+        "@boost.regex//:boost.regex",
+        "@tomlplusplus//:tomlplusplus",
+    ],
 )

@@ -1,6 +1,6 @@
 # Synthesizable SVA liveness
 
-yosys-slang lowers temporal properties into explicit finite-state monitor logic
+sv-elab lowers temporal properties into explicit finite-state monitor logic
 and Yosys formal cells. Finite failures become `$check` cells with
 `FLAVOR="assert"` or `"assume"`. Unbounded progress becomes justice:
 
@@ -39,7 +39,7 @@ in the next section:
 | `disable iff`, `accept_on`, `reject_on` | abort or rejection logic as described below |
 | named sequences and named properties | recursively lowered, except recursion |
 
-Finite sequences retain the existing yosys-slang lowering, including
+Finite sequences retain the path-based lowering, including
 concatenation delays, bounded ranges, consecutive repetition, sequence
 `and`/`or`/`intersect`, `throughout`, implications, followed-by,
 `first_match` without actions, and empty-match edge cases.
@@ -53,7 +53,16 @@ Unbounded sequence monitors support:
 - sequence `or`;
 - `throughout` with a simple Boolean left operand;
 - `nexttime` and `s_nexttime`;
-- named sequences and `first_match` when there are no match actions.
+- named sequences;
+- `first_match` without match actions as the goal of a strong sequence or an
+  eventuality, where only the existence of a match matters. It is rejected in
+  any other position, as a monitor merging overlapping attempts cannot tell
+  which match of an attempt came first.
+
+Empty matches follow IEEE 1800-2017 16.9.2.1 in concatenation and repetition,
+so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`. An empty match of an implication
+antecedent does not start the consequent of `|->`, and starts the consequent of
+`|=>` on the first tick.
 
 For asserted generalized regular liveness, high-level sequence `and`,
 `intersect`, `within`, and `throughout` are composed from independently
@@ -107,8 +116,9 @@ cannot preserve the SVA meaning:
 - SVA match items, sequence local-variable assignments, and action subroutines;
 - recursive named properties or sequences;
 - weak sequences with an unbounded match;
-- liveness `cover property`, because justice is not a finite reachability
-  query;
+- `cover property` of `always`, `until` or liveness properties, because their
+  obligations describe what has to keep holding rather than an observable
+  point of success;
 - generalized regular liveness used as an assumption when it needs prophecy
   selection. Using existential selection for an assumption would weaken the
   environment constraint;
@@ -172,7 +182,7 @@ response, minimum delay, fairness, disable/accept/reject behavior, exact suffix
 age tracking, overlapping requests, regular-sequence composition, strong-until
 safety, and antecedent reachability.
 
-The OpenTitan tests use vendored RTL. The arbiter test proves safety,
+The OpenTitan tests fetch a pinned OpenTitan revision on demand. The arbiter test proves safety,
 reachability, and starvation freedom on the real arbiter, then requires
 separate safety and liveness mutations to fail. The opt-in stress targets lower
 and inspect the real alert-handler, escalation-timer, SHA3 padding, and TL-UL

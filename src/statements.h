@@ -7,15 +7,17 @@
 #pragma once
 
 #include "diag.h"
-#include "kernel/log.h"
-#include "kernel/rtlil.h"
+#include "slang/numeric/SVInt.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
 
+#include "backend_builder.h"
+#ifndef SLANG_MUX_LOWERING
 #include "cases.h"
+#endif
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Statement.h"
@@ -31,6 +33,368 @@
 
 namespace slang_frontend {
 
+ValuePattern svint_to_pattern(NetlistContext &netlist, const slang::SVInt &svint, bool wildcard_x,
+		bool wildcard_z, slang::SourceLocation loc);
+
+#ifdef SLANG_MUX_LOWERING
+struct SwitchHelper
+{
+	using VariableState = ProceduralContext::VariableState;
+	ProceduralContext &context;
+	VariableState &vstate;
+	VariableState::Snapshot save_snap;
+
+	ir::Value dispatch;
+	struct CaseInfo
+	{
+		std::vector<ValuePattern> compare;
+		ir::Net cond;
+	};
+
+	std::optional<CaseInfo> current_case_info;
+	std::vector<std::tuple<CaseInfo, VariableBits, ir::Value>> branch_updates;
+	bool finished = false;
+
+	// Enable coming from upstream of the current switch
+	ir::Net original_enabled;
+	// `original_enabled` with masking to account for already
+	// processed branches
+	ir::Net masked_enabled;
+
+	SwitchHelper(ProceduralContext &context, ir::Value signal,
+			[[maybe_unused]] const ast::Statement *statement = nullptr)
+		: context(context), vstate(context.vstate), dispatch(signal),
+		  original_enabled(context.enabled), masked_enabled(context.enabled)
+	{}
+
+	~SwitchHelper()
+	{
+		assert_invariant(!current_case_info.has_value());
+		assert_invariant(branch_updates.empty() || finished);
+	}
+
+	SwitchHelper(const SwitchHelper &) = delete;
+	SwitchHelper &operator=(const SwitchHelper &) = delete;
+	SwitchHelper(SwitchHelper &&other)
+		: context(other.context), vstate(other.vstate), dispatch(std::move(other.dispatch)),
+		  current_case_info(std::move(other.current_case_info)), finished(other.finished),
+		  original_enabled(other.original_enabled), masked_enabled(other.masked_enabled)
+	{
+		branch_updates.swap(other.branch_updates);
+		std::swap(save_snap, other.save_snap);
+		other.current_case_info = std::nullopt;
+		other.finished = false;
+	}
+
+	ir::Net compute_condition(NetlistContext &netlist, const std::vector<ValuePattern> &compare)
+	{
+		if (compare.empty())
+			return ir::S1;
+
+		ir::Net cond = ir::S0;
+		for (auto &pat : compare)
+			cond = netlist.LogicOr(cond, matches_pattern(netlist, pat, dispatch));
+		return cond;
+	}
+
+	void enter_branch(std::vector<ValuePattern> compare,
+			[[maybe_unused]] const ast::Statement *case_statement = nullptr)
+	{
+		auto &netlist = context.netlist;
+		save_snap = {};
+		vstate.save(save_snap);
+		assert_invariant(!current_case_info.has_value());
+		ir::Net cond = compute_condition(netlist, compare);
+		current_case_info = CaseInfo{compare, cond};
+		context.enabled = netlist.LogicAnd(masked_enabled, ir::Value(cond));
+	}
+
+	void exit_branch()
+	{
+		auto &netlist = context.netlist;
+		assert_invariant(current_case_info.has_value());
+		masked_enabled =
+				netlist.LogicAnd(masked_enabled, netlist.LogicNot(current_case_info->cond));
+		auto updates = vstate.restore(save_snap);
+		std::optional<CaseInfo> info;
+		info.swap(current_case_info);
+		branch_updates.push_back(std::make_tuple(*info, updates.first, updates.second));
+	}
+
+	void branch(std::vector<ValuePattern> compare, std::function<void()> f,
+			const ast::Statement *case_statement = nullptr)
+	{
+		if (compare.size() == 1 && compare[0].is_fully_def() && dispatch.is_fully_def() &&
+				dispatch != compare[0].to_value()) {
+			return;
+		}
+
+		enter_branch(compare, case_statement);
+		f();
+		exit_branch();
+	}
+
+	bool detect_full_case()
+	{
+		uint64_t full_width = dispatch.size();
+		uint64_t width = full_width;
+		while (width > 0 && dispatch[width - 1] == ir::S0)
+			width--;
+		if (width == 0 || width > 16)
+			return false;
+
+		uint64_t total = uint64_t{1} << width;
+		std::vector<bool> covered(total, false);
+		for (auto &[case1, target, updates] : branch_updates) {
+			if (case1.compare.empty()) {
+				std::fill(covered.begin(), covered.end(), true);
+			} else {
+				for (auto &pat : case1.compare) {
+					if (pat.size() < width)
+						continue;
+
+					bool skip_pattern = false;
+					for (uint64_t i = width; i < pat.size(); i++) {
+						if (pat.bits[i] != PatternBit(ir::S0) && !pat.bits[i].is_wildcard()) {
+							skip_pattern = true;
+							break;
+						}
+					}
+					if (skip_pattern)
+						continue;
+
+					uint64_t base = 0;
+					uint64_t dc_mask = 0;
+
+					for (uint64_t i = 0; i < width; i++) {
+						auto bit = pat.bits[i];
+						if (bit.is_wildcard()) {
+							dc_mask |= ((uint64_t)1) << i;
+						} else if (pat.bits[i] == PatternBit(ir::S1)) {
+							base |= ((uint64_t)1) << i;
+						} else if (pat.bits[i] == PatternBit(ir::S0)) {
+							// do nothing
+						} else {
+							skip_pattern = true;
+						}
+					}
+					if (skip_pattern)
+						continue;
+
+					for (uint64_t dc_val = 0;; dc_val = (((dc_val | ~dc_mask) + 1) & dc_mask)) {
+						covered[base | dc_val] = true;
+						if (dc_val == dc_mask)
+							break;
+					}
+				}
+			}
+		}
+
+		for (uint64_t i = 0; i < total; i++)
+			if (!covered[i])
+				return false;
+
+		return true;
+	}
+
+	bool detect_bmux_criteria()
+	{
+		int full_width = dispatch.size();
+		int width = full_width;
+		while (width > 0 && dispatch[width - 1] == ir::S0)
+			width--;
+		if (width == 0)
+			return false;
+
+		size_t no_of_covered_cases = 0;
+		for (auto &[case1, _target, _updates] : branch_updates) {
+			if (case1.compare.empty()) {
+				break;
+			} else {
+				for (auto &pat : case1.compare) {
+					if (pat.size() < width)
+						continue;
+
+					bool skip_pattern = false;
+					for (int i = width; i < pat.size(); i++) {
+						if (pat.bits[i] != PatternBit(ir::S0) && !pat.bits[i].is_wildcard()) {
+							if (!pat.bits[i].is_const())
+								return false;
+							skip_pattern = true;
+							break;
+						}
+					}
+					if (skip_pattern)
+						continue;
+
+					if (!pat.is_fully_const())
+						return false;
+
+					no_of_covered_cases++;
+				}
+			}
+		}
+
+		return width <= 24 &&
+			   (no_of_covered_cases > (1 << 24) || ((no_of_covered_cases * 4) >> width) >= 1);
+	}
+
+	ir::Value emit_bmux(
+			NetlistContext &netlist, VariableChunk chunk, ir::Value background, bool full_case)
+	{
+		int full_width = dispatch.size();
+		int width = full_width;
+		while (width > 0 && dispatch[width - 1] == ir::S0)
+			width--;
+		ir::Value bmux_a;
+
+		if (full_case)
+			bmux_a = ir::Value(ir::Sx, background.width() << width);
+		else
+			bmux_a = background.repeat(1 << width);
+
+		for (auto it = branch_updates.rbegin(); it != branch_updates.rend(); it++) {
+			auto &[case1, target, updates] = *it;
+
+			ir::Value chunk_updated;
+			for (int i = 0; i < chunk.bitwidth(); i++) {
+				auto lb = std::lower_bound(target.begin(), target.end(), chunk[i]);
+				bool exists = (lb != target.end() && *lb == chunk[i]);
+				if (exists)
+					chunk_updated.append(updates[lb - target.begin()]);
+				else
+					chunk_updated.append(background[i]);
+			}
+
+			if (case1.compare.empty()) {
+				bmux_a = chunk_updated.repeat(1 << width);
+			} else {
+				for (auto &pat : case1.compare) {
+					if (pat.size() < width)
+						continue;
+
+					bool ignore_pattern = false;
+					for (int i = width; i < pat.size(); i++) {
+						if (pat.bits[i] != PatternBit(ir::S0) && !pat.bits[i].is_wildcard()) {
+							assert(pat.bits[i].is_const());
+							ignore_pattern = true;
+							break;
+						}
+					}
+					if (ignore_pattern)
+						continue;
+
+					uint64_t base = 0;
+					uint64_t dc_mask = 0;
+
+					for (int i = 0; i < width; i++) {
+						auto bit = pat.bits[i];
+						if (bit.is_wildcard()) {
+							dc_mask |= ((uint64_t)1) << i;
+						} else if (pat.bits[i] == PatternBit(ir::S1)) {
+							base |= ((uint64_t)1) << i;
+						} else if (pat.bits[i] == PatternBit(ir::S0)) {
+							// do nothing
+						} else if (pat.bits[i] == PatternBit(ir::Sx)) {
+							ignore_pattern = true;
+						} else {
+							// We should not reach this point
+							// with a non-constant pattern
+							assert_invariant(false && "unreachable");
+						}
+					}
+					if (ignore_pattern)
+						continue;
+
+					for (uint64_t dc_val = 0;; dc_val = (((dc_val | ~dc_mask) + 1) & dc_mask)) {
+						uint64_t base_idx = (base | dc_val) * chunk.bitwidth();
+						for (uint64_t offset = 0; offset < chunk.bitwidth(); offset++)
+							bmux_a[base_idx + offset] = chunk_updated[offset];
+						if (dc_val == dc_mask)
+							break;
+					}
+				}
+			}
+		}
+		return netlist.Bmux(bmux_a, dispatch.extract(0, width));
+	}
+
+	void finish(NetlistContext &netlist, bool full_case = false,
+			[[maybe_unused]] bool parallel_case = false)
+	{
+		if (!full_case)
+			full_case = detect_full_case();
+
+		VariableBits updated_anybranch;
+		for (auto &branch : branch_updates)
+			updated_anybranch.append(std::get<1>(branch));
+		updated_anybranch.sort_and_unify();
+
+		hashlib::pool<Variable> eos_variables;
+		auto &va = vstate.visible_assignments;
+		for (auto bit : updated_anybranch)
+			if (bit.variable.kind != Variable::Static && !va.count(bit))
+				eos_variables.insert(bit.variable);
+
+		ir::Value background;
+		for (auto chunk : updated_anybranch.chunks()) {
+			if (chunk.variable.kind != Variable::Static && eos_variables.count(chunk.variable)) {
+				for (uint64_t i = 0; i < chunk.bitwidth(); i++)
+					assert_invariant(!va.count(chunk[i]));
+				background.append(ir::Value(ir::Sx, chunk.bitwidth()));
+				continue;
+			}
+			background.append(vstate.evaluate(netlist, chunk));
+			if (full_case)
+				vstate.set(chunk, ir::Value(ir::Sx, chunk.bitwidth()));
+		}
+
+		if (detect_bmux_criteria()) {
+			int done = 0;
+			for (auto chunk : updated_anybranch.chunks()) {
+				if (eos_variables.count(chunk.variable)) {
+					done += chunk.bitwidth();
+					continue;
+				}
+
+				vstate.set(chunk, emit_bmux(netlist, chunk,
+										  background.extract(done, chunk.bitwidth()), full_case));
+				done += chunk.bitwidth();
+			}
+		} else {
+			for (auto it = branch_updates.rbegin(); it != branch_updates.rend(); it++) {
+				auto &[info, target, updates] = *it;
+
+				int done = 0;
+				for (auto chunk : updated_anybranch.chunks()) {
+					if (eos_variables.count(chunk.variable)) {
+						done += chunk.bitwidth();
+						continue;
+					}
+
+					ir::Value chunk_updated;
+					for (uint64_t i = 0; i < chunk.bitwidth(); i++) {
+						auto lb = std::lower_bound(target.begin(), target.end(), chunk[i]);
+						bool exists = (lb != target.end() && *lb == chunk[i]);
+						if (exists)
+							chunk_updated.append(updates[lb - target.begin()]);
+						else
+							chunk_updated.append(background[done + i]);
+					}
+					vstate.set(chunk,
+							netlist.Mux(vstate.evaluate(netlist, chunk), chunk_updated, info.cond));
+					done += chunk.bitwidth();
+				}
+			}
+		}
+
+		context.enabled = original_enabled;
+		finished = true;
+	}
+};
+
+#else // non SLANG_MUX_LOWERING
+
 struct SwitchHelper
 {
 	Case *parent;
@@ -40,20 +404,22 @@ struct SwitchHelper
 	using VariableState = ProceduralContext::VariableState;
 
 	VariableState &vstate;
-	VariableState::Map save_map;
-	std::vector<std::tuple<Case *, VariableBits, RTLIL::SigSpec>> branch_updates;
+	VariableState::Snapshot save_snap;
+	std::vector<std::tuple<Case *, VariableBits, ir::Value>> branch_updates;
 	bool entered = false, finished = false;
 
-	SwitchHelper(ProceduralContext &context, RTLIL::SigSpec signal)
+	SwitchHelper(
+			ProceduralContext &context, ir::Value signal, const ast::Statement *statement = nullptr)
 		: parent(context.current_case), current_case(context.current_case), vstate(context.vstate)
 	{
 		sw = parent->add_switch(signal);
+		sw->statement = statement;
 	}
 
 	~SwitchHelper()
 	{
-		log_assert(!entered);
-		log_assert(branch_updates.empty() || finished);
+		assert_invariant(!entered);
+		assert_invariant(branch_updates.empty() || finished);
 	}
 
 	SwitchHelper(const SwitchHelper &) = delete;
@@ -63,55 +429,61 @@ struct SwitchHelper
 		  vstate(other.vstate), entered(other.entered), finished(other.finished)
 	{
 		branch_updates.swap(other.branch_updates);
-		save_map.swap(other.save_map);
+		std::swap(save_snap, other.save_snap);
 		other.entered = false;
 		other.finished = false;
 	}
 
-	void enter_branch(std::vector<RTLIL::SigSpec> compare)
+	void enter_branch(std::vector<ValuePattern> compare,
+			[[maybe_unused]] const ast::Statement *case_statement = nullptr)
 	{
-		save_map.clear();
-		vstate.save(save_map);
-		log_assert(!entered);
-		log_assert(current_case == parent);
+		save_snap = {};
+		vstate.save(save_snap);
+		assert_invariant(!entered);
+		assert_invariant(current_case == parent);
 		current_case = sw->add_case(compare);
+		current_case->statement = case_statement;
 		entered = true;
 	}
 
 	void exit_branch()
 	{
-		log_assert(entered);
-		log_assert(current_case != parent);
+		assert_invariant(entered);
+		assert_invariant(current_case != parent);
 		Case *this_case = current_case;
 		current_case = parent;
 		entered = false;
-		auto updates = vstate.restore(save_map);
+		auto updates = vstate.restore(save_snap);
 		branch_updates.push_back(std::make_tuple(this_case, updates.first, updates.second));
 	}
 
-	void branch(std::vector<RTLIL::SigSpec> compare, std::function<void()> f)
+	void branch(std::vector<ValuePattern> compare, std::function<void()> f,
+			const ast::Statement *case_statement = nullptr)
 	{
 		// TODO: extend detection
 		if (compare.size() == 1 && compare[0].is_fully_def() && sw->signal.is_fully_def() &&
-				sw->signal != compare[0]) {
+				sw->signal.raw() != lower_pattern(compare[0])) {
 			// dead branch
 			return;
 		}
 
-		enter_branch(compare);
+		enter_branch(compare, case_statement);
 		f();
 		exit_branch();
 	}
 
-	void finish(NetlistContext &netlist)
+	void finish(NetlistContext &netlist, bool full_case = false, bool parallel_case = false)
 	{
+		sw->full_case = full_case;
+		sw->parallel_case = parallel_case;
+
 		VariableBits updated_anybranch;
 		for (auto &branch : branch_updates)
 			updated_anybranch.append(std::get<1>(branch));
 		updated_anybranch.sort_and_unify();
 
 		// end-of-scope variables
-		Yosys::pool<Variable> eos_variables;
+		hashlib::pool<Variable> eos_variables;
 
 		auto &va = vstate.visible_assignments;
 		for (auto bit : updated_anybranch)
@@ -121,7 +493,7 @@ struct SwitchHelper
 		for (auto chunk : updated_anybranch.chunks()) {
 			if (chunk.variable.kind != Variable::Static && eos_variables.count(chunk.variable)) {
 				for (uint64_t i = 0; i < chunk.bitwidth(); i++)
-					log_assert(!va.count(chunk[i]));
+					assert_invariant(!va.count(chunk[i]));
 
 				continue;
 			}
@@ -134,8 +506,8 @@ struct SwitchHelper
 			if (sw->statement)
 				transfer_attrs(netlist, *sw->statement, guard);
 
-			RTLIL::SigSpec w_default = vstate.evaluate(netlist, chunk);
-			RTLIL::SigSpec w = netlist.add_placeholder_signal(chunk.bitwidth(), name_suggestion);
+			ir::Value w_default = vstate.evaluate(netlist, chunk);
+			ir::Value w = netlist.add_placeholder_signal(chunk.bitwidth(), name_suggestion);
 			parent->aux_actions.push_back(RTLIL::SigSig(w, w_default));
 			vstate.set(chunk, w);
 		}
@@ -143,7 +515,7 @@ struct SwitchHelper
 		for (auto &branch : branch_updates) {
 			Case *rule;
 			VariableBits target;
-			RTLIL::SigSpec source;
+			ir::Value source;
 			std::tie(rule, target, source) = branch;
 
 			int done = 0;
@@ -154,9 +526,9 @@ struct SwitchHelper
 				}
 
 				// get the wire (or some part of it) which we created up above
-				RTLIL::SigSpec target_w;
+				ir::Value target_w;
 				for (uint64_t i = 0; i < chunk.bitwidth(); i++) {
-					log_assert(va.count(chunk[i]));
+					assert_invariant(va.count(chunk[i]));
 					target_w.append(va.at(chunk[i]));
 				}
 
@@ -169,6 +541,8 @@ struct SwitchHelper
 		finished = true;
 	}
 };
+
+#endif
 
 static const ast::Statement *unwrap_statement(const ast::Statement *statement)
 {
@@ -211,10 +585,11 @@ public:
 		case ast::AssertionKind::Assert:        flavor = "assert"; break;
 		case ast::AssertionKind::Assume:        flavor = "assume"; break;
 		case ast::AssertionKind::CoverProperty: flavor = "cover"; break;
-		default:                                netlist.add_diag(diag::AssertionUnsupported, statement.sourceRange); return;
+		default: netlist.add_diag(diag::AssertionUnsupported, statement.sourceRange); return;
 		}
 
-		RTLIL::IdString cell_name;
+#ifndef SLANG_NO_YOSYS
+		std::string cell_name;
 
 		if (containing_block &&
 				unwrap_statement(containing_block->tryGetStatement()) == &statement &&
@@ -222,10 +597,10 @@ public:
 			// If we are the sole statement in a block, use the block's label
 			cell_name = netlist.id(*containing_block);
 		} else {
-			cell_name = netlist.new_id();
+			cell_name = netlist.backend->new_id();
 		}
 
-		auto cell = netlist.canvas->addCell(cell_name, ID($check));
+		auto cell = netlist.backend->canvas->addCell(std::move(cell_name), ID($check));
 
 		context.set_effects_trigger(cell);
 		cell->setParam(ID::FLAVOR, flavor);
@@ -233,8 +608,12 @@ public:
 		cell->setParam(ID::ARGS_WIDTH, 0);
 		cell->setParam(ID::PRIORITY, --context.effects_priority);
 		cell->setPort(ID::ARGS, {});
-		cell->setPort(ID::A, netlist.ReduceBool(eval(statement.cond)));
+		cell->setPort(ID::A, {netlist.ReduceBool(eval(statement.cond))});
 		transfer_attrs(netlist, statement, cell);
+#else
+		// TODO(dummy): lower $check through the backend-agnostic interface
+		netlist.add_diag(diag::AssertionUnsupported, statement.sourceRange);
+#endif
 	}
 
 	void handle(const ast::ConcurrentAssertionStatement &statement)
@@ -243,20 +622,24 @@ public:
 			if (statement.assertionKind == ast::AssertionKind::Expect) {
 				netlist.add_diag(diag::ExpectStatementUnsupported, statement.sourceRange);
 			} else {
+#ifndef SLANG_NO_YOSYS
 				process_sva_property(statement, containing_block, context, statement.propertySpec);
+#else
+				netlist.add_diag(diag::AssertionUnsupported, statement.sourceRange);
+#endif
 			}
 		}
 	}
 
-	RTLIL::SigSpec handle_call(const ast::CallExpression &call)
+	ir::Value handle_call(const ast::CallExpression &call)
 	{
-		RTLIL::SigSpec ret;
+		ir::Value ret;
 
 		require(call, !call.isSystemCall());
 		auto subroutine = std::get<0>(call.subroutine);
 		auto arg_symbols = subroutine->getArguments();
 
-		std::vector<RTLIL::SigSpec> arg_in, arg_out;
+		std::vector<ir::Value> arg_in, arg_out;
 
 		for (int i = 0; i < (int)arg_symbols.size(); i++) {
 			const ast::Expression *arg = call.arguments()[i];
@@ -321,8 +704,8 @@ public:
 
 	void handle(const ast::BlockStatement &blk)
 	{
-		require(blk, blk.blockKind == ast::StatementBlockKind::Sequential)
-				EnterAutomaticScopeGuard guard(context.eval, blk.blockSymbol);
+		require(blk, blk.blockKind == ast::StatementBlockKind::Sequential);
+		EnterAutomaticScopeGuard guard(context.eval, blk.blockSymbol);
 
 		if (blk.blockSymbol) {
 			ast_invariant(*blk.blockSymbol, blk.blockSymbol->tryGetStatement() == &blk);
@@ -342,21 +725,18 @@ public:
 		std::vector<SwitchHelper> sw_stack;
 
 		for (auto &stmt : list.list) {
-			RTLIL::SigSpec disable_rv = disable ? context.substitute_rvalue(disable) : RTLIL::S0;
+			ir::Value disable_rv = disable ? context.substitute_rvalue(disable) : ir::Value(ir::S0);
 			if (!disable_rv.is_fully_const()) {
-				auto &b = sw_stack.emplace_back(context, disable_rv);
-				b.sw->statement = stmt;
-				b.enter_branch({RTLIL::S0});
-				context.current_case->statement = stmt;
+				auto &b = sw_stack.emplace_back(context, disable_rv, stmt);
+				b.enter_branch({ir::S0}, stmt);
 
 				// From a semantical POV the following is a no-op, but it allows us to
 				// do more constant folding.
-				context.do_simple_assign(
-						slang::SourceLocation::NoLocation, disable, RTLIL::S0, true);
+				context.do_simple_assign(slang::SourceLocation::NoLocation, disable, ir::S0, true);
 			} else if (disable_rv.as_bool()) {
 				break;
 			} else {
-				log_assert(!disable_rv.as_bool());
+				assert_invariant(!disable_rv.as_bool());
 			}
 
 			stmt->visit(*this);
@@ -373,13 +753,13 @@ public:
 		require(cond, cond.conditions.size() == 1);
 		require(cond, cond.conditions[0].pattern == NULL);
 
-		RTLIL::SigSpec condition = netlist.ReduceBool(eval(*cond.conditions[0].expr));
+		ir::Net condition = netlist.ReduceBool(eval(*cond.conditions[0].expr));
 
-		if (condition.is_fully_def()) {
-			if (condition[0] == RTLIL::S1) {
+		if (condition.is_def()) {
+			if (condition == ir::S1) {
 				cond.ifTrue.visit(*this);
 				return;
-			} else if (condition[0] == RTLIL::S0) {
+			} else if (condition == ir::S0) {
 				if (cond.ifFalse)
 					cond.ifFalse->visit(*this);
 				return;
@@ -387,24 +767,17 @@ public:
 			// fall through on Sx
 		}
 
-		SwitchHelper b(context, condition);
-		b.sw->statement = &cond;
+		SwitchHelper b(context, condition, &cond);
 
-		b.branch({RTLIL::S1}, [&]() {
-			context.current_case->statement = &cond.ifTrue;
-			cond.ifTrue.visit(*this);
-		});
+		b.branch({ir::S1}, [&]() { cond.ifTrue.visit(*this); }, &cond.ifTrue);
 
 		if (cond.ifFalse) {
-			b.branch({}, [&]() {
-				context.current_case->statement = cond.ifFalse;
-				cond.ifFalse->visit(*this);
-			});
+			b.branch({}, [&]() { cond.ifFalse->visit(*this); }, cond.ifFalse);
 		}
 		b.finish(netlist);
 
 		// descend into an empty switch so we force action priority for follow-up statements
-		context.current_case = context.current_case->add_switch({})->add_case({});
+		context.descend_into_empty_case();
 	}
 
 	void handle(const ast::CaseStatement &stmt)
@@ -420,26 +793,24 @@ public:
 		default:                      match_x = match_z = false; break;
 		}
 
-		RTLIL::SigSpec dispatch = eval(stmt.expr);
-		SwitchHelper b(context, stmt.condition == ast::CaseStatementCondition::Inside
-										? RTLIL::SigSpec(RTLIL::S1)
-										: dispatch);
+		ir::Value dispatch = eval(stmt.expr);
+		SwitchHelper b(context,
+				stmt.condition == ast::CaseStatementCondition::Inside ? ir::Value(ir::S1)
+																	  : dispatch,
+				&stmt);
 
-		b.sw->statement = &stmt;
+		bool full_case = false, parallel_case = false;
 		switch (stmt.check) {
-		case ast::UniquePriorityCheck::Priority: b.sw->full_case = true; break;
-		case ast::UniquePriorityCheck::Unique:
-			b.sw->full_case = true;
-			b.sw->parallel_case = true;
-			break;
-		case ast::UniquePriorityCheck::Unique0: b.sw->parallel_case = true; break;
-		case ast::UniquePriorityCheck::None:    break;
+		case ast::UniquePriorityCheck::Priority: full_case = true; break;
+		case ast::UniquePriorityCheck::Unique:   full_case = parallel_case = true; break;
+		case ast::UniquePriorityCheck::Unique0:  parallel_case = true; break;
+		case ast::UniquePriorityCheck::None:     break;
 		}
 
 		for (auto item : stmt.items) {
-			std::vector<RTLIL::SigSpec> compares;
+			std::vector<ValuePattern> compares;
 			for (auto expr : item.expressions) {
-				log_assert(expr);
+				assert_invariant(expr);
 
 				if (stmt.condition == ast::CaseStatementCondition::Inside) {
 					require(stmt, stmt.expr.type->isIntegral());
@@ -447,34 +818,40 @@ public:
 					continue;
 				}
 
-				RTLIL::SigSpec compare = eval(*expr);
-				log_assert(compare.size() == dispatch.size());
-				require(stmt, !match_z || compare.is_fully_const());
-				for (int i = 0; i < compare.size(); i++) {
-					if (compare[i] == RTLIL::Sz && match_z)
-						compare[i] = RTLIL::Sa;
-					if (compare[i] == RTLIL::Sx && match_x)
-						compare[i] = RTLIL::Sa;
+				if (match_z || match_x) {
+					auto const_result = expr->eval(eval.const_);
+					if (const_result && const_result.isInteger()) {
+						auto pat = svint_to_pattern(netlist, const_result.integer(), match_x,
+								match_z, expr->sourceRange.start());
+						assert_invariant(pat.size() == dispatch.size());
+						compares.push_back(std::move(pat));
+						continue;
+					}
 				}
+
+				ValuePattern compare = eval(*expr);
+				if (match_x) {
+					for (auto &bit : compare.bits) {
+						if (bit == PatternBit(ir::Sx)) {
+							bit = PatternBit::wildcard();
+						}
+					}
+				}
+				assert_invariant(compare.size() == dispatch.size());
 				compares.push_back(compare);
 			}
 			require(stmt, !compares.empty());
-			b.branch(compares, [&]() {
-				context.current_case->statement = item.stmt;
-				item.stmt->visit(*this);
-			});
+			b.branch(compares, [&]() { item.stmt->visit(*this); }, item.stmt);
 		}
 
 		if (stmt.defaultCase) {
-			b.branch(std::vector<RTLIL::SigSpec>{}, [&]() {
-				context.current_case->statement = stmt.defaultCase;
-				stmt.defaultCase->visit(*this);
-			});
+			b.branch(
+					std::vector<ValuePattern>{}, [&]() { stmt.defaultCase->visit(*this); },
+					stmt.defaultCase);
 		}
-		b.finish(netlist);
+		b.finish(netlist, full_case, parallel_case);
 
-		// descend into an empty switch so we force action priority for follow-up statements
-		context.current_case = context.current_case->add_switch({})->add_case({});
+		context.descend_into_empty_case();
 	}
 
 	void handle(const ast::WhileLoopStatement &stmt)
@@ -483,24 +860,22 @@ public:
 		std::vector<SwitchHelper> sw_stack;
 		unroll_limit.enter_unrolling();
 		while (true) {
-			RTLIL::SigSpec cv = netlist.ReduceBool(eval(stmt.cond));
-			RTLIL::SigSpec break_rv = context.vstate.evaluate(netlist, guard1.flag);
-			RTLIL::SigSpec joint_break = netlist.LogicOr(netlist.LogicNot(cv), break_rv);
+			ir::Value cv = netlist.ReduceBool(eval(stmt.cond));
+			ir::Value break_rv = context.substitute_rvalue(guard1.flag);
+			ir::Value joint_break = netlist.LogicOr(netlist.LogicNot(cv), break_rv);
 
 			if (!joint_break.is_fully_const()) {
-				auto &b = sw_stack.emplace_back(context, joint_break);
-				b.sw->statement = &stmt;
-				b.enter_branch({RTLIL::S0});
-				context.current_case->statement = &stmt.body;
+				auto &b = sw_stack.emplace_back(context, joint_break, &stmt);
+				b.enter_branch({ir::S0}, &stmt.body);
 
 				// From a semantical POV the following is a no-op, but it allows us to
 				// do more constant folding.
 				context.do_simple_assign(
-						slang::SourceLocation::NoLocation, guard1.flag, RTLIL::S0, true);
+						slang::SourceLocation::NoLocation, guard1.flag, ir::S0, true);
 			} else if (joint_break.as_bool()) {
 				break;
 			} else {
-				log_assert(!joint_break.as_bool());
+				assert_invariant(!joint_break.as_bool());
 			}
 
 			{
@@ -518,7 +893,7 @@ public:
 			it->finish(netlist);
 		}
 
-		context.current_case = context.current_case->add_switch({})->add_case({});
+		context.descend_into_empty_case();
 	}
 
 	void handle(const ast::ForLoopStatement &stmt)
@@ -536,17 +911,15 @@ public:
 		std::vector<SwitchHelper> sw_stack;
 		unroll_limit.enter_unrolling();
 		while (true) {
-			RTLIL::SigSpec cv = netlist.ReduceBool(eval(*stmt.stopExpr));
+			ir::Value cv = netlist.ReduceBool(eval(*stmt.stopExpr));
 
 			if (!cv.is_fully_const()) {
-				auto &b = sw_stack.emplace_back(context, cv);
-				b.sw->statement = &stmt;
-				b.enter_branch({RTLIL::S1});
-				context.current_case->statement = &stmt.body;
+				auto &b = sw_stack.emplace_back(context, cv, &stmt);
+				b.enter_branch({ir::S1}, &stmt.body);
 			} else if (!cv.as_bool()) {
 				break;
 			} else {
-				log_assert(cv.as_bool());
+				assert_invariant(cv.as_bool());
 			}
 
 			{
@@ -554,17 +927,15 @@ public:
 				stmt.body.visit(*this);
 			}
 
-			RTLIL::SigSpec break_rv = context.substitute_rvalue(guard1.flag);
+			ir::Value break_rv = context.substitute_rvalue(guard1.flag);
 
 			if (!break_rv.is_fully_const()) {
-				auto &b = sw_stack.emplace_back(context, break_rv);
-				b.sw->statement = &stmt;
-				b.enter_branch({RTLIL::S0});
-				context.current_case->statement = &stmt.body;
+				auto &b = sw_stack.emplace_back(context, break_rv, &stmt);
+				b.enter_branch({ir::S0}, &stmt.body);
 			} else if (break_rv.as_bool()) {
 				break;
 			} else {
-				log_assert(!break_rv.as_bool());
+				assert_invariant(!break_rv.as_bool());
 			}
 
 			for (auto step : stmt.steps)
@@ -580,14 +951,14 @@ public:
 			it->finish(netlist);
 		}
 
-		context.current_case = context.current_case->add_switch({})->add_case({});
+		context.descend_into_empty_case();
 	}
 
 	void handle(const ast::ForeachLoopStatement &stmt)
 	{
 		auto set_iterator_value = [this, &stmt](const ast::VariableSymbol &target, int32_t value) {
 			context.do_simple_assign(
-					stmt.sourceRange.start(), eval.variable(target), RTLIL::Const(value, 32), true);
+					stmt.sourceRange.start(), eval.variable(target), ir::Const(value, 32), true);
 		};
 
 		std::vector<SwitchHelper> sw_stack;
@@ -612,17 +983,15 @@ public:
 				stmt.body.visit(*this);
 			}
 
-			RTLIL::SigSpec break_rv = context.substitute_rvalue(guard1.flag);
+			ir::Value break_rv = context.substitute_rvalue(guard1.flag);
 
 			if (!break_rv.is_fully_const()) {
-				auto &b = sw_stack.emplace_back(context, break_rv);
-				b.sw->statement = &stmt;
-				b.enter_branch({RTLIL::S0});
-				context.current_case->statement = &stmt.body;
+				auto &b = sw_stack.emplace_back(context, break_rv, &stmt);
+				b.enter_branch({ir::S0}, &stmt.body);
 			} else if (break_rv.as_bool()) {
 				break;
 			} else {
-				log_assert(!break_rv.as_bool());
+				assert_invariant(!break_rv.as_bool());
 			}
 
 			bool doBreak = true;
@@ -678,7 +1047,7 @@ public:
 			it->finish(netlist);
 		}
 
-		context.current_case = context.current_case->add_switch({})->add_case({});
+		context.descend_into_empty_case();
 	}
 
 	void handle(const ast::EmptyStatement &) {}
@@ -686,12 +1055,12 @@ public:
 	void init_nonstatic_variable(const ast::ValueSymbol &symbol)
 	{
 		Variable target = eval.variable(symbol);
-		log_assert((bool)target);
+		assert_invariant((bool)target);
 
 		if (!target.bitwidth())
 			return;
 
-		RTLIL::SigSpec initval;
+		ir::Value initval;
 		if (symbol.getInitializer()) {
 			initval = eval(*symbol.getInitializer());
 		} else {
@@ -700,7 +1069,7 @@ public:
 			if (converted) {
 				initval = *converted;
 			} else {
-				initval = {RTLIL::Sx, (int)target.bitwidth()};
+				initval = ir::Value(ir::Sx, target.bitwidth());
 			}
 		}
 		context.do_simple_assign(symbol.location, target, initval, true);
@@ -727,11 +1096,11 @@ public:
 	void handle(const ast::ReturnStatement &stmt)
 	{
 		auto subroutine = context.get_current_subroutine();
-		log_assert(subroutine);
+		assert_invariant(subroutine);
 
 		if (stmt.expr) {
 			ast_invariant(stmt, subroutine->subroutineKind == ast::SubroutineKind::Function);
-			log_assert(subroutine->returnValVar);
+			assert_invariant(subroutine->returnValVar);
 			context.do_simple_assign(stmt.sourceRange.start(),
 					eval.variable(*subroutine->returnValVar), eval(*stmt.expr), true);
 		}

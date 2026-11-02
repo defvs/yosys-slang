@@ -36,6 +36,7 @@ set(ALL_TESTS
     sva/unsupported_clocking.ys
     sva/vector_delay_init.ys
     unit/async.ys
+    unit/dff.ys
     unit/dualedge.ys
     unit/function_call.ys
     unit/expression_attrs.ys
@@ -66,6 +67,9 @@ set(ALL_TESTS
     various/issue240.ys
     various/issue266.ys
     various/issue300.ys
+    various/issue354.ys
+    various/issue372.ys
+    various/issue400.ys
     various/issue50.ys
     various/mem_inference.ys
     various/meminit.ys

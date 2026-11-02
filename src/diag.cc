@@ -96,7 +96,6 @@ DiagCode BboxExportPortWidths(DiagSubsystem::Netlist, 1040);
 DiagCode NoteIgnoreInitial(DiagSubsystem::Netlist, 1041);
 DiagCode PortCorrespondence(DiagSubsystem::Netlist, 1042);
 DiagCode UnsynthesizableFeature(DiagSubsystem::Netlist, 1043);
-DiagCode SVAUnsupported(DiagSubsystem::Netlist, 1044);
 DiagCode ExpectStatementUnsupported(DiagSubsystem::Netlist, 1045);
 DiagCode ProgramUnsupported(DiagSubsystem::Netlist, 1046);
 DiagCode ForbiddenDemotion(DiagSubsystem::Netlist, 1047);
@@ -107,7 +106,6 @@ DiagCode NoteModuleBlackboxBecauseAttribute(DiagSubsystem::Netlist, 1051);
 DiagCode NoteModuleBlackboxBecauseEmpty(DiagSubsystem::Netlist, 1052);
 DiagCode NoteModuleNotDissolvedBecauseBlackbox(DiagSubsystem::Netlist, 1053);
 DiagCode NoteModuleNotDissolvedBecauseKeepHierarchy(DiagSubsystem::Netlist, 1054);
-DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1084);
 DiagCode BlockingAssignmentAfterNonblocking(DiagSubsystem::Netlist, 1055);
 DiagCode NonblockingAssignmentAfterBlocking(DiagSubsystem::Netlist, 1056);
 DiagCode NotePreviousAssignment(DiagSubsystem::Netlist, 1057);
@@ -128,16 +126,22 @@ DiagCode UnsupportedSystemTask(DiagSubsystem::Netlist, 1074);
 DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
-DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1085);
-DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1086);
-DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1087);
-DiagCode SVALivenessCoverUnsupported(DiagSubsystem::Netlist, 1088);
+DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1090);
+DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1091);
+DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1092);
+DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1093);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
 DiagCode ReadmemAddressOutsideOfRange(DiagSubsystem::Netlist, 1081);
 DiagCode ReadmemWordsRangeMismatch(DiagSubsystem::Netlist, 1082);
 DiagCode ReadmemBadBinaryDigit(DiagSubsystem::Netlist, 1083);
+DiagCode NoIgnoreUnknownModules(DiagSubsystem::Netlist, 1084);
+DiagCode HierarchicalRefOutsideModulesUnsupported(DiagSubsystem::Netlist, 1085);
+DiagCode HighImpedanceUnsupported(DiagSubsystem::Netlist, 1086);
+DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
+DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
+DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -147,7 +151,7 @@ DiagGroup sanity("sanity", {EdgeImplicitMixing});
 void setup_messages(slang::DiagnosticEngine &engine)
 {
 	// clang-format off
-	engine.setMessage(IffUnsupported, "iff qualifier will not be synthesized");
+	engine.setMessage(IffUnsupported, "iff qualifier not supported in combination with this event");
 	engine.setMessage(SignalSensitivityAmbiguous, "non-edge sensitivity on a signal will be synthesized as @* sensitivity");
 	engine.setSeverity(SignalSensitivityAmbiguous, DiagnosticSeverity::Warning);
 	engine.setMessage(EdgeImplicitMixing, "mixing of implicit and edge sensitivity");
@@ -212,12 +216,15 @@ void setup_messages(slang::DiagnosticEngine &engine)
 		"SVA match items and local-variable actions are not synthesizable");
 	engine.setSeverity(SVAMatchItemsUnsupported, DiagnosticSeverity::Error);
 
-	engine.setMessage(SVALivenessCoverUnsupported,
-		"covering an unbounded liveness property is not a finite reachability check");
-	engine.setSeverity(SVALivenessCoverUnsupported, DiagnosticSeverity::Error);
+	engine.setMessage(SVATemporalCoverUnsupported,
+					  "cover of an `always`, `until` or liveness property is not a finite reachability check");
+	engine.setSeverity(SVATemporalCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);
+	engine.setMessage(IfacePortUnsupported,
+			"interface port on kept module boundary is unsupported");
+	engine.setSeverity(IfacePortUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(UnsupportedLhs, "unsupported assignment target expression");
 	engine.setSeverity(UnsupportedLhs, DiagnosticSeverity::Error);
@@ -263,16 +270,13 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(UnsynthesizableFeature, "unsynthesizable feature");
 
-	engine.setMessage(SVAUnsupported, "SVA unsupported (ignore all assertions with '--ignore-assertions')");
-	engine.setSeverity(SVAUnsupported, DiagnosticSeverity::Error);
-
 	engine.setMessage(ExpectStatementUnsupported, "expect statement will not be synthesized");
 	engine.setSeverity(ExpectStatementUnsupported, DiagnosticSeverity::Warning);
 
 	engine.setMessage(ProgramUnsupported, "program block will not be synthesized");
 	engine.setSeverity(ProgramUnsupported, DiagnosticSeverity::Warning);
 
-	engine.setMessage(ForbiddenDemotion, "disabling error '{}' is unsupported with yosys-slang");
+	engine.setMessage(ForbiddenDemotion, "disabling error '{}' is unsupported with sv-elab");
 	engine.setSeverity(ForbiddenDemotion, DiagnosticSeverity::Error);
 
 	engine.setMessage(UdpUnsupported, "user-defined primitives unsupported, set '--udp-handling=blackboxes' option to treat it as blackboxes");
@@ -285,7 +289,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(ReferenceAcrossKeptHierBoundary, DiagnosticSeverity::Error);
 	engine.setMessage(NoteModuleBlackboxBecauseAttribute, "module '{}' is a blackbox because of attribute");
 	engine.setSeverity(NoteModuleBlackboxBecauseAttribute, DiagnosticSeverity::Note);
-	engine.setMessage(NoteModuleBlackboxBecauseEmpty, "module '{}'' is a blackbox because of empty body");
+	engine.setMessage(NoteModuleBlackboxBecauseEmpty, "module '{}' is a blackbox because of empty body");
 	engine.setSeverity(NoteModuleBlackboxBecauseEmpty, DiagnosticSeverity::Note);
 	engine.setMessage(NoteModuleNotDissolvedBecauseBlackbox, "instance of module '{}' will not dissolve because the module is a blackbox");
 	engine.setSeverity(NoteModuleNotDissolvedBecauseBlackbox, DiagnosticSeverity::Note);
@@ -307,7 +311,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(RefUnsupported, "direction 'ref' found on port '{}' unsupported for synthesis");
 	engine.setSeverity(RefUnsupported, DiagnosticSeverity::Error);
 
-	engine.setMessage(InlinedInOutUnsupported, "connection on port '{}' with direction 'inout' cannot be inlined; see yosys-slang issue #143");
+	engine.setMessage(InlinedInOutUnsupported, "connection on port '{}' with direction 'inout' cannot be inlined; see sv-elab issue #143");
 	engine.setSeverity(InlinedInOutUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(PastGatingClockingUnsupported, "$past gating_expr (3rd argument) and clocking_event (4th argument) are not supported");
@@ -372,6 +376,18 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(ReadmemBadBinaryDigit, "digit larger than 1 is used in '{}'");
 	engine.setSeverity(ReadmemBadBinaryDigit, DiagnosticSeverity::Error);
+
+	engine.setMessage(NoIgnoreUnknownModules, "'--ignore-unknown-modules' no longer supported with sv-elab; visit https://github.com/povik/sv-elab/wiki/No-unknown-modules");
+	engine.setSeverity(NoIgnoreUnknownModules, DiagnosticSeverity::Error);
+
+	engine.setMessage(HierarchicalRefOutsideModulesUnsupported, "hierarchical reference outside module hierarchy unsupported");
+	engine.setSeverity(HierarchicalRefOutsideModulesUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(HighImpedanceUnsupported, "high-impedance state (Z) will be treated as undefined state (X) in this context");
+	engine.setSeverity(HighImpedanceUnsupported, DiagnosticSeverity::Warning);
+
+	engine.setMessage(OptionRequiresStandaloneSlang, "option '{}' unsupported; please use standalone slang instead");
+	engine.setSeverity(OptionRequiresStandaloneSlang, DiagnosticSeverity::Error);
 	// clang-format on
 }
 }; // namespace diag
