@@ -3010,9 +3010,13 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 
 	// The monitors start an attempt where the procedural condition holds, the attempts
 	// then run to completion regardless of it
+	size_t issued = netlist.issued_diagnostics.size();
 	PropertyResult result = lower_property(procedural.eval, expr, attempt, disable);
-	if (!result.valid)
+	if (!result.valid) {
+		// The property is left out of the netlist, which takes an error to say so
+		assert_invariant(netlist.issued_diagnostics.size() > issued);
 		return;
+	}
 	for (const auto& obligation : result.obligations) {
 		if (obligation.kind == PropertyObligationKind::AuxiliaryFairness &&
 			statement.assertionKind != ast::AssertionKind::Assert) {
