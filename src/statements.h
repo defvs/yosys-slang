@@ -580,6 +580,8 @@ public:
 		if (netlist.settings.ignore_assertions.value_or(false))
 			return;
 
+		check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
+
 		std::string flavor;
 		switch (statement.assertionKind) {
 		case ast::AssertionKind::Assert:        flavor = "assert"; break;
@@ -623,6 +625,7 @@ public:
 			if (statement.assertionKind == ast::AssertionKind::Expect) {
 				netlist.add_diag(diag::ExpectStatementUnsupported, statement.sourceRange);
 			} else {
+				check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
 #ifndef SLANG_NO_YOSYS
 				process_sva_property(statement, containing_block, context, statement.propertySpec);
 #else

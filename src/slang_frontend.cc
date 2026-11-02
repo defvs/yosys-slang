@@ -1268,6 +1268,57 @@ void handle_display([[maybe_unused]] ProceduralContext &context, [[maybe_unused]
 #endif
 }
 
+// Find a statement in an assertion action block that does more than report
+static const ast::Statement *find_nonreporting_action(const ast::Statement *stmt)
+{
+	if (!stmt)
+		return nullptr;
+
+	switch (stmt->kind) {
+	case ast::StatementKind::Empty:
+		return nullptr;
+	case ast::StatementKind::List:
+		for (auto item : stmt->as<ast::StatementList>().list) {
+			if (auto found = find_nonreporting_action(item))
+				return found;
+		}
+		return nullptr;
+	case ast::StatementKind::Block:
+		return find_nonreporting_action(&stmt->as<ast::BlockStatement>().body);
+	case ast::StatementKind::Conditional: {
+		const auto &cond = stmt->as<ast::ConditionalStatement>();
+		if (auto found = find_nonreporting_action(&cond.ifTrue))
+			return found;
+		return find_nonreporting_action(cond.ifFalse);
+	}
+	case ast::StatementKind::ExpressionStatement: {
+		const auto &expr = stmt->as<ast::ExpressionStatement>().expr;
+		if (!ast::CallExpression::isKind(expr.kind))
+			return stmt;
+		const auto &call = expr.as<ast::CallExpression>();
+		for (std::string_view task : {"$fatal", "$error", "$warning", "$info", "$display",
+				"$displayb", "$displayh", "$displayo", "$write", "$writeb", "$writeh", "$writeo",
+				"$strobe", "$strobeb", "$strobeh", "$strobeo"}) {
+			if (call.isSystemCall() && call.getSubroutineName() == task)
+				return nullptr;
+		}
+		return stmt;
+	}
+	default:
+		return stmt;
+	}
+}
+
+void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail)
+{
+	// We leave action blocks out. The check stands in for any reporting, anything else
+	// would go missing from the design.
+	for (auto action : {pass, fail}) {
+		if (auto stmt = find_nonreporting_action(action))
+			netlist.add_diag(diag::ActionBlockUnsupported, stmt->sourceRange);
+	}
+}
+
 // Is the symbol a formal argument or a local variable of a subroutine?
 static bool in_subroutine(const ast::Symbol &symbol)
 {
@@ -2151,9 +2202,10 @@ public:
 									ast::ImmediateAssertionStatement::isKind(body->kind));
 			if (!netlist.settings.ignore_assertions.value_or(false)) {
 				if (ast::ConcurrentAssertionStatement::isKind(body->kind)) {
+					const auto &statement = body->as<ast::ConcurrentAssertionStatement>();
+					check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
 #ifndef SLANG_NO_YOSYS
-					process_freestanding_sva_property(netlist, body->as<ast::ConcurrentAssertionStatement>(),
-													  block_symbol);
+					process_freestanding_sva_property(netlist, statement, block_symbol);
 #else
 					netlist.add_diag(diag::AssertionUnsupported, body->sourceRange);
 #endif
