@@ -2975,6 +2975,39 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		eval, expr, trigger, aborts);
 }
 
+// Does the one check lower_property() makes for a cover of the property see each of its
+// successes? A branch that starts nothing, as an implication with no antecedent match
+// does, leaves an attempt that succeeded with nothing to report it by. The monitor of an
+// unbounded antecedent can't tell a later match of the attempt, which may still fail it.
+static bool cover_sees_every_success(const ast::AssertionExpr& expr) {
+	const ast::AssertionExpr& top = unwrap_property_instances(expr);
+	switch (top.kind) {
+	case ast::AssertionExprKind::Abort:
+		return cover_sees_every_success(top.as<ast::AbortAssertionExpr>().expr);
+
+	case ast::AssertionExprKind::Conditional:
+	case ast::AssertionExprKind::Case:
+		return false;
+
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = top.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::Implies:
+				return false;
+			case ast::BinaryAssertionOperator::OverlappedImplication:
+			case ast::BinaryAssertionOperator::NonOverlappedImplication:
+				return !assertion_has_unbounded_sequence(binary.left);
+			default:
+				return true;
+			}
+		}
+
+	default:
+		return true;
+	}
+}
+
 // Does lower_property() take nothing of `expr` apart, but lower all of it by its paths?
 // Such a property gets lowered by eval_assertion(), which keeps to Annex F for a disable
 // and queues attempts as of the procedural condition around the assertion.
@@ -3156,6 +3189,12 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 	} else if (netlist.process_scope) {
 		auto scope = netlist.process_scope;
 		condition = scope->getCompilation().getDefaultDisable(*scope);
+	}
+
+	if (statement.assertionKind == ast::AssertionKind::CoverProperty &&
+			!cover_sees_every_success(*property)) {
+		netlist.add_diag(diag::SVAVacuousCoverUnsupported, statement.sourceRange);
+		return;
 	}
 
 	PropertyAborts aborts;

@@ -100,6 +100,7 @@ extern slang::DiagCode SVALivenessAcceptanceUnsupported;
 extern slang::DiagCode SVAMatchItemsUnsupported;
 extern slang::DiagCode SVATemporalCoverUnsupported;
 extern slang::DiagCode SVARejectOnUnsupported;
+extern slang::DiagCode SVAVacuousCoverUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

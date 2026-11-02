@@ -53,6 +53,46 @@ EOF
 
 design -reset
 
+# Where `c` is low these succeed with no check started to show it
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+read_slang <<EOF
+module unsupported_if_cover(input logic clk, input logic c, input logic a, input logic b);
+	cover property (@(posedge clk) if (c) a ##1 b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+read_slang <<EOF
+module unsupported_implies_cover(input logic clk, input logic x, input logic c,
+								 input logic a);
+	cover property (@(posedge clk) accept_on (x) c implies a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+read_slang <<EOF
+module unsupported_case_cover(input logic clk, input logic c, input logic a);
+	cover property (@(posedge clk) case (c) 1'b1: a; endcase);
+endmodule
+EOF
+
+design -reset
+
+# An attempt with a match of the antecedent followed by `b` can fail on a later one
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+read_slang <<EOF
+module unsupported_unbounded_antecedent_cover(input logic clk, input logic c,
+											  input logic a, input logic b);
+	cover property (@(posedge clk) c ##1 a[*1:$] |-> b);
+endmodule
+EOF
+
+design -reset
+
 test_slangdiag -expect "unsupported assertion statement"
 read_slang <<EOF
 module unsupported_unbounded_first_match(

@@ -151,6 +151,10 @@ cannot preserve the SVA meaning:
 - `cover property` of `always`, `until` or liveness properties, because their
   obligations describe what has to keep holding rather than an observable
   point of success;
+- `cover property` of a property `if`, `case` or `implies`, or of an
+  implication with an unbounded antecedent: a vacuous success starts no check
+  to report it, and an attempt whose antecedent may match again later is no
+  success yet;
 - generalized regular liveness used as an assumption when it needs prophecy
   selection. Using existential selection for an assumption would weaken the
   environment constraint;
