@@ -3506,9 +3506,11 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 	auto &netlist = procedural.netlist;
 
 	// Obligations state what has to keep holding, which isn't a point in time
-	// when the property has succeeded for a cover to observe
+	// when the property has succeeded for a cover to observe. Nor is there a monitor
+	// for the matches of a sequence with an unbounded one, which a cover reads as strong.
 	if (statement.assertionKind == ast::AssertionKind::CoverProperty &&
-			property_requires_temporal_obligations(expr)) {
+			(property_requires_temporal_obligations(expr) ||
+			 find_weak_unbounded_sequence(expr))) {
 		netlist.add_diag(diag::SVATemporalCoverUnsupported, statement.sourceRange);
 		return;
 	}
@@ -3530,6 +3532,15 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 			!cover_sees_every_success(*property)) {
 		netlist.add_diag(diag::SVAVacuousCoverUnsupported, statement.sourceRange);
 		return;
+	}
+
+	// In an assertion or an assumption a sequence used as a property is weak, which no
+	// monitor takes where it has an unbounded match. A cover reads it as strong.
+	if (statement.assertionKind != ast::AssertionKind::CoverProperty) {
+		if (auto weak = find_weak_unbounded_sequence(*property)) {
+			netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(*weak));
+			return;
+		}
 	}
 
 	PropertyAborts aborts;
@@ -3562,9 +3573,11 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 			return;
 		}
 	}
+	// A cover has one check to see a success by, the parts of one taken apart would
+	// each be covered on their own
 	if (statement.assertionKind == ast::AssertionKind::CoverProperty &&
 			result.obligations.size() != 1) {
-		netlist.add_diag(diag::SVATemporalCoverUnsupported, statement.sourceRange);
+		netlist.add_diag(diag::SVACompoundCoverUnsupported, statement.sourceRange);
 		return;
 	}
 
@@ -3646,6 +3659,14 @@ static void lower_sva_property(const ast::ConcurrentAssertionStatement &statemen
 							   ir::Net attempt)
 {
 	auto &netlist = procedural.netlist;
+
+	// Yosys has no check for a restrict, nor for the cover of a sequence's matches
+	if (statement.assertionKind != ast::AssertionKind::Assert &&
+			statement.assertionKind != ast::AssertionKind::Assume &&
+			statement.assertionKind != ast::AssertionKind::CoverProperty) {
+		netlist.add_diag(diag::AssertionUnsupported, statement.sourceRange);
+		return;
+	}
 
 	const ast::AssertionExpr *expr = &top_expr;
 	if (auto clocking_expr = get_top_clocking_expr(*expr)) {

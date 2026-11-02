@@ -11,7 +11,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
+test_slangdiag -expect "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported"
 read_slang <<EOF
 module unsupported_liveness_cover(input logic clk, input logic a);
 	cover property (@(posedge clk) s_eventually a);
@@ -35,7 +35,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
+test_slangdiag -expect "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported"
 read_slang <<EOF
 module unsupported_bounded_always_cover(input logic clk, input logic a);
 	cover property (@(posedge clk) always [0:2] a);
@@ -44,7 +44,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of an `always`, `until` or liveness property is not a finite reachability check"
+test_slangdiag -expect "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported"
 read_slang <<EOF
 module unsupported_split_cover(input logic clk, input logic a, input logic b);
 	cover property (@(posedge clk) (a until b) and (b until a));
@@ -385,5 +385,98 @@ test_slangdiag -expect "followed-by with an unbounded left operand, or with a ri
 read_slang <<EOF
 module followed_two_ends_condition(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) (1'b1 ##[0:1] 1'b1) #-# (if (a) b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module restrict_liveness(input logic clk, input logic a);
+	restrict property (@(posedge clk) s_eventually a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module restrict_finite(input logic clk, input logic a, input logic b);
+	restrict property (@(posedge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module cover_sequence(input logic clk, input logic a, input logic b);
+	cover sequence (@(posedge clk) a ##1 b);
+endmodule
+EOF
+
+design -reset
+
+# A bare sequence in an assertion is weak, as the consequent of an implication too
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_consequent(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) a |-> b ##[1:$] c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_bare_assume(input logic clk, input logic a, input logic b);
+	assume property (@(posedge clk) a ##[1:$] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_goto_throughout(input logic clk, input logic r, input logic a, input logic b);
+	assert property (@(posedge clk) disable iff (r) $rose(a) |-> a throughout b[->1] ##1 $fell(a));
+endmodule
+EOF
+
+design -reset
+
+# A cover reads a sequence as strong
+test_slangdiag -expect "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported"
+read_slang <<EOF
+module unbounded_sequence_cover(input logic clk, input logic a, input logic b);
+	cover property (@(posedge clk) a ##[1:$] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported"
+read_slang <<EOF
+module strong_unbounded_cover(input logic clk, input logic a, input logic b);
+	cover property (@(posedge clk) strong(a ##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+# The parts of a property `and` would each be covered on their own
+test_slangdiag -expect "cover of a property `and`, or of followed-by, with an `iff` or an abort in an operand is unsupported, as each part would be covered on its own"
+read_slang <<EOF
+module compound_and_cover(input logic clk, input logic a, input logic b, input logic c);
+	cover property (@(posedge clk) (a iff b) and c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of a property `and`, or of followed-by, with an `iff` or an abort in an operand is unsupported, as each part would be covered on its own"
+read_slang <<EOF
+module compound_followed_cover(input logic clk, input logic r, input logic x, input logic a);
+	cover property (@(posedge clk) x #-# accept_on (r) a);
 endmodule
 EOF

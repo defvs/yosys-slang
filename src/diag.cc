@@ -151,6 +151,7 @@ DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1099);
 DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1100);
 DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1101);
 DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1102);
+DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1103);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -226,7 +227,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(SVAMatchItemsUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVATemporalCoverUnsupported,
-					  "cover of an `always`, `until` or liveness property is not a finite reachability check");
+					  "cover of a property with `always`, `until`, an unbounded eventuality or a sequence with an unbounded match is unsupported");
 	engine.setSeverity(SVATemporalCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVARejectOnUnsupported,
@@ -248,6 +249,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVAFollowedByUnsupported,
 					  "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough");
 	engine.setSeverity(SVAFollowedByUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACompoundCoverUnsupported,
+					  "cover of a property `and`, or of followed-by, with an `iff` or an abort in an operand is unsupported, as each part would be covered on its own");
+	engine.setSeverity(SVACompoundCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);
