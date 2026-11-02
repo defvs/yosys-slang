@@ -4,8 +4,6 @@
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
 //
-#include "kernel/log.h"
-#include "kernel/rtlil.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/expressions/ConversionExpression.h"
@@ -93,10 +91,15 @@ std::optional<LValue> LValue::analyze(
 
 		if (context.netlist.is_inferred_memory(ese.value()) &&
 				context.procedural->timing.kind != ProcessTiming::Initial) {
-			RTLIL::SigSpec address = context(ese.selector());
+#ifndef SLANG_NO_YOSYS
+			ir::Value address = context(ese.selector());
 			auto variable =
 					Variable::from_symbol(&ese.value().as<ast::ValueExpressionBase>().symbol);
 			return LValue::memoryWrite(variable, address, ese.type->getBitstreamWidth());
+#else
+			// Unreachable: memory inference is disabled under SLANG_NO_YOSYS
+			assert_invariant(false && "unreachable");
+#endif
 		}
 
 		std::optional<LValue> inner = analyze(context, ese.value());
@@ -188,7 +191,7 @@ LValue LValue::memberAccess(LValue inner, uint64_t base_offset, uint64_t bitsize
 			static_, contiguous_slice_);
 }
 
-LValue LValue::memoryWrite(Variable variable, RTLIL::SigSpec address, uint64_t bitsize)
+LValue LValue::memoryWrite(Variable variable, ir::Value address, uint64_t bitsize)
 {
 	return LValue(MemoryWrite{variable, address}, bitsize, false, false);
 }
@@ -200,7 +203,7 @@ bool LValue::is_static()
 
 VariableBits LValue::evaluate_vbits()
 {
-	log_assert(static_);
+	assert_invariant(static_);
 
 	if (auto variable = std::get_if<Variable>(&descriptor)) {
 		return *variable;
@@ -218,8 +221,7 @@ VariableBits LValue::evaluate_vbits()
 		auto inner_vbits = member_acc->inner->evaluate_vbits();
 		return inner_vbits.extract(member_acc->base_offset, bitsize);
 	} else {
-		// unreachable
-		log_abort();
+		assert_invariant(false && "unreachable");
 	}
 }
 

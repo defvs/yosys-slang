@@ -1,7 +1,10 @@
 /build/
 __pycache__/
+/bazel-*
+/MODULE.bazel.lock
 .*
 !/.git*
 !.gitkeep
 !/.clang-format
 !/.bazelignore
+!/.bazelrc

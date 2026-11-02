@@ -5,7 +5,6 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 
-#include "kernel/log.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/Scope.h"
 #include "slang/ast/Statement.h"
@@ -17,16 +16,14 @@
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/Type.h"
+#include <cassert>
 #include <cstdint>
 #include <string>
 
-// Fix for Yosys declaring ceil_log2 as both inline and non-inline
-// but not defining the non-inline one; be sure to include utils.h
-// with the inline definition to prevent linkage errors on some
-// platforms
-#include "kernel/utils.h"
-
+#include "backend_builder.h"
+#ifndef SLANG_NO_YOSYS
 #include "cases.h"
+#endif
 #include "diag.h"
 #include "slang/text/SourceLocation.h"
 #include "slang_frontend.h"
@@ -46,7 +43,7 @@ EnterAutomaticScopeGuard::~EnterAutomaticScopeGuard()
 {
 	if (scope) {
 		auto new_nest_level = --context.scope_nest_level.at(scope);
-		log_assert(new_nest_level >= 0);
+		assert_invariant(new_nest_level >= 0);
 		if (new_nest_level == 0)
 			context.scope_nest_level.erase(scope);
 	}
@@ -62,19 +59,19 @@ RegisterEscapeConstructGuard::RegisterEscapeConstructGuard(ProceduralContext &co
 	construct.kind = kind;
 	construct.subroutine = subroutine;
 	construct.flag = flag;
-	context.do_simple_assign(subroutine->location, flag, RTLIL::S0, true);
+	context.do_simple_assign(subroutine->location, flag, ir::S0, true);
 }
 
 RegisterEscapeConstructGuard::RegisterEscapeConstructGuard(
 		ProceduralContext &context, EscapeConstructKind kind, const ast::Statement *statement)
 	: flag(Variable::escape_flag(context.flag_counter++)), context(context)
 {
-	log_assert(kind == EscapeConstructKind::Loop || kind == EscapeConstructKind::LoopBody);
+	assert_invariant(kind == EscapeConstructKind::Loop || kind == EscapeConstructKind::LoopBody);
 	context.escape_stack.emplace_back();
 	auto &construct = context.escape_stack.back();
 	construct.kind = kind;
 	construct.flag = flag;
-	context.do_simple_assign(statement->sourceRange.start(), flag, RTLIL::S0, true);
+	context.do_simple_assign(statement->sourceRange.start(), flag, ir::S0, true);
 }
 
 ProcessTiming::ProcessTiming(Kind kind) : kind(kind)
@@ -87,12 +84,12 @@ void ProceduralContext::signal_escape(slang::SourceLocation loc, EscapeConstruct
 {
 	auto it = escape_stack.rbegin();
 	while (it != escape_stack.rend()) {
-		do_simple_assign(loc, it->flag, RTLIL::S1, true);
+		do_simple_assign(loc, it->flag, ir::S1, true);
 		if (it->kind == kind)
 			break;
 		it++;
 	}
-	log_assert(it != escape_stack.rend());
+	assert_invariant(it != escape_stack.rend());
 }
 
 const ast::SubroutineSymbol *ProceduralContext::get_current_subroutine()
@@ -101,7 +98,7 @@ const ast::SubroutineSymbol *ProceduralContext::get_current_subroutine()
 		if (it->kind == EscapeConstructKind::FunctionBody)
 			return it->subroutine;
 	}
-	log_abort();
+	assert_invariant(false && "unreachable");
 }
 
 RegisterEscapeConstructGuard::~RegisterEscapeConstructGuard()
@@ -113,8 +110,10 @@ ProceduralContext::ProceduralContext(NetlistContext &netlist, ProcessTiming &tim
 	: unroll_limit(netlist, netlist.settings.unroll_limit()), netlist(netlist), timing(timing),
 	  eval(*this)
 {
+#ifndef SLANG_MUX_LOWERING
 	root_case = std::make_unique<Case>();
 	current_case = root_case->add_switch({})->add_case({});
+#endif
 }
 
 ProceduralContext::~ProceduralContext()
@@ -133,9 +132,18 @@ void ProceduralContext::inherit_state(ProceduralContext &other)
 	flag_counter = other.flag_counter;
 }
 
+#ifndef SLANG_MUX_LOWERING
 void ProceduralContext::copy_case_tree_into(RTLIL::CaseRule &rule)
 {
 	root_case->copy_into(netlist, &rule);
+}
+#endif
+
+void ProceduralContext::descend_into_empty_case()
+{
+#ifndef SLANG_MUX_LOWERING
+	current_case = current_case->add_switch({})->add_case({});
+#endif
 }
 
 VariableBits ProceduralContext::all_driven()
@@ -155,55 +163,58 @@ VariableBits ProceduralContext::all_driven()
 	return all_driven_filtered;
 }
 
-RTLIL::SigBit ProceduralContext::case_enable()
+ir::Net ProceduralContext::case_enable()
 {
 	if (timing.kind == ProcessTiming::Initial) {
-		return RTLIL::S1;
-	} else {
-		RTLIL::SigBit ret = netlist.add_placeholder_signal(1);
-		root_case->aux_actions.emplace_back(ret, RTLIL::State::S0);
-		current_case->aux_actions.emplace_back(ret, RTLIL::State::S1);
-		return ret;
+		return ir::S1;
 	}
+#ifdef SLANG_MUX_LOWERING
+	return enabled;
+#else
+	ir::Value ret = netlist.add_placeholder_signal(1);
+	root_case->aux_actions.emplace_back(ret, RTLIL::State::S0);
+	current_case->aux_actions.emplace_back(ret, RTLIL::State::S1);
+	return ret.as_net();
+#endif
 }
 
-void crop_zero_mask(const RTLIL::SigSpec &mask, RTLIL::SigSpec &target)
+void crop_zero_mask(const ir::Value &mask, ir::Value &target)
 {
 	for (int i = mask.size() - 1; i >= 0; i--) {
-		if (mask[i] == RTLIL::S0)
+		if (mask[i] == ir::S0)
 			target.remove(i, 1);
 	}
 }
 
-void crop_zero_mask(const RTLIL::SigSpec &mask, VariableBits &target)
+void crop_zero_mask(const ir::Value &mask, VariableBits &target)
 {
 	for (int i = mask.size() - 1; i >= 0; i--) {
-		if (mask[i] == RTLIL::S0)
+		if (mask[i] == ir::S0)
 			target.remove(i);
 	}
 }
 
-void crop_undef_mask(const RTLIL::SigSpec &mask, RTLIL::SigSpec &target)
+void crop_undef_mask(const ir::Value &mask, ir::Value &target)
 {
 	for (int i = mask.size() - 1; i >= 0; i--) {
-		if (mask[i] == RTLIL::Sx)
+		if (mask[i] == ir::Sx)
 			target.remove(i, 1);
 	}
 }
 
-void crop_undef_mask(const RTLIL::SigSpec &mask, VariableBits &target)
+void crop_undef_mask(const ir::Value &mask, VariableBits &target)
 {
 	for (int i = mask.size() - 1; i >= 0; i--) {
-		if (mask[i] == RTLIL::Sx)
+		if (mask[i] == ir::Sx)
 			target.remove(i);
 	}
 }
 
 void ProceduralContext::update_variable_state(slang::SourceLocation loc, VariableBits lvalue,
-		RTLIL::SigSpec unmasked_rvalue, RTLIL::SigSpec mask, bool blocking)
+		ir::Value unmasked_rvalue, ir::Value mask, bool blocking)
 {
-	log_assert(lvalue.bitwidth() == (uint64_t)unmasked_rvalue.size());
-	log_assert(lvalue.bitwidth() == (uint64_t)mask.size());
+	assert_invariant(lvalue.bitwidth() == (uint64_t)unmasked_rvalue.size());
+	assert_invariant(lvalue.bitwidth() == (uint64_t)mask.size());
 
 	crop_zero_mask(mask, lvalue);
 	crop_zero_mask(mask, unmasked_rvalue);
@@ -243,7 +254,7 @@ void ProceduralContext::update_variable_state(slang::SourceLocation loc, Variabl
 			// This is expected to be an AST invariant -- we don't have a symbol
 			// to use here for the ast_invariant() helper, so it's a plain
 			// assert
-			log_assert(blocking);
+			assert_invariant(blocking);
 		}
 	}
 
@@ -252,7 +263,7 @@ void ProceduralContext::update_variable_state(slang::SourceLocation loc, Variabl
 		crop_undef_mask(mask, unmasked_rvalue);
 		crop_undef_mask(mask, mask);
 
-		RTLIL::SigSpec &rvalue = unmasked_rvalue;
+		ir::Value &rvalue = unmasked_rvalue;
 
 		if (!rvalue.is_fully_const()) {
 			netlist.add_diag(diag::ErrorNonconstantInitialEval, loc);
@@ -267,30 +278,33 @@ void ProceduralContext::update_variable_state(slang::SourceLocation loc, Variabl
 			case Variable::Local:
 			case Variable::EscapeFlag:
 				for (uint64_t i = 0; i < size; i++) {
-					initial_locals_state[chunk[i]] = rvalue[(int)(base + i)].data;
+					initial_locals_state[chunk[i]] = rvalue[base + i].trit();
 				}
 				break;
 			case Variable::Static: {
 				for (uint64_t i = 0; i < size; i++) {
-					netlist.initial_state[chunk[i]] = rvalue[(int)(base + i)].data;
+					netlist.initial_state[chunk[i]] = rvalue[base + i].trit();
 				}
 				const ast::Symbol &symbol = *chunk.variable.get_symbol();
 				if (netlist.is_inferred_memory(symbol)) {
-					bool big_endian = !symbol.as<ast::ValueSymbol>()
-											   .getType()
-											   .getFixedRange()
-											   .isLittleEndian();
-					netlist.add_memory_init(netlist.id(symbol), chunk.base, big_endian,
+					bool big_endian =
+							!symbol.as<ast::ValueSymbol>().getType().getFixedRange().isDescending();
+					auto memory_it = netlist.emitted_mems.find(&symbol);
+					assert(memory_it != netlist.emitted_mems.end());
+					auto memory = memory_it->second;
+					netlist.backend->add_memory_init(memory, chunk.base, big_endian,
 							rvalue.extract((int)base, (int)size).as_const());
 				}
 			} break;
-			default: log_abort();
+			default: assert_invariant(false && "unreachable");
 			}
 		}
 		return;
 	}
 
+#ifndef SLANG_MUX_LOWERING
 	current_case->actions.push_back(Case::Action{loc, lvalue, mask, unmasked_rvalue});
+#endif
 
 	if (mask.is_fully_ones()) {
 		// shortcut path to support initialization of automatic variables
@@ -298,41 +312,41 @@ void ProceduralContext::update_variable_state(slang::SourceLocation loc, Variabl
 		// assignment)
 		vstate.set(lvalue, unmasked_rvalue);
 	} else {
-		RTLIL::SigSpec rvalue_background = vstate.evaluate(netlist, lvalue);
-		RTLIL::SigSpec rvalue = netlist.Bwmux(rvalue_background, unmasked_rvalue, mask);
+		ir::Value rvalue_background = vstate.evaluate(netlist, lvalue);
+		ir::Value rvalue = netlist.Bwmux(rvalue_background, unmasked_rvalue, mask);
 		vstate.set(lvalue, rvalue);
 	}
 }
 
 void ProceduralContext::do_simple_assign(
-		slang::SourceLocation loc, VariableBits lvalue, RTLIL::SigSpec rvalue, bool blocking)
+		slang::SourceLocation loc, VariableBits lvalue, ir::Value rvalue, bool blocking)
 {
-	update_variable_state(loc, lvalue, rvalue, RTLIL::SigSpec(RTLIL::S1, rvalue.size()), blocking);
+	update_variable_state(loc, lvalue, rvalue, ir::Value(ir::S1, rvalue.size()), blocking);
 }
 
-RTLIL::SigSpec ProceduralContext::substitute_rvalue(VariableBits bits)
+ir::Value ProceduralContext::substitute_rvalue(VariableBits bits)
 {
-	RTLIL::SigSpec subed;
+	ir::Value subed;
 
 	if (timing.kind == ProcessTiming::Initial) {
 		// No non-blocking assignments allowed in initial procedures.
 		for (auto [base, size, chunk] : bits.chunk_spans()) {
 			switch (chunk.variable.kind) {
 			case Variable::Dummy:
-			case Variable::Invalid: log_abort();
+			case Variable::Invalid: assert_invariant(false && "unreachable");
 
 			case Variable::Local:
 			case Variable::EscapeFlag:
 				for (uint64_t i = 0; i < size; i++) {
-					subed.append(initial_locals_state.at(chunk[i], RTLIL::Sx));
+					subed.append(initial_locals_state.at(chunk[i], ir::Sx));
 				}
 				break;
 			case Variable::Static:
 				for (uint64_t i = 0; i < size; i++) {
-					subed.append(netlist.initial_state.at(chunk[i], RTLIL::Sx));
+					subed.append(netlist.initial_state.at(chunk[i], ir::Sx));
 				}
 				break;
-			default: log_abort();
+			default: assert_invariant(false && "unreachable");
 			}
 		}
 	} else {
@@ -352,8 +366,7 @@ RTLIL::SigSpec ProceduralContext::substitute_rvalue(VariableBits bits)
 }
 
 void assign_to_lvalue_with_masking(const ast::AssignmentExpression &assign,
-		ProceduralContext &context, LValue &lvalue, RTLIL::SigSpec rvalue, RTLIL::SigSpec mask,
-		bool blocking)
+		ProceduralContext &context, LValue &lvalue, ir::Value rvalue, ir::Value mask, bool blocking)
 {
 	if (lvalue.is_static()) {
 		context.update_variable_state(
@@ -368,7 +381,7 @@ void assign_to_lvalue_with_masking(const ast::AssignmentExpression &assign,
 			assign_to_lvalue_with_masking(assign, context, el, rvalue.extract(base, el.bitsize),
 					mask.extract(base, el.bitsize), blocking);
 		}
-		log_assert(base == 0);
+		assert_invariant(base == 0);
 	} else if (auto range_sel = std::get_if<LValue::RangeSelect>(&lvalue.descriptor)) {
 		if ((uint64_t)range_sel->resolver->stride == lvalue.bitsize) {
 			// Effectively an element select
@@ -376,68 +389,55 @@ void assign_to_lvalue_with_masking(const ast::AssignmentExpression &assign,
 					rvalue.repeat(range_sel->resolver->range.width()),
 					range_sel->resolver->demux(mask, range_sel->inner->bitsize), blocking);
 		} else {
-			assign_to_lvalue_with_masking(assign, context, *range_sel->inner,
-					range_sel->resolver->shift_up(rvalue, true, range_sel->inner->bitsize),
-					range_sel->resolver->shift_up(mask, false, range_sel->inner->bitsize),
-					blocking);
+			// One statement each, as the evaluation order of function arguments is unspecified
+			ir::Value shifted_rvalue =
+					range_sel->resolver->shift_up(rvalue, true, range_sel->inner->bitsize);
+			ir::Value shifted_mask =
+					range_sel->resolver->shift_up(mask, false, range_sel->inner->bitsize);
+			assign_to_lvalue_with_masking(
+					assign, context, *range_sel->inner, shifted_rvalue, shifted_mask, blocking);
 		}
 	} else if (auto member_acc = std::get_if<LValue::MemberAccess>(&lvalue.descriptor)) {
 		uint64_t parent_width = member_acc->inner->bitsize;
 		uint64_t pad = parent_width - lvalue.bitsize - member_acc->base_offset;
 		assign_to_lvalue_with_masking(assign, context, *member_acc->inner,
-				{RTLIL::SigSpec(RTLIL::Sx, pad), rvalue,
-						RTLIL::SigSpec(RTLIL::Sx, member_acc->base_offset)},
-				{RTLIL::SigSpec(RTLIL::S0, pad), mask,
-						RTLIL::SigSpec(RTLIL::S0, member_acc->base_offset)},
+				{ir::Value(ir::Sx, pad), rvalue, ir::Value(ir::Sx, member_acc->base_offset)},
+				{ir::Value(ir::S0, pad), mask, ir::Value(ir::S0, member_acc->base_offset)},
 				blocking);
 	} else if (auto mem_write = std::get_if<LValue::MemoryWrite>(&lvalue.descriptor)) {
 		auto &netlist = context.netlist;
-		RTLIL::Cell *cell = netlist.canvas->addCell(netlist.new_id(), ID($memwr_v2));
-		std::string id = netlist.id(*mem_write->target.get_symbol());
-		cell->setParam(ID::MEMID, id);
 		auto &timing = context.timing;
+
+		auto memory_it = netlist.emitted_mems.find(mem_write->target.get_symbol());
+		assert(memory_it != netlist.emitted_mems.end());
+		auto memory = memory_it->second;
+
+		ir::WritePort *port = nullptr;
+
+		ir::Value enable = netlist.Mux(ir::Value(ir::S0, mask.size()), mask,
+				netlist.LogicAnd(context.case_enable(), timing.background_enable));
+
 		if (timing.kind == ProcessTiming::Implicit) {
-			cell->setParam(ID::CLK_ENABLE, false);
-			cell->setParam(ID::CLK_POLARITY, false);
-			cell->setPort(ID::CLK, RTLIL::Sx);
+			port = netlist.backend->add_write_port(memory, context.preceding_memwr, false, false,
+					ir::Sx, enable, mem_write->address, rvalue);
 		} else if (timing.kind == ProcessTiming::EdgeTriggered) {
 			require(assign, timing.triggers.size() == 1);
 			auto &trigger = timing.triggers[0];
-			cell->setParam(ID::CLK_ENABLE, true);
-			cell->setParam(ID::CLK_POLARITY, trigger.edge_polarity);
-			cell->setPort(ID::CLK, trigger.signal);
+			port = netlist.backend->add_write_port(memory, context.preceding_memwr, true,
+					trigger.edge_polarity, trigger.signal, enable, mem_write->address, rvalue);
+
 		} else {
 			ast_unreachable(assign);
 		}
 
-		int portid = context.netlist.emitted_mems[id].num_wr_ports++;
-		cell->setParam(ID::PORTID, portid);
-		std::vector<RTLIL::State> prio_mask(portid, RTLIL::S0);
-		auto &preceding_memwr = context.preceding_memwr;
-		for (auto prev : preceding_memwr) {
-			log_assert(prev->type == ID($memwr_v2));
-			if (prev->getParam(ID::MEMID) == cell->getParam(ID::MEMID)) {
-				prio_mask[prev->getParam(ID::PORTID).as_int()] = RTLIL::S1;
-			}
-		}
-		preceding_memwr.push_back(cell);
-
-		cell->setParam(ID::PRIORITY_MASK, prio_mask);
-		cell->setPort(
-				ID::EN, netlist.Mux(RTLIL::SigSpec(RTLIL::S0, mask.size()), mask,
-								netlist.LogicAnd(context.case_enable(), timing.background_enable)));
-		cell->setParam(ID::ABITS, mem_write->address.size());
-		cell->setPort(ID::ADDR, mem_write->address);
-		cell->setParam(ID::WIDTH, rvalue.size());
-		cell->setPort(ID::DATA, rvalue);
+		context.preceding_memwr.push_back(port);
 	} else {
 		// unreachable
-		log_abort();
+		assert_invariant(false && "unreachable");
 	}
 }
 
-void ProceduralContext::assign_rvalue(
-		const ast::AssignmentExpression &assign, RTLIL::SigSpec rvalue)
+void ProceduralContext::assign_rvalue(const ast::AssignmentExpression &assign, ir::Value rvalue)
 {
 	if (assign.timingControl && !netlist.settings.ignore_timing.value_or(false))
 		netlist.add_diag(diag::GenericTimingUnsyn, assign.timingControl->sourceRange);
@@ -458,30 +458,30 @@ void ProceduralContext::assign_rvalue(
 
 		int nbits_remaining = rvalue.size();
 		for (auto el : pattern_lexpr.elements()) {
-			log_assert(el->kind == ast::ExpressionKind::Assignment);
+			assert_invariant(el->kind == ast::ExpressionKind::Assignment);
 			auto &inner_assign = el->as<ast::AssignmentExpression>();
 
 			const ast::Expression *rsymbol = &inner_assign.right();
 			while (rsymbol->kind == ast::ExpressionKind::Conversion)
 				rsymbol = &rsymbol->as<ast::ConversionExpression>().operand();
-			log_assert(rsymbol->kind == ast::ExpressionKind::EmptyArgument);
-			log_assert(rsymbol->type->isBitstreamType());
+			assert_invariant(rsymbol->kind == ast::ExpressionKind::EmptyArgument);
+			assert_invariant(rsymbol->type->isBitstreamType());
 			int relem_width = rsymbol->type->getBitstreamWidth();
 
-			log_assert(nbits_remaining >= relem_width);
-			RTLIL::SigSpec relem = rvalue.extract(nbits_remaining - relem_width, relem_width);
+			assert_invariant(nbits_remaining >= relem_width);
+			ir::Value relem = rvalue.extract(nbits_remaining - relem_width, relem_width);
 			nbits_remaining -= relem_width;
 
 			assign_rvalue(inner_assign, eval.apply_nested_conversion(inner_assign.right(), relem));
 		}
 
-		log_assert(nbits_remaining == 0);
+		assert_invariant(nbits_remaining == 0);
 		return;
 	}
 	auto analyzed_lvalue = LValue::analyze(this->eval, *raw_lexpr, false);
 	if (analyzed_lvalue) {
 		assign_to_lvalue_with_masking(assign, *this, *analyzed_lvalue, rvalue,
-				RTLIL::SigSpec(RTLIL::S1, rvalue.size()), blocking);
+				ir::Value(ir::S1, rvalue.size()), blocking);
 	}
 }
 
@@ -499,7 +499,7 @@ UnrollLimitTracking::UnrollLimitTracking(NetlistContext &netlist, int limit)
 
 UnrollLimitTracking::~UnrollLimitTracking()
 {
-	log_assert(!unrolling);
+	assert_invariant(!unrolling);
 }
 
 void UnrollLimitTracking::enter_unrolling()
@@ -514,7 +514,7 @@ void UnrollLimitTracking::enter_unrolling()
 void UnrollLimitTracking::exit_unrolling()
 {
 	unrolling--;
-	log_assert(unrolling >= 0);
+	assert_invariant(unrolling >= 0);
 }
 
 bool UnrollLimitTracking::unroll_tick(const ast::Statement *symbol)

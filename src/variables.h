@@ -5,7 +5,6 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 #pragma once
-#include "kernel/log.h"
 #include "slang_frontend.h"
 #include <cinttypes>
 #include <cstddef>
@@ -28,24 +27,17 @@ struct VariableBit
 	bool operator==(const VariableBit &other) const { return label() == other.label(); }
 	bool operator<(const VariableBit &other) const { return label() < other.label(); }
 #if YS_HASHING_VERSION >= 1
-	[[nodiscard]] Yosys::Hasher hash_into(Yosys::Hasher h) const
+	[[nodiscard]] hashlib::Hasher hash_into(hashlib::Hasher h) const
 	{
 		h.eat(label());
 		return h;
 	}
 #else
-	int hash() const { return Yosys::hash_ops<Label>::hash(label()); }
+	int hash() const { return hashlib::hash_ops<Label>::hash(label()); }
 #endif
 
-	std::string index_text() const
-	{
-		if (variable.bitwidth() == 1)
-			return "";
-		else
-			return Yosys::stringf("[%" PRIu64 "]", offset);
-	}
-
-	std::string text() const { return variable.text() + index_text(); }
+	std::string index_text() const;
+	std::string text() const;
 };
 
 // VariableChunk is to VariableBit
@@ -60,7 +52,7 @@ struct VariableChunk
 
 	VariableBit operator[](uint64_t key) const
 	{
-		log_assert(key < length);
+		assert_invariant(key < length);
 		return VariableBit{variable, base + key};
 	}
 
@@ -69,18 +61,8 @@ struct VariableChunk
 		return variable == other.variable && base == other.base && length == other.length;
 	}
 
-	std::string slice_text() const
-	{
-		if (length == variable.bitwidth())
-			return "";
-		else if (length > 1)
-			// TODO: hdl indices
-			return Yosys::stringf("[%" PRIu64 ":%" PRIu64 "]", base + length - 1, base);
-		else
-			return Yosys::stringf("[%" PRIu64 "]", base);
-	}
-
-	std::string text() const { return variable.text() + slice_text(); }
+	std::string slice_text() const;
+	std::string text() const;
 };
 
 class VariableBits
@@ -210,7 +192,7 @@ public:
 	{
 		unpack();
 		auto &bits = as_bits();
-		log_assert(index >= 0 && index < (int)bits.size());
+		assert_invariant(index >= 0 && index < (int)bits.size());
 		bits.erase(bits.begin() + index);
 	}
 
@@ -290,6 +272,16 @@ public:
 			index--;
 			return *this;
 		}
+		const_bit_iterator &operator+=(int n)
+		{
+			index += n;
+			return *this;
+		}
+		const_bit_iterator &operator-=(int n)
+		{
+			index -= n;
+			return *this;
+		}
 		const_bit_iterator operator+(int n) const { return {container, index + n}; }
 		const_bit_iterator operator-(int n) const { return {container, index - n}; }
 		int operator-(const const_bit_iterator &other) const { return index - other.index; }
@@ -311,7 +303,7 @@ public:
 		{
 			offset += chunk.length;
 			if (offset < container.bitwidth()) {
-				log_assert(!container.is_chunk());
+				assert_invariant(!container.is_chunk());
 				auto &bits = container.as_bits();
 				chunk = {bits[offset].variable, bits[offset].offset, 1};
 				fixup_chunk();

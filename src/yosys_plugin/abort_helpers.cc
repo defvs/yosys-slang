@@ -24,6 +24,8 @@
 
 namespace slang_frontend {
 
+using namespace Yosys;
+
 extern ast::Compilation *global_compilation;
 
 static slang::SourceRange source_location(const ast::Symbol &obj)
@@ -44,7 +46,7 @@ static slang::SourceRange source_location(const ast::TimingControl &stmt)
 }
 
 template <typename T>
-[[noreturn]] void unimplemented__(const T &obj, const char *file, int line, const char *condition)
+[[noreturn]] void error_on_node__(const T &obj, const char *file, int line, const char *condition)
 {
 	slang::JsonWriter writer;
 	writer.setPrettyPrint(true);
@@ -54,7 +56,8 @@ template <typename T>
 	auto loc = source_location(obj);
 	log_assert(loc.start().buffer() == loc.end().buffer());
 
-	if (auto sm = global_compilation->getSourceManager(); sm && loc != slang::SourceRange::NoLocation) {
+	if (auto sm = global_compilation->getSourceManager();
+			sm && loc != slang::SourceRange::NoLocation) {
 		std::string_view source_text = sm->getSourceText(loc.start().buffer());
 		int col_no = sm->getColumnNumber(loc.start());
 		const char *line_start = source_text.data() + loc.start().offset() - col_no + 1;
@@ -73,36 +76,41 @@ template <typename T>
 			condition ? "\")" : "");
 }
 
-[[noreturn]] void unimplemented_(
+[[noreturn]] void error_(const char *file, int line, const char *condition)
+{
+	log_error("Assert `%s' failed in %s:%d.\n", condition, file, line);
+}
+
+[[noreturn]] void error_on_node_(
 		const ast::Symbol &obj, const char *file, int line, const char *condition)
 {
-	unimplemented__(obj, file, line, condition);
+	error_on_node__(obj, file, line, condition);
 }
 
-[[noreturn]] void unimplemented_(
+[[noreturn]] void error_on_node_(
 		const ast::Expression &obj, const char *file, int line, const char *condition)
 {
-	unimplemented__(obj, file, line, condition);
+	error_on_node__(obj, file, line, condition);
 }
 
-[[noreturn]] void unimplemented_(
+[[noreturn]] void error_on_node_(
 		const ast::Statement &obj, const char *file, int line, const char *condition)
 {
-	unimplemented__(obj, file, line, condition);
+	error_on_node__(obj, file, line, condition);
 }
 
-[[noreturn]] void unimplemented_(
+[[noreturn]] void error_on_node_(
 		const ast::TimingControl &obj, const char *file, int line, const char *condition)
 {
-	unimplemented__(obj, file, line, condition);
+	error_on_node__(obj, file, line, condition);
 }
 
 [[noreturn]] void wire_missing_(
 		NetlistContext &netlist, const ast::Symbol &symbol, const char *file, int line)
 {
 	std::string hier = netlist.realm.getHierarchicalPath();
-	log("While generating the netlist content of HDL instance %s\n\tof module %s\n", hier.c_str(),
-			std::string{netlist.realm.getDefinition().name}.c_str());
+	log("While generating the netlist content of HDL instance %s\n", hier.c_str());
+	log("\tof module %s\n", std::string{netlist.realm.getDefinition().name}.c_str());
 	std::string params;
 	for (auto param : netlist.realm.getParameters()) {
 		params += " " + std::string{param->symbol.name};
@@ -118,7 +126,8 @@ template <typename T>
 	}
 	log("\twith parameters%s\n", params.c_str());
 	std::string hier2 = symbol.getHierarchicalPath();
-	log("\twire for symbol %s is missing\n\t(id %s)\n", hier2.c_str(), netlist.id(symbol).c_str());
+	log("\twire for symbol %s is missing\n", hier2.c_str());
+	log("\t(id %s)\n", netlist.id(symbol).c_str());
 	log("remapped scopes:\n");
 	for (auto pair : netlist.scopes_remap) {
 		std::string hier3 = pair.first->asSymbol().getHierarchicalPath();

@@ -11,272 +11,186 @@
 #include <string_view>
 #include <utility>
 
-#include "kernel/log.h"
-#include "kernel/rtlil.h"
+#include "backend_builder.h"
+#include "slang/ast/expressions/Operator.h"
 #include "slang_frontend.h"
 #include "variables.h"
 
 namespace slang_frontend {
 
-using RTLIL::Cell;
-using RTLIL::IdString;
-using RTLIL::SigSpec;
-
-// A compat util to be removed once we drop 0.59 support
-#if YOSYS_MAJOR == 0 && YOSYS_MINOR < 59
-static IdString id(std::string_view sv)
+ir::Net GraphBuilder::ReduceBool(ir::Value a)
 {
-	return std::string(sv);
-}
-#else
-static IdString id(std::string_view sv)
-{
-	return sv;
-}
-#endif
-
-std::string RTLILBuilder::new_id(std::string base)
-{
-	if (base.empty())
-		return std::string("$") + std::to_string(next_id++);
-	else
-		return std::string("$") + base + "$" + std::to_string(next_id++);
-}
-
-std::pair<std::string, SigSpec> RTLILBuilder::add_y_wire(int width)
-{
-	std::string id = new_id();
-	return {id, canvas->addWire(id + "y", width)};
-}
-
-void RTLILBuilder::bless_cell(RTLIL::Cell *cell)
-{
-	cell->attributes = staged_attributes;
-	if (staged_source_range_valid && !cell->attributes.count(ID::src)) {
-		auto src = format_src(staged_source_range);
-		if (!src.empty())
-			cell->attributes[ID::src] = src;
-	}
-}
-
-SigSpec RTLILBuilder::ReduceBool(SigSpec a)
-{
-	if (a.is_fully_const())
-		return RTLIL::const_reduce_bool(a.as_const(), RTLIL::Const(), false, false, 1);
 	if (a.size() == 1)
 		return a[0];
 
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addReduceBool(id, a, y, false));
-	return y;
+	bool seen_x = false, seen_nonconst = false;
+	for (ir::Net bit : a) {
+		if (!bit.is_const())
+			seen_nonconst = true;
+		else if (bit == ir::S1)
+			return ir::S1;
+		else if (bit == ir::Sx)
+			seen_x = true;
+	}
+
+	if (!seen_nonconst)
+		return seen_x ? ir::Sx : ir::S0;
+
+	return Unop(ast::UnaryOperator::BitwiseOr, a, false, 1).as_net();
 }
 
-SigSpec RTLILBuilder::Demux(SigSpec a, SigSpec s)
+ir::Value GraphBuilder::Demux(ir::Value a, ir::Value s)
 {
-	log_assert(s.size() < 24);
-	SigSpec zeropad(RTLIL::S0, a.size());
+	assert_invariant(s.size() < 24);
 	if (s.is_fully_const()) {
+		ir::Value zeropad(ir::S0, a.size());
 		int idx_const = s.as_const().as_int();
 		return {zeropad.repeat((1 << s.size()) - 1 - idx_const), a, zeropad.repeat(idx_const)};
 	}
-	auto [id, y] = add_y_wire(a.size() << s.size());
-	bless_cell(canvas->addDemux(id, a, s, y));
-	return y;
+
+	return backend->Demux(a, s);
 }
 
-SigSpec RTLILBuilder::Le(SigSpec a, SigSpec b, bool is_signed)
+ir::Net GraphBuilder::Le(ir::Value a, ir::Value b, bool is_signed)
 {
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_le(a.as_const(), b.as_const(), is_signed, is_signed, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addLe(id, a, b, y, is_signed));
-	return y;
+	return Biop(ast::BinaryOperator::LessThanEqual, a, b, is_signed, is_signed, 1).as_net();
 }
 
-SigSpec RTLILBuilder::Ge(SigSpec a, SigSpec b, bool is_signed)
+ir::Net GraphBuilder::Ge(ir::Value a, ir::Value b, bool is_signed)
 {
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_ge(a.as_const(), b.as_const(), is_signed, is_signed, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addGe(id, a, b, y, is_signed));
-	return y;
+	return Biop(ast::BinaryOperator::GreaterThanEqual, a, b, is_signed, is_signed, 1).as_net();
 }
 
-SigSpec RTLILBuilder::Lt(SigSpec a, SigSpec b, bool is_signed)
+ir::Net GraphBuilder::Lt(ir::Value a, ir::Value b, bool is_signed)
 {
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_lt(a.as_const(), b.as_const(), is_signed, is_signed, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addLt(id, a, b, y, is_signed));
-	return y;
+	return Biop(ast::BinaryOperator::LessThan, a, b, is_signed, is_signed, 1).as_net();
 }
 
-SigSpec RTLILBuilder::Eq(SigSpec a, SigSpec b)
+ir::Net GraphBuilder::Eq(ir::Value a, ir::Value b)
 {
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_eq(a.as_const(), b.as_const(), false, false, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addEq(id, a, b, y, false));
-	return y;
+	return Biop(ast::BinaryOperator::Equality, a, b, false, false, 1).as_net();
 }
 
-SigSpec RTLILBuilder::EqWildcard(SigSpec a, SigSpec b)
-{
-	log_assert(a.size() == b.size());
-	log_assert(b.is_fully_const());
-
-	for (int i = a.size() - 1; i >= 0; i--) {
-		if (b[i] == RTLIL::Sx || b[i] == RTLIL::Sz) {
-			a.remove(i);
-			b.remove(i);
-		}
-	}
-	log_assert(a.size() == b.size());
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_eq(a.as_const(), b.as_const(), false, false, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addEq(id, a, b, y, false));
-	return y;
-}
-
-SigSpec RTLILBuilder::LogicAnd(SigSpec a, SigSpec b)
+ir::Net GraphBuilder::LogicAnd(ir::Value a, ir::Value b)
 {
 	if (a.is_fully_zero() || b.is_fully_zero())
-		return RTLIL::Const(0, 1);
-	if (a.is_fully_def() && b.size() == 1)
-		return b;
-	if (b.is_fully_def() && a.size() == 1)
-		return a;
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addLogicAnd(id, a, b, y));
-	return y;
+		return ir::S0;
+	if (a.is_fully_ones() && b.size() == 1)
+		return b.as_net();
+	if (b.is_fully_ones() && a.size() == 1)
+		return a.as_net();
+
+	return Biop(ast::BinaryOperator::LogicalAnd, a, b, false, false, 1).as_net();
 }
 
-SigSpec RTLILBuilder::LogicOr(SigSpec a, SigSpec b)
+ir::Net GraphBuilder::LogicOr(ir::Value a, ir::Value b)
 {
 	if (a.is_fully_ones() || b.is_fully_ones())
-		return RTLIL::Const(1, 1);
-	if (a.is_fully_zero() && b.is_fully_zero())
-		return RTLIL::Const(0, 1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addLogicOr(id, a, b, y));
-	return y;
+		return ir::S1;
+	if (a.is_fully_zero() && b.size() == 1)
+		return b.as_net();
+	if (b.is_fully_zero() && a.size() == 1)
+		return a.as_net();
+
+	return Biop(ast::BinaryOperator::LogicalOr, a, b, false, false, 1).as_net();
 }
 
-SigSpec RTLILBuilder::LogicNot(SigSpec a)
+ir::Net GraphBuilder::LogicNot(ir::Value a)
 {
-	if (a.is_fully_const())
-		return RTLIL::const_logic_not(a.as_const(), RTLIL::Const(), false, false, -1);
-	auto [id, y] = add_y_wire(1);
-	bless_cell(canvas->addLogicNot(id, a, y));
-	return y;
+	return Unop(ast::UnaryOperator::LogicalNot, a, false, 1).as_net();
 }
 
-SigSpec RTLILBuilder::Mux(SigSpec a, SigSpec b, SigSpec s)
+ir::Value GraphBuilder::Mux(ir::Value a, ir::Value b, ir::Net s)
 {
-	log_assert(a.size() == b.size());
-	log_assert(s.size() == 1);
-	if (s[0] == RTLIL::S0)
+	assert_invariant(a.size() == b.size());
+	if (a == b)
 		return a;
-	if (s[0] == RTLIL::S1)
+	if (a == ir::S0 && b == ir::S1)
+		return s;
+	if (s == ir::S0)
+		return a;
+	if (s == ir::S1)
 		return b;
-	auto [id, y] = add_y_wire(a.size());
-	bless_cell(canvas->addMux(id, a, b, s, y));
-	return y;
+	return backend->Mux(a, b, s);
 }
 
-SigSpec RTLILBuilder::Bwmux(SigSpec a, SigSpec b, SigSpec s)
+ir::Value GraphBuilder::Bwmux(ir::Value a, ir::Value b, ir::Value s)
 {
-	log_assert(a.size() == b.size());
-	log_assert(a.size() == s.size());
+	assert_invariant(a.size() == b.size());
+	assert_invariant(a.size() == s.size());
 	if (s.is_fully_const()) {
-		SigSpec result(RTLIL::Sx, a.size());
-		for (int i = 0; i < a.size(); i++) {
-			if (s[i] == RTLIL::S0)
+		ir::Value result(ir::Sx, a.size());
+		for (uint64_t i = 0; i < a.size(); i++) {
+			if (s[i] == ir::S0)
 				result[i] = a[i];
-			else if (s[i] == RTLIL::S1)
+			else if (s[i] == ir::S1)
 				result[i] = b[i];
 		}
 		return result;
 	}
-	auto [id, y] = add_y_wire(a.size());
-	bless_cell(canvas->addBwmux(id, a, b, s, y));
-	return y;
+
+	return backend->Bwmux(a, b, s);
 }
 
-SigSpec RTLILBuilder::Shift(SigSpec a, bool a_signed, SigSpec b, bool b_signed, int result_width)
+ir::Value GraphBuilder::Shift(ir::Value a, ir::Value b, bool b_signed, uint64_t result_width)
 {
-	if (a.is_fully_const() && b.is_fully_const())
-		return RTLIL::const_shift(a.as_const(), b.as_const(), a_signed, b_signed, result_width);
-
-	if (b.is_fully_const() && b.size() < 24) {
-		log_assert(!a.empty());
+	if (b.is_fully_const() && b.size() < 32) {
+		assert_invariant(!a.empty());
 		int shift_amount = b.as_int(b_signed);
-		RTLIL::SigSpec ret;
-		int i, j;
+		ir::Value ret;
+		int i;
+		uint64_t j;
 		for (i = shift_amount, j = 0; j < result_width; i++, j++) {
-			if (a_signed && i >= a.size())
-				ret.append(a.msb());
-			else if (i >= a.size() || i < 0)
-				ret.append(RTLIL::S0);
+			if (i >= (int)a.size() || i < 0)
+				ret.append(ir::S0);
 			else
 				ret.append(a[i]);
 		}
 		return ret;
 	}
 
-	auto [id, y] = add_y_wire(result_width);
-	Cell *cell = canvas->addCell(id, ID($shift));
-	cell->parameters[Yosys::ID::A_SIGNED] = a_signed;
-	cell->parameters[Yosys::ID::B_SIGNED] = b_signed;
-	cell->parameters[Yosys::ID::A_WIDTH] = a.size();
-	cell->parameters[Yosys::ID::B_WIDTH] = b.size();
-	cell->parameters[Yosys::ID::Y_WIDTH] = y.size();
-	cell->setPort(Yosys::ID::A, a);
-	cell->setPort(Yosys::ID::B, b);
-	cell->setPort(Yosys::ID::Y, y);
-	bless_cell(cell);
-	return y;
+	return backend->Shift(a, b, b_signed, result_width);
 }
 
-SigSpec RTLILBuilder::Shiftx(SigSpec a, SigSpec s, bool s_signed, int result_width)
+ir::Value GraphBuilder::Shiftx(ir::Value a, ir::Value b, bool b_signed, uint64_t result_width)
 {
-	if (a.is_fully_const() && s.is_fully_const())
-		return RTLIL::const_shiftx(a.as_const(), s.as_const(), false, s_signed, result_width);
-	auto [id, y] = add_y_wire(result_width);
-	bless_cell(canvas->addShiftx(id, a, s, y, s_signed));
-	return y;
+	if (b.is_fully_const() && b.size() < 32) {
+		assert_invariant(!a.empty());
+		int shift_amount = b.as_int(b_signed);
+		ir::Value ret;
+		int i;
+		uint64_t j;
+		for (i = shift_amount, j = 0; j < result_width; i++, j++) {
+			if (i >= (int)a.size() || i < 0)
+				ret.append(ir::Sx);
+			else
+				ret.append(a[i]);
+		}
+		return ret;
+	}
+
+	return backend->Shiftx(a, b, b_signed, result_width);
 }
 
-SigSpec RTLILBuilder::Neg(SigSpec a, bool signed_)
+ir::Value GraphBuilder::Neg(ir::Value a, bool signed_)
 {
-	if (a.is_fully_const())
-		return RTLIL::const_neg(a.as_const(), RTLIL::Const(), signed_, false, a.size() + 1);
-	auto [id, y] = add_y_wire(a.size() + 1);
-	bless_cell(canvas->addNeg(id, a, y, signed_));
-	return y;
+	return Unop(ast::UnaryOperator::Minus, a, signed_, a.width() + 1);
 }
 
-SigSpec RTLILBuilder::Bmux(SigSpec a, SigSpec s)
+ir::Value GraphBuilder::Bmux(ir::Value a, ir::Value s)
 {
-	log_assert(a.size() % (1 << s.size()) == 0);
-	log_assert(a.size() >= 1 << s.size());
+	assert_invariant(a.size() % (1 << s.size()) == 0);
+	assert_invariant(a.size() >= 1ULL << s.size());
 	int stride = a.size() >> s.size();
-	if (s.is_fully_def()) {
+	if (s.is_fully_def() && s.width() < 32) {
 		return a.extract(s.as_const().as_int() * stride, stride);
 	}
-	auto [id, y] = add_y_wire(stride);
-	bless_cell(canvas->addBmux(id, a, s, y));
-	return y;
+	return backend->Bmux(a, s);
 }
 
-SigSpec RTLILBuilder::Not(SigSpec a)
+ir::Value GraphBuilder::Not(ir::Value a)
 {
-	if (a.is_fully_const())
-		return RTLIL::const_not(a.as_const(), RTLIL::Const(), false, false, -1);
-	auto [id, y] = add_y_wire(a.size());
-	bless_cell(canvas->addNot(id, a, y));
-	return y;
+	return Unop(ast::UnaryOperator::BitwiseNot, a, false, a.width());
 }
 
 namespace ThreeValued {
@@ -313,253 +227,141 @@ int CARRY(int a, int b, int c)
 {
 	if (c > 0)
 		return OR(a, b);
-	else if (c < -1)
+	else if (c < 0)
 		return AND(a, b);
 
 	return OR(AND(a, b), AND(c, OR(a, b)));
 }
 
-int convert(RTLIL::SigBit bit)
+int convert(ir::Net bit)
 {
-	if (bit == RTLIL::S1)
+	if (bit == ir::S1)
 		return 1;
-	else if (bit == RTLIL::S0)
+	else if (bit == ir::S0)
 		return -1;
 	else
 		return 0;
 }
 }; // namespace ThreeValued
 
-SigSpec RTLILBuilder::Biop(
-		IdString op, SigSpec a, SigSpec b, bool a_signed, bool b_signed, int y_width)
+ir::Value GraphBuilder::Biop(ast::BinaryOperator op, ir::Value a, ir::Value b, bool a_signed,
+		bool b_signed, uint64_t y_width)
 {
-	if (a.is_fully_const() && b.is_fully_const()) {
-#define OP(type)                                                                                   \
-	if (op == ID($##type))                                                                         \
-		return RTLIL::const_##type(a.as_const(), b.as_const(), a_signed, b_signed, y_width);
-		OP(add)
-		OP(sub)
-		OP(mul)
-		OP(divfloor)
-		OP(div)
-		OP(mod)
-		OP(and)
-		OP(or)
-		OP(xor)
-		OP(xnor)
-		OP(eq)
-		OP(ne)
-		OP(nex)
-		OP(eqx)
-		OP(ge)
-		OP(gt)
-		OP(le)
-		OP(lt)
-		OP(logic_and)
-		OP(logic_or)
-		OP(sshl)
-		OP(sshr)
-		OP(shl)
-		OP(shr)
-		OP(pow)
-#undef OP
-	}
+	if ((op == ast::BinaryOperator::GreaterThanEqual || op == ast::BinaryOperator::GreaterThan ||
+				op == ast::BinaryOperator::LessThanEqual || op == ast::BinaryOperator::LessThan) &&
+			!a.empty() && !b.empty()) {
+		// See if comparison of partially-constant operands can be evaluated
+		// to a constant by opportunistic constant propagation over a carry
+		// chain structure
+		//
+		// For less or equal, we look at the sign bit of
+		//
+		//  (a - b - 1) = (a + b')
+		//
+		// For less than, we look at the sign bit of
+		//
+		//  (a - b) = (a + b' + 1)
+		//
+		// Where b' is b with all bits complemented
+		int carry = (op == ast::BinaryOperator::GreaterThanEqual ||
+							op == ast::BinaryOperator::LessThanEqual)
+							? -1
+							: 1;
+		int al = 0, bl = 0;
+		// Add +1 to avoid overflows
+		assert_invariant(a_signed == b_signed);
+		uint64_t width = std::max(a.size(), b.size()) + 1;
 
-	if (op.in(ID($le), ID($lt), ID($gt), ID($ge)) && !a.empty() && !b.empty()) {
-		int carry = op.in(ID($le), ID($ge)) ? -1 : 1;
-		int al, bl;
-		// Defer to three-valued evaluation over a representation of the operators.
-		// This is a bit much, but I'm writing this tired and don't trust doing it
-		// another way.
-		int width = std::max(a.size(), b.size());
-		for (int i = 0; i < width; i++) {
-			RTLIL::SigBit abit = i < a.size() ? a[i] : (a_signed ? a.msb() : RTLIL::S0);
-			RTLIL::SigBit bbit = i < b.size() ? b[i] : (b_signed ? b.msb() : RTLIL::S0);
+		bool seen_undef_bit = false;
+
+		for (uint64_t i = 0; i < width; i++) {
+			ir::Net abit = i < a.size() ? ir::Net(a[i]) : (a_signed ? a.msb() : ir::Net(ir::S0));
+			ir::Net bbit = i < b.size() ? ir::Net(b[i]) : (b_signed ? b.msb() : ir::Net(ir::S0));
+
+			if (abit == ir::Sx || bbit == ir::Sx) {
+				seen_undef_bit = true;
+				break;
+			}
+
 			al = ThreeValued::convert(abit);
 			bl = ThreeValued::convert(bbit);
-			if (op.in(ID($gt), ID($ge)))
+			if (op == ast::BinaryOperator::GreaterThanEqual ||
+					op == ast::BinaryOperator::GreaterThan)
 				std::swap(al, bl);
 			if (i != width - 1)
 				carry = ThreeValued::CARRY(al, ThreeValued::NOT(bl), carry);
 		}
+		if (seen_undef_bit) {
+			ir::Value ret(ir::Sx);
+			ret.extend_u0(y_width);
+			return ret;
+		}
 		int result = ThreeValued::XOR(carry, ThreeValued::XNOR(al, bl));
 		if (result < 0)
-			return SigSpec(RTLIL::S0, y_width);
+			return ir::Value(ir::S0, y_width);
 		if (result > 0) {
-			SigSpec ret = {RTLIL::S1};
+			ir::Value ret(ir::S1);
 			ret.extend_u0(y_width);
 			return ret;
 		}
 	}
 
-	if (op == ID($logic_and)) {
+	if (op == ast::BinaryOperator::LogicalAnd) {
 		if (a.is_fully_zero() || b.is_fully_zero())
-			return SigSpec(RTLIL::S0, y_width);
+			return ir::Value(ir::S0, y_width);
 	}
 
-	if (op == ID($logic_or)) {
+	if (op == ast::BinaryOperator::LogicalOr) {
 		// IMPROVEMENT: condition could be relaxed
 		if ((a.is_fully_const() && a.as_bool()) || (b.is_fully_const() && b.as_bool())) {
-			SigSpec ret = {RTLIL::S1};
+			ir::Value ret(ir::S1);
 			ret.extend_u0(y_width);
 			return ret;
 		}
 	}
 
-	int msb_zeroes = 0;
-	if (op == ID($mul) && !a_signed && !b_signed) {
+	uint64_t msb_zeroes = 0;
+	if (op == ast::BinaryOperator::Multiply && !a_signed && !b_signed) {
 		int as = a.size(), bs = b.size();
-		while (as > 0 && a[as - 1] == RTLIL::S0)
+		while (as > 0 && a[as - 1] == ir::S0)
 			as--;
-		while (bs > 0 && b[bs - 1] == RTLIL::S0)
+		while (bs > 0 && b[bs - 1] == ir::S0)
 			bs--;
-		msb_zeroes = std::max(0, y_width - (as + bs));
+		msb_zeroes = std::max<int>(0, ((int)y_width) - (as + bs));
 	}
 
-	auto [id, y] = add_y_wire(y_width - msb_zeroes);
-	Cell *cell = canvas->addCell(id, op);
-	cell->setPort(RTLIL::ID::A, a);
-	cell->setPort(RTLIL::ID::B, b);
-	cell->setParam(RTLIL::ID::A_WIDTH, a.size());
-	cell->setParam(RTLIL::ID::B_WIDTH, b.size());
-	cell->setParam(RTLIL::ID::A_SIGNED, a_signed);
-	cell->setParam(RTLIL::ID::B_SIGNED, b_signed);
-	cell->setParam(RTLIL::ID::Y_WIDTH, y_width - msb_zeroes);
-	cell->setPort(RTLIL::ID::Y, y);
-	bless_cell(cell);
-	return {SigSpec(RTLIL::S0, msb_zeroes), y};
+	return {ir::Value(ir::S0, msb_zeroes),
+			backend->Biop(op, a, b, a_signed, b_signed, y_width - msb_zeroes)};
 }
 
-SigSpec RTLILBuilder::Unop(IdString op, SigSpec a, bool a_signed, int y_width)
+ir::Value GraphBuilder::Unop(ast::UnaryOperator op, ir::Value a, bool a_signed, uint64_t y_width)
 {
-	if (a.is_fully_const()) {
-#define OP(type)                                                                                   \
-	if (op == ID($##type))                                                                         \
-		return RTLIL::const_##type(a.as_const(), {}, a_signed, false, y_width);
-		OP(pos)
-		OP(neg)
-		OP(logic_not)
-		OP(not)
-		OP(reduce_or)
-		OP(reduce_and)
-		OP(reduce_xor)
-		OP(reduce_xnor)
-		OP(reduce_bool)
-#undef OP
-	}
-
-	auto [id, y] = add_y_wire(y_width);
-	Cell *cell = canvas->addCell(id, op);
-	cell->setPort(RTLIL::ID::A, a);
-	cell->setParam(RTLIL::ID::A_WIDTH, a.size());
-	cell->setParam(RTLIL::ID::A_SIGNED, a_signed);
-	cell->setParam(RTLIL::ID::Y_WIDTH, y_width);
-	cell->setPort(RTLIL::ID::Y, y);
-	bless_cell(cell);
-	return y;
+	return backend->Unop(op, a, a_signed, y_width);
 }
 
-void RTLILBuilder::connect(SigSpec lhs, SigSpec rhs)
+ir::Value GraphBuilder::CountOnes(ir::Value sig, uint64_t result_width)
 {
-	log_assert(lhs.size() == rhs.size());
-	if (!lhs.empty()) {
-		Cell *cell = canvas->addBuf(new_id(), rhs, lhs);
-		bless_cell(cell);
-	}
-}
-
-// Synthesizes two single-edge FFs (one posedge, one negedge) with the same D input,
-// then uses a mux controlled by the clock to select the appropriate FF output.
-void RTLILBuilder::add_dual_edge_aldff(const std::string &base_name, RTLIL::SigSpec clk,
-		RTLIL::SigSpec aload, RTLIL::SigSpec d, RTLIL::SigSpec q, RTLIL::SigSpec ad,
-		bool aload_polarity)
-{
-	RTLIL::Wire *pos_q = canvas->addWire(
-			canvas->uniquify(Yosys::stringf("%s$pos$q", base_name.c_str())), d.size());
-
-	RTLIL::Wire *neg_q = canvas->addWire(
-			canvas->uniquify(Yosys::stringf("%s$neg$q", base_name.c_str())), d.size());
-
-	if (aload.is_fully_def() && aload.size() == 1 && aload.as_bool() != aload_polarity) {
-		RTLIL::Cell *pos_ff =
-				canvas->addDff(canvas->uniquify(Yosys::stringf("%s$pos", base_name.c_str())), clk,
-						d, pos_q, /*edge_polarity=*/true);
-		bless_cell(pos_ff);
-
-		// Create negedge FF
-		RTLIL::Cell *neg_ff =
-				canvas->addDff(canvas->uniquify(Yosys::stringf("%s$neg", base_name.c_str())), clk,
-						d, neg_q, /*edge_polarity=*/false);
-		bless_cell(neg_ff);
-	} else {
-		RTLIL::Cell *pos_ff =
-				canvas->addAldff(canvas->uniquify(Yosys::stringf("%s$pos", base_name.c_str())), clk,
-						aload, d, pos_q, ad,
-						/*clk_polarity=*/true, aload_polarity);
-		bless_cell(pos_ff);
-
-		RTLIL::Cell *neg_ff =
-				canvas->addAldff(canvas->uniquify(Yosys::stringf("%s$neg", base_name.c_str())), clk,
-						aload, d, neg_q, ad,
-						/*clk_polarity=*/false, aload_polarity);
-		bless_cell(neg_ff);
-	}
-
-	// behaviour: when clk=0: select neg_q (captures on negedge), when clk=1: select pos_q (captures
-	// on posedge)
-	RTLIL::Cell *mux = canvas->addMux(canvas->uniquify(Yosys::stringf("%s$mux", base_name.c_str())),
-			/*A=*/neg_q, /*B=*/pos_q, /*S=*/clk, /*Y=*/q);
-	bless_cell(mux);
-}
-
-void RTLILBuilder::add_dff(std::string_view name, const RTLIL::SigSpec &clk,
-		const RTLIL::SigSpec &d, const RTLIL::SigSpec &q, bool clk_polarity)
-{
-	RTLIL::Cell *cell = canvas->addDff(canvas->uniquify(id(name)), clk, d, q, clk_polarity);
-	bless_cell(cell);
-}
-
-void RTLILBuilder::add_dffe(std::string_view name, const RTLIL::SigSpec &clk,
-		const RTLIL::SigSpec &en, const RTLIL::SigSpec &d, const RTLIL::SigSpec &q,
-		bool clk_polarity, bool en_polarity)
-{
-	RTLIL::Cell *cell =
-			canvas->addDffe(canvas->uniquify(id(name)), clk, en, d, q, clk_polarity, en_polarity);
-	bless_cell(cell);
-}
-
-void RTLILBuilder::add_aldff(std::string_view name, const RTLIL::SigSpec &clk,
-		const RTLIL::SigSpec &aload, const RTLIL::SigSpec &d, const RTLIL::SigSpec &q,
-		const RTLIL::SigSpec &ad, bool clk_polarity, bool aload_polarity)
-{
-	RTLIL::Cell *cell = canvas->addAldff(
-			canvas->uniquify(id(name)), clk, aload, d, q, ad, clk_polarity, aload_polarity);
-	bless_cell(cell);
-}
-
-SigSpec RTLILBuilder::CountOnes(SigSpec sig, int result_width)
-{
-	SigSpec ret;
+	ir::Value ret;
 	auto width = sig.size();
 	if (width == 0) {
-		ret = RTLIL::Const(0, 1);
+		ret = ir::Const(0, 1);
 	} else if (width == 1) {
 		// Single bit
 		ret = sig;
 	} else {
 		// Build tree of adders
-		std::vector<RTLIL::SigSpec> curr_level;
-		for (int i = 0; i < width; i++) {
-			RTLIL::SigSpec bit = sig[i];
+		std::vector<ir::Value> curr_level;
+		for (uint64_t i = 0; i < width; i++) {
+			ir::Value bit = ir::Net(sig[i]);
 			bit.extend_u0(result_width);
 			curr_level.push_back(bit);
 		}
 
 		while (curr_level.size() > 1) {
-			std::vector<RTLIL::SigSpec> nxt_level;
+			std::vector<ir::Value> nxt_level;
 			for (size_t i = 0; i + 1 < curr_level.size(); i += 2) {
-				auto sum = Biop(
-						ID($add), curr_level[i], curr_level[i + 1], false, false, result_width);
+				auto sum = Biop(ast::BinaryOperator::Add, curr_level[i], curr_level[i + 1], false,
+						false, result_width);
 				if (sum.size() < result_width)
 					sum.extend_u0(result_width);
 				nxt_level.push_back(sum);
@@ -576,125 +378,117 @@ SigSpec RTLILBuilder::CountOnes(SigSpec sig, int result_width)
 	return ret;
 }
 
-SigSpec RTLILBuilder::Clog2(SigSpec sig, int result_width)
+ir::Value GraphBuilder::OneHot(ir::Value sig, uint64_t result_width)
+{
+	ir::Value count;
+	ir::Value ret;
+	auto width = sig.size();
+	count = CountOnes(sig, width);
+	ret = Eq(count, ir::Const(1, width));
+	ret.extend_u0(result_width);
+	return ret;
+}
+
+ir::Value GraphBuilder::OneHot0(ir::Value sig, uint64_t result_width)
+{
+	ir::Value count;
+	ir::Value ret;
+	auto width = sig.size();
+	count = CountOnes(sig, width);
+	ret = Le(count, ir::Const(1, width), false);
+	ret.extend_u0(result_width);
+	return ret;
+}
+
+ir::Value GraphBuilder::Clog2(ir::Value sig, uint64_t result_width)
 {
 	int width = sig.size();
 
 	if (width == 0)
-		return RTLIL::Const(0, result_width);
+		return ir::Const(0, result_width);
 
-	SigSpec n_minus_1 = Biop(ID($sub), sig, RTLIL::Const(1, width), false, false, width);
+	ir::Value n_minus_1 =
+			Biop(ast::BinaryOperator::Subtract, sig, ir::Const(1, width), false, false, width);
 
-	SigSpec result = RTLIL::Const(0, result_width);
+	ir::Value result = ir::Const(0, result_width);
 	for (int i = 0; i < width; i++)
-		result = Mux(result, RTLIL::Const(i + 1, result_width), n_minus_1[i]);
+		result = Mux(result, ir::Const(i + 1, result_width), n_minus_1[i]);
 
-	SigSpec n_not_zero = ReduceBool(sig);
-	return Mux(RTLIL::Const(0, result_width), result, n_not_zero);
+	ir::Net n_not_zero = ReduceBool(sig);
+	return Mux(ir::Const(0, result_width), result, n_not_zero);
 }
 
-static const RTLIL::Const reverse_data(RTLIL::Const &orig, int width)
-{
-	std::vector<RTLIL::State> bits;
-	log_assert(orig.size() % width == 0);
-	bits.reserve(orig.size());
-	for (int i = orig.size() - width; i >= 0; i -= width)
-		bits.insert(bits.end(), orig.begin() + i, orig.begin() + i + width);
-	return bits;
-}
-
-// Private helper
-void RTLILBuilder::emit_meminit_cell(RTLIL::Memory *mem, uint64_t word_offset, bool big_endian,
-		RTLIL::Const data, RTLIL::Const mask)
-{
-	if (data.empty())
-		return;
-
-	int abits = 32; // TODO: error out if abits too low
-	int nwords = data.size() / mem->width;
-	log_assert(data.size() % mem->width == 0);
-	log_assert(mask.size() == mem->width);
-	RTLIL::Cell *cell = canvas->addCell(new_id(), ID($meminit_v2));
-	cell->setParam(ID::MEMID, mem->name.str());
-	cell->setParam(ID::PRIORITY, meminit_prio_counter++);
-	cell->setParam(ID::ABITS, abits);
-	cell->setParam(ID::WORDS, nwords);
-	cell->setParam(ID::WIDTH, mem->width);
-	cell->setPort(ID::ADDR,
-			mem->start_offset + (big_endian ? (mem->size - word_offset - nwords) : word_offset));
-	cell->setPort(ID::DATA, big_endian ? reverse_data(data, mem->width) : data);
-	cell->setPort(ID::EN, mask);
-	bless_cell(cell);
-}
-
-void RTLILBuilder::add_memory_init(
-		std::string_view name, uint64_t bit_offset, bool big_endian, RTLIL::Const data)
-{
-	if (data.empty())
-		return;
-
-	RTLIL::Memory *mem = canvas->memories.at(id(name));
-	log_assert(mem);
-
-	uint64_t processed = 0;
-
-	using RTLIL::Const;
-	using RTLIL::S0;
-	using RTLIL::S1;
-	using RTLIL::Sx;
-
-	// Depending on the offset alignment with respect to word boundaries
-	// we might need to emit up to 3 instances of the `$meminit_v2` cell.
-	if (bit_offset % mem->width != 0) {
-		int offset_in_cell = bit_offset % mem->width;
-		uint64_t length = std::min(mem->width - offset_in_cell, data.size());
-		Const data1, mask1;
-		data1.append(Const(Sx, offset_in_cell));
-		data1.append(data.extract(0, length));
-		data1.append(Const(Sx, mem->width - offset_in_cell - length));
-		mask1.append(Const(S0, offset_in_cell));
-		mask1.append(Const(S1, length));
-		mask1.append(Const(S0, mem->width - offset_in_cell - length));
-		emit_meminit_cell(mem, bit_offset / mem->width, big_endian, data1, mask1);
-		processed += length;
-	}
-
-	if (processed < (uint64_t)data.size()) {
-		log_assert((bit_offset + processed) % mem->width == 0);
-		uint64_t length = ((((uint64_t)data.size()) - processed) / mem->width) * mem->width;
-		emit_meminit_cell(mem, (bit_offset + processed) / mem->width, big_endian,
-				data.extract(processed, length), RTLIL::Const(S1, mem->width));
-		processed += length;
-	}
-
-	if (processed < (uint64_t)data.size()) {
-		uint64_t length = (uint64_t)data.size() - processed;
-		log_assert(length < (uint64_t)mem->width);
-		Const data1, mask1;
-		data1.append(data.extract(0, length));
-		data1.append(Const(Sx, mem->width - length));
-		mask1.append(Const(S1, length));
-		mask1.append(Const(S0, mem->width - length));
-		emit_meminit_cell(mem, bit_offset / mem->width, big_endian, data1, mask1);
-		processed += length;
-	}
-
-	log_assert(processed == (uint64_t)data.size());
-}
-
-SigSpec RTLILBuilder::add_placeholder_signal(
+ir::Value GraphBuilder::add_placeholder_signal(
 		uint64_t width, std::string_view name_suggestion, bool public_name)
 {
-	log_assert(width <= (uint64_t)std::numeric_limits<int>::max());
-	RTLIL::IdString name;
-	if (public_name) {
-		name = id(name_suggestion);
-	} else {
-		name = new_id(std::string(name_suggestion));
+	return backend->add_placeholder_signal(width, name_suggestion, public_name);
+}
+
+void GraphBuilder::connect(ir::Value target, ir::Value source)
+{
+	backend->connect(target, source);
+}
+
+void GraphBuilder::set_initialization(ir::Value signal, ir::Const init_value)
+{
+	backend->set_initialization(signal, init_value);
+}
+
+void GraphBuilder::add_input(std::string_view name, ir::Value signal)
+{
+	backend->add_input(name, signal);
+}
+
+void GraphBuilder::add_output(std::string_view name, ir::Value signal)
+{
+	backend->add_output(name, signal);
+}
+
+void GraphBuilder::add_instance(
+		std::string_view cell_type, std::vector<BackendGraphBuilderBase::PortConnection> ports)
+{
+	backend->add_instance(cell_type, std::move(ports));
+}
+
+void GraphBuilder::add_dual_edge_aldff(const std::string &base_name, ir::Net clk, ir::Net aload,
+		const ir::Value &d, const ir::Value &q, const ir::Value &ad, bool aload_polarity)
+{
+	backend->add_dual_edge_aldff(base_name, clk, aload, d, q, ad, aload_polarity);
+}
+
+void GraphBuilder::add_dff(std::string_view name, const ir::Net clk, const ir::Value &d,
+		const ir::Value &q, bool clk_polarity)
+{
+	backend->add_dff(name, clk, d, q, clk_polarity);
+}
+
+void GraphBuilder::add_dffe(std::string_view name, const ir::Net clk, const ir::Net en,
+		const ir::Value &d, const ir::Value &q, bool clk_polarity, bool en_polarity)
+{
+	if (en == ir::Net(en_polarity ? ir::S1 : ir::S0)) {
+		backend->add_dff(name, clk, d, q, clk_polarity);
+		return;
 	}
-	RTLIL::Wire *wire = canvas->addWire(name, (int)width);
-	wire->attributes = staged_attributes;
-	return wire;
+
+	backend->add_dffe(name, clk, en, d, q, clk_polarity, en_polarity);
+}
+
+void GraphBuilder::add_aldff(std::string_view name, const ir::Net clk, const ir::Net aload,
+		const ir::Value &d, const ir::Value &q, const ir::Value &ad, bool clk_polarity,
+		bool aload_polarity)
+{
+	backend->add_aldff(name, clk, aload, d, q, ad, clk_polarity, aload_polarity);
+}
+
+void GraphBuilder::add_aldffe(std::string_view name, const ir::Net clk, const ir::Net en,
+		const ir::Net aload, const ir::Value &d, const ir::Value &q, const ir::Value &ad,
+		bool clk_polarity, bool en_polarity, bool aload_polarity)
+{
+	if (en == ir::Net(en_polarity ? ir::S1 : ir::S0)) {
+		return add_aldff(name, clk, aload, d, q, ad, clk_polarity, aload_polarity);
+	}
+
+	backend->add_aldffe(name, clk, en, aload, d, q, ad, clk_polarity, en_polarity, aload_polarity);
 }
 
 }; // namespace slang_frontend

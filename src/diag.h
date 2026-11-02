@@ -36,7 +36,6 @@ extern slang::DiagCode AssertionUnsupported;
 extern slang::DiagCode LangFeatureUnsupported;
 extern slang::DiagCode UnsupportedLhs;
 extern slang::DiagCode ArgumentTypeUnsupported;
-extern slang::DiagCode LangFeatureUnsupported;
 extern slang::DiagCode MultiportUnsupported;
 extern slang::DiagCode UnsupportedBlackboxConnection;
 extern slang::DiagCode UnsupportedPortDirection;
@@ -89,6 +88,11 @@ extern slang::DiagCode ReadmemInvalidAddress;
 extern slang::DiagCode ReadmemAddressOutsideOfRange;
 extern slang::DiagCode ReadmemWordsRangeMismatch;
 extern slang::DiagCode ReadmemBadBinaryDigit;
+extern slang::DiagCode NoIgnoreUnknownModules;
+extern slang::DiagCode HierarchicalRefOutsideModulesUnsupported;
+extern slang::DiagCode HighImpedanceUnsupported;
+extern slang::DiagCode IfacePortUnsupported;
+extern slang::DiagCode OptionRequiresStandaloneSlang;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

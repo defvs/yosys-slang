@@ -1,9 +1,9 @@
 [submodule "third_party/slang"]
 	path = third_party/slang
-	url = https://github.com/MikePopoloski/slang.git
+	url = ../../MikePopoloski/slang.git
 [submodule "third_party/fmt"]
 	path = third_party/fmt
-	url = https://github.com/fmtlib/fmt
+	url = ../../fmtlib/fmt.git
 [submodule "tests/third_party/opentitan"]
 	path = tests/third_party/opentitan
-	url = https://github.com/lowRISC/opentitan.git
+	url = ../../lowRISC/opentitan.git

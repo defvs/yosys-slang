@@ -4,8 +4,8 @@
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
 //
-#include "kernel/log.h"
-#include "kernel/rtlil.h"
+#include <cstdint>
+
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/symbols/BlockSymbols.h"
@@ -95,7 +95,7 @@ void evaluate_decl_initializers(NetlistContext &netlist)
 
 		// Use ProceduralContext to get $meminit emission if the target is a memory
 		ProceduralContext context(netlist, ProcessTiming::initial);
-		RTLIL::SigSpec value;
+		ir::Value value;
 
 		const ast::Expression *initializer = nullptr;
 
@@ -142,25 +142,24 @@ void finalize_variable_initialization(NetlistContext &netlist)
 		}
 
 		auto variable = Variable::from_symbol(&symbol);
+#ifndef SLANG_NO_YOSYS
 		if (netlist.is_inferred_memory(*variable_symbol)) {
 			// Nothing to do
-		} else {
+		} else
+#endif
+		{
 			auto signal = netlist.convert_static(variable);
-			RTLIL::SigSpec cl, cr; // lhs/rhs of a new connection
-			RTLIL::Const attr_value(RTLIL::Sx, signal.size());
-			for (int i = 0; i < signal.size(); i++) {
+			ir::Value cl, cr; // lhs/rhs of a new connection
+			ir::Const attr_value(ir::Sx, signal.size());
+			for (uint64_t i = 0; i < signal.size(); i++) {
 				VariableBit vbit(variable, i);
 				bool register_driven = netlist.register_driven_variables.count(vbit);
 				bool driven = netlist.driven_variables.count(vbit);
 				// register_driven implies driven
-				log_assert(!register_driven || driven);
-				RTLIL::State state = netlist.initial_state.at(vbit, RTLIL::Sx);
+				assert_invariant(!register_driven || driven);
+				ir::Trit state = netlist.initial_state.at(vbit, ir::Sx);
 				if (register_driven) {
-#if YOSYS_MAJOR == 0 && YOSYS_MINOR < 58
-					attr_value.bits()[i] = state;
-#else
 					attr_value.set(i, state);
-#endif
 				} else {
 					if (!driven) {
 						cl.append(signal[i]);
@@ -169,11 +168,7 @@ void finalize_variable_initialization(NetlistContext &netlist)
 				}
 			}
 
-			if (!attr_value.is_fully_undef()) {
-				log_assert(signal.is_wire());
-				RTLIL::Wire *wire = signal.chunks().begin()->wire;
-				wire->attributes[ID::init] = attr_value;
-			}
+			netlist.set_initialization(signal, attr_value);
 			netlist.connect(cl, cr);
 		}
 	});

@@ -1,11 +1,11 @@
-"""yosys-slang plugin: builds slang.so against @yosys//:hdrs.
+"""sv-elab as a yosys plugin: builds slang.so against @yosys//:hdrs.
 """
 
 load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_license//rules:license.bzl", "license")
 load(
     "//:dependency_support/slang_ext.bzl",
+    "SLANG_VERSION_HASH",
     "SLANG_VERSION_MAJOR",
     "SLANG_VERSION_MINOR",
     "SLANG_VERSION_PATCH",
@@ -19,20 +19,20 @@ package(
 
 license(
     name = "license",
-    package_name = "yosys-slang",
+    package_name = "sv-elab",
     license_kinds = ["@rules_license//licenses/spdx:ISC"],
     license_text = "LICENSE",
 )
 
-# yosys-slang's own revision string is taken from MODULE.bazel's
+# sv-elab's own revision string is taken from MODULE.bazel's
 # version field (set by the BCR submitter at release time).
-YOSYS_SLANG_REVISION = module_version() or "unknown"
+SV_ELAB_REVISION = module_version() or "unknown"
 
 expand_template(
     name = "version_h",
     out = "version.h",
     substitutions = {
-        "@YOSYS_SLANG_REVISION@": YOSYS_SLANG_REVISION,
+        "@SV_ELAB_REVISION@": SV_ELAB_REVISION,
         "@SLANG_REVISION@": "{}.{}.{}".format(
             SLANG_VERSION_MAJOR,
             SLANG_VERSION_MINOR,
@@ -42,23 +42,55 @@ expand_template(
     template = "src/version.h.in",
 )
 
-# --- yosys-slang plugin (shared library) ---
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "slang_revision_check",
+    srcs = ["dependency_support/slang_revision_check.sh"],
+    data = ["@slang_revision//:revision"],
+    env = {"EXPECTED_SLANG_REVISION": SLANG_VERSION_HASH},
+    tags = ["manual"],
+)
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# Frontend headers and sources are consumed as file lists by a downstream
+# backend that compiles both sides together (the frontend's own sources
+# include the consuming backend's ir.h/backend_builder.h, so the two cannot
+# live in separate compilation units). Expose them publicly for that purpose.
+cc_library(
+    name = "version_hdrs",
+    hdrs = [":version.h"],
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+)
+
+# Expose the pinned slang build so consumers pull exactly the version sv-elab
+# tracks, instead of maintaining a parallel slang dependency of their own.
+alias(
+    name = "slang",
+    actual = "@vendored-slang//:slang",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "common_srcs",
+    srcs = glob(["src/*.cc", "src/*.h"]),
+    visibility = ["//visibility:public"],
+)
 
 cc_library(
-    name = "yosys_slang_plugin",
-    srcs = glob([
-        "src/*.cc",
-        "src/*.h",
-    ]) + [":version.h"],
-    copts = [
-        "-fPIC",
-        "-std=c++20",
-        "-Wno-unused-parameter",
-    ],
-    visibility = ["//src/yosys_plugin:__pkg__"],
-    deps = [
-        "@vendored-slang//:slang",
-        "@yosys//:hdrs",
-    ],
-    alwayslink = True,
+    name = "frontend_hdrs",
+    hdrs = glob(["src/*.h"]),
+    strip_include_prefix = "src",
+    visibility = ["//visibility:public"],
+)
+
+# sv-elab vendors hashlib through a dev-only module extension whose relative
+# path assumes sv-elab is the root workspace. Downstream consumers that use
+# sv-elab as a module alias the library target it defines instead.
+alias(
+    name = "hashlib",
+    actual = "@vendored-hashlib//:hashlib",
+    visibility = ["//visibility:public"],
 )

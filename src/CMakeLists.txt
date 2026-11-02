@@ -12,15 +12,21 @@ else()
 endif()
 
 add_library(yosys-slang ${LIBRARY_TYPE}
+    yosys_plugin/abort_helpers.cc
+    yosys_plugin/backend_builder.cc
+    yosys_plugin/backend_builder.h
+    yosys_plugin/blackboxes.cc
+    yosys_plugin/cases.cc
+    yosys_plugin/cases.h
+    yosys_plugin/driver.cc
+    yosys_plugin/ir.cc
+    yosys_plugin/ir.h
+    yosys_plugin/sva.cc
     yosys_plugin/sva_testutils.cc
-    abort_helpers.cc
     addressing.cc
     async_pattern.cc
     async_pattern.h
-    blackboxes.cc
     builder.cc
-    cases.cc
-    cases.h
     diag.cc
     diag.h
     initialization.cc
@@ -31,13 +37,24 @@ add_library(yosys-slang ${LIBRARY_TYPE}
     slang_frontend.cc
     slang_frontend.h
     statements.h
-    sva.cc
     variables.cc
     variables.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.h
 )
-target_include_directories(yosys-slang PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(yosys-slang PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/hashlib/
+    ${CMAKE_CURRENT_SOURCE_DIR}/yosys_plugin
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
 target_link_libraries(yosys-slang PRIVATE yosys::yosys slang::slang)
+target_compile_options(yosys-slang PRIVATE 
+    -Wall
+    -Wextra
+    -Werror=unused-variable
+    -Werror=unused-parameter
+    -Werror=unused-function
+)
 
 if (BUILD_AS_PLUGIN)
     set_target_properties(yosys-slang PROPERTIES
