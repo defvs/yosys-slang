@@ -146,6 +146,7 @@ DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
 DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1095);
 DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1096);
 DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1097);
+DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1098);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -223,6 +224,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVATemporalCoverUnsupported,
 					  "cover of an `always`, `until` or liveness property is not a finite reachability check");
 	engine.setSeverity(SVATemporalCoverUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVARejectOnUnsupported,
+					  "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations");
+	engine.setSeverity(SVARejectOnUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);

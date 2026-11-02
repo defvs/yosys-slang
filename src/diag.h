@@ -99,6 +99,7 @@ extern slang::DiagCode FinalAssertionUnsupported;
 extern slang::DiagCode SVALivenessAcceptanceUnsupported;
 extern slang::DiagCode SVAMatchItemsUnsupported;
 extern slang::DiagCode SVATemporalCoverUnsupported;
+extern slang::DiagCode SVARejectOnUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

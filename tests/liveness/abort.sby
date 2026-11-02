@@ -1,6 +1,11 @@
 [tasks]
 selected_settled_fail
 selected_disabled_pass
+selected_accept_pass
+selected_minimum_pass
+reject_vacuous_pass
+accept_reject_pass
+reject_next_pass
 followed_disabled_pass
 
 [options]
@@ -17,6 +22,21 @@ selected_settled_fail: prep -top selected_settled_fail
 selected_disabled_pass: read_rtlil selected_disabled_pass.il
 selected_disabled_pass: chformal -assert -remove
 selected_disabled_pass: prep -top selected_disabled_pass
+selected_accept_pass: read_rtlil selected_accept_pass.il
+selected_accept_pass: chformal -assert -remove
+selected_accept_pass: prep -top selected_accept_pass
+selected_minimum_pass: read_rtlil selected_minimum_pass.il
+selected_minimum_pass: chformal -assert -remove
+selected_minimum_pass: prep -top selected_minimum_pass
+reject_vacuous_pass: read_rtlil reject_vacuous_pass.il
+reject_vacuous_pass: chformal -assert -remove
+reject_vacuous_pass: prep -top reject_vacuous_pass
+accept_reject_pass: read_rtlil accept_reject_pass.il
+accept_reject_pass: chformal -assert -remove
+accept_reject_pass: prep -top accept_reject_pass
+reject_next_pass: read_rtlil reject_next_pass.il
+reject_next_pass: chformal -assert -remove
+reject_next_pass: prep -top reject_next_pass
 followed_disabled_pass: read_rtlil followed_disabled_pass.il
 followed_disabled_pass: chformal -assert -remove
 followed_disabled_pass: prep -top followed_disabled_pass
@@ -24,4 +44,9 @@ followed_disabled_pass: prep -top followed_disabled_pass
 [files]
 selected_settled_fail: selected_settled_fail.il
 selected_disabled_pass: selected_disabled_pass.il
+selected_accept_pass: selected_accept_pass.il
+selected_minimum_pass: selected_minimum_pass.il
+reject_vacuous_pass: reject_vacuous_pass.il
+accept_reject_pass: accept_reject_pass.il
+reject_next_pass: reject_next_pass.il
 followed_disabled_pass: followed_disabled_pass.il

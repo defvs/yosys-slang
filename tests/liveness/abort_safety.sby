@@ -1,4 +1,14 @@
 [tasks]
+selected_accept_pass
+selected_reject_fail
+selected_minimum_fail
+selected_minimum_pass
+reject_vacuous_fail
+reject_vacuous_pass
+reject_accept_fail
+accept_reject_pass
+reject_next_fail
+reject_next_pass
 antecedent_settled_fail
 antecedent_disabled_pass
 followed_settled_fail
@@ -11,6 +21,11 @@ strong_disabled_pass
 [options]
 mode prove
 depth 10
+selected_reject_fail: expect fail
+selected_minimum_fail: expect fail
+reject_vacuous_fail: expect fail
+reject_accept_fail: expect fail
+reject_next_fail: expect fail
 antecedent_settled_fail: expect fail
 followed_settled_fail: expect fail
 not_always_fail: expect fail
@@ -20,6 +35,46 @@ strong_settled_fail: expect fail
 smtbmc z3
 
 [script]
+selected_accept_pass: read_rtlil selected_accept_pass.il
+selected_accept_pass: chformal -live -remove
+selected_accept_pass: chformal -fair -remove
+selected_accept_pass: prep -top selected_accept_pass
+selected_reject_fail: read_rtlil selected_reject_fail.il
+selected_reject_fail: chformal -live -remove
+selected_reject_fail: chformal -fair -remove
+selected_reject_fail: prep -top selected_reject_fail
+selected_minimum_fail: read_rtlil selected_minimum_fail.il
+selected_minimum_fail: chformal -live -remove
+selected_minimum_fail: chformal -fair -remove
+selected_minimum_fail: prep -top selected_minimum_fail
+selected_minimum_pass: read_rtlil selected_minimum_pass.il
+selected_minimum_pass: chformal -live -remove
+selected_minimum_pass: chformal -fair -remove
+selected_minimum_pass: prep -top selected_minimum_pass
+reject_vacuous_fail: read_rtlil reject_vacuous_fail.il
+reject_vacuous_fail: chformal -live -remove
+reject_vacuous_fail: chformal -fair -remove
+reject_vacuous_fail: prep -top reject_vacuous_fail
+reject_vacuous_pass: read_rtlil reject_vacuous_pass.il
+reject_vacuous_pass: chformal -live -remove
+reject_vacuous_pass: chformal -fair -remove
+reject_vacuous_pass: prep -top reject_vacuous_pass
+reject_accept_fail: read_rtlil reject_accept_fail.il
+reject_accept_fail: chformal -live -remove
+reject_accept_fail: chformal -fair -remove
+reject_accept_fail: prep -top reject_accept_fail
+accept_reject_pass: read_rtlil accept_reject_pass.il
+accept_reject_pass: chformal -live -remove
+accept_reject_pass: chformal -fair -remove
+accept_reject_pass: prep -top accept_reject_pass
+reject_next_fail: read_rtlil reject_next_fail.il
+reject_next_fail: chformal -live -remove
+reject_next_fail: chformal -fair -remove
+reject_next_fail: prep -top reject_next_fail
+reject_next_pass: read_rtlil reject_next_pass.il
+reject_next_pass: chformal -live -remove
+reject_next_pass: chformal -fair -remove
+reject_next_pass: prep -top reject_next_pass
 antecedent_settled_fail: read_rtlil antecedent_settled_fail.il
 antecedent_settled_fail: chformal -live -remove
 antecedent_settled_fail: chformal -fair -remove
@@ -54,6 +109,16 @@ strong_disabled_pass: chformal -fair -remove
 strong_disabled_pass: prep -top strong_disabled_pass
 
 [files]
+selected_accept_pass: selected_accept_pass.il
+selected_reject_fail: selected_reject_fail.il
+selected_minimum_fail: selected_minimum_fail.il
+selected_minimum_pass: selected_minimum_pass.il
+reject_vacuous_fail: reject_vacuous_fail.il
+reject_vacuous_pass: reject_vacuous_pass.il
+reject_accept_fail: reject_accept_fail.il
+accept_reject_pass: accept_reject_pass.il
+reject_next_fail: reject_next_fail.il
+reject_next_pass: reject_next_pass.il
 antecedent_settled_fail: antecedent_settled_fail.il
 antecedent_disabled_pass: antecedent_disabled_pass.il
 followed_settled_fail: followed_settled_fail.il

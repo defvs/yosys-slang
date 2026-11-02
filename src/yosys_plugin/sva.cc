@@ -1385,6 +1385,7 @@ struct PropertyObligation {
 	PropertyObligationKind kind;
 	ir::Value a;
 	ir::Value en;
+	// Is an attempt in flight on the tick, going by the aborts of the ticks before it
 	ir::Value active;
 };
 
@@ -1396,7 +1397,7 @@ struct PropertyResult {
 // The aborts in effect on the attempts lower_property() starts on its trigger. An abort
 // that came ahead of the trigger tick has kept the attempts from getting there, so these
 // bear on an attempt from its first tick on. A trigger leaves the aborts of its own tick
-// to the monitors it starts.
+// to the monitors it starts, which is how a reject_on gets to come ahead of them.
 struct PropertyAborts {
 	// From the tick it holds on, the letters are T: a disable iff or an accept_on
 	ir::Net accept = ir::S0;
@@ -1729,6 +1730,11 @@ static void add_response_liveness_obligation(
 	ir::Net old_wire = add_sva_state(eval, "sva_response_old");
 	ir::Net old = old_wire;
 
+	ir::Net held = old;
+	for (ir::Net age : recent)
+		held = eval.netlist.LogicOr(held, age);
+	ir::Net in_flight = eval.netlist.LogicOr(held, trigger);
+
 	trigger = eval.netlist.LogicAnd(trigger, sva_not(eval, disable));
 	std::vector<ir::Net> ages;
 	ages.reserve(maximum_duration);
@@ -1747,12 +1753,11 @@ static void add_response_liveness_obligation(
 	for (uint64_t age = 1; age < maximum_duration; age++)
 		clears[age] = eval.netlist.LogicOr(clears[age - 1], clears[age]);
 
-	ir::Net pending = old;
+	ir::Net pending = eval.netlist.LogicOr(held, trigger);
 	ir::Net completion = eval.netlist.LogicAnd(old, any_match);
 	std::vector<ir::Net> remaining;
 	remaining.reserve(ages.size());
 	for (size_t age = 0; age < ages.size(); age++) {
-		pending = eval.netlist.LogicOr(pending, ages[age]);
 		completion = eval.netlist.LogicOr(
 			completion,
 			eval.netlist.LogicAnd(ages[age], clears[age]));
@@ -1780,7 +1785,7 @@ static void add_response_liveness_obligation(
 	goal = eval.netlist.LogicOr(goal, disable);
 	result.obligations.push_back(
 		{PropertyObligationKind::Liveness, goal,
-		 ir::S1, pending});
+		 ir::S1, in_flight});
 }
 
 // The ticks to start the right side of `sequence |-> p`, or of `sequence |=> p` if
@@ -1837,11 +1842,11 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 static void add_liveness_obligation(PropertyResult& result, EvalContext& eval,
 									ir::Net goal, ir::Net trigger,
 									ir::Net disable, slang::SourceLocation loc) {
-	// A disable aborts all currently pending attempts, and prevents a new
-	// attempt from starting in the disabled cycle.
+	// T letters meet any goal, so a disable discharges the attempts pending and the one
+	// starting on its tick
 	goal = eval.netlist.LogicOr(goal, disable);
-	trigger = eval.netlist.LogicAnd(trigger, sva_not(eval, disable));
 	ir::Net active = add_pending_monitor(eval, trigger, goal, ir::S0, loc);
+	trigger = eval.netlist.LogicAnd(trigger, sva_not(eval, disable));
 	result.obligations.push_back(
 		{PropertyObligationKind::Liveness, goal, trigger, active});
 }
@@ -2263,6 +2268,81 @@ static bool is_direct_justice_property(const ast::AssertionExpr& expr) {
 			!nested->range->max.has_value());
 }
 
+// Is the sequence a single boolean, with no ticks past the first?
+static bool is_boolean_sequence(const ast::AssertionExpr& expr) {
+	if (expr.kind != ast::AssertionExprKind::Simple)
+		return false;
+	const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+	if (simple.repetition.has_value())
+		return false;
+	if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+		return true;
+	const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+	return !instance.isRecursiveProperty && is_boolean_sequence(instance.body);
+}
+
+// Is an attempt of the property in flight past its first tick only while one of the
+// obligations lower_property() makes of it is active? An antecedent spanning ticks is
+// in flight ahead of them, and dual letters from a reject_on would make it match.
+static bool in_flight_by_obligations(const ast::AssertionExpr& expr) {
+	switch (expr.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (simple.repetition.has_value() ||
+				simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+				return false;
+			const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+			return !instance.isRecursiveProperty && in_flight_by_obligations(instance.body);
+		}
+	case ast::AssertionExprKind::Unary:
+	case ast::AssertionExprKind::StrongWeak:
+		// Lowered to obligations that start on the trigger
+		return true;
+	case ast::AssertionExprKind::Abort:
+		return in_flight_by_obligations(expr.as<ast::AbortAssertionExpr>().expr);
+	case ast::AssertionExprKind::Conditional:
+		{
+			const auto& conditional = expr.as<ast::ConditionalAssertionExpr>();
+			return in_flight_by_obligations(conditional.ifExpr) &&
+				   (!conditional.elseExpr || in_flight_by_obligations(*conditional.elseExpr));
+		}
+	case ast::AssertionExprKind::Case:
+		{
+			const auto& case_expr = expr.as<ast::CaseAssertionExpr>();
+			for (const auto& item : case_expr.items)
+				if (!in_flight_by_obligations(*item.body))
+					return false;
+			return !case_expr.defaultCase || in_flight_by_obligations(*case_expr.defaultCase);
+		}
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = expr.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::And:
+			case ast::BinaryAssertionOperator::Or:
+				return in_flight_by_obligations(binary.left) &&
+					   in_flight_by_obligations(binary.right);
+			case ast::BinaryAssertionOperator::Implies:
+				return in_flight_by_obligations(binary.right);
+			case ast::BinaryAssertionOperator::OverlappedImplication:
+			case ast::BinaryAssertionOperator::NonOverlappedImplication:
+				return is_boolean_sequence(binary.left) &&
+					   in_flight_by_obligations(binary.right);
+			case ast::BinaryAssertionOperator::OverlappedFollowedBy:
+			case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
+				// The left side has a monitor of its own from the trigger on, which
+				// dual letters keep from matching
+				return in_flight_by_obligations(binary.right);
+			default:
+				return false;
+			}
+		}
+	default:
+		return false;
+	}
+}
+
 // The matches that meet a direct justice property, for a response monitor to
 // discharge its attempts by
 static std::optional<std::vector<EventualCandidate>>
@@ -2313,10 +2393,10 @@ static PropertyResult lower_eventual(EvalContext& eval,
 			result, eval, trigger, disable, expr_loc(eventual));
 		if (!result.valid)
 			return result;
-		selected = delayed_abortable_trigger(
+		ir::Net start = delayed_abortable_trigger(
 			eval, selected, minimum, disable, expr_loc(eventual));
 		ir::Net future_start = add_sticky_observation(
-			eval, selected, ir::S0, expr_loc(eventual),
+			eval, start, ir::S0, expr_loc(eventual),
 			"sva_eventual_start");
 		// The operand is used as a property, so an empty match of it meets nothing.
 		// T letters would start a match of it on any tick, so the goal is left to
@@ -2326,6 +2406,8 @@ static PropertyResult lower_eventual(EvalContext& eval,
 			eval, eventual.expr, future_start, ir::S0, admits_empty);
 		if (!goal.has_value())
 			return {{}, false};
+		// The attempt is in flight from the tick it was selected on, all through the
+		// minimum delay
 		add_liveness_obligation(
 			result, eval, goal.value(), selected, disable, expr_loc(eventual));
 		return result;
@@ -2630,33 +2712,36 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			return lower_property(eval, abort.expr, trigger, inner);
 		}
 
+		// From the tick of a reject on, the letters are the dual of T, unless an abort
+		// from outside comes on the same tick, which takes priority. A liveness goal
+		// isn't met by such letters, so the attempts in flight fail. Those already
+		// settled stand, as do the ones a disable or accept_on came upon before.
 		PropertyResult result =
 			lower_property(eval, abort.expr, trigger, aborts);
 		if (!result.valid)
 			return result;
 		bool has_liveness = false;
-		std::vector<ir::Net> active_obligations;
+		// An attempt is in flight on its first tick whatever the property
+		ir::Net in_flight = trigger;
 		for (const auto& obligation : result.obligations) {
 			if (obligation.kind == PropertyObligationKind::Safety) {
-				eval.netlist.add_diag(diag::AssertionUnsupported,
+				eval.netlist.add_diag(diag::SVARejectOnUnsupported,
 									  expr_loc(expr));
 				return {{}, false};
 			}
 			if (obligation.kind != PropertyObligationKind::Liveness)
 				continue;
 			has_liveness = true;
-			active_obligations.push_back(
+			in_flight = eval.netlist.LogicOr(in_flight,
 				eval.netlist.ReduceBool(obligation.active));
 		}
-		for (ir::Net active : active_obligations) {
-			add_safety_obligation(
-				result, sva_not(eval, condition),
-				eval.netlist.LogicAnd(active, sva_not(eval, disable)));
-		}
-		if (!has_liveness) {
-			eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+		if (!has_liveness || !in_flight_by_obligations(abort.expr)) {
+			eval.netlist.add_diag(diag::SVARejectOnUnsupported, expr_loc(expr));
 			return {{}, false};
 		}
+		add_safety_obligation(
+			result, sva_not(eval, condition),
+			eval.netlist.LogicAnd(in_flight, sva_not(eval, disable)));
 		return result;
 	}
 

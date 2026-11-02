@@ -181,6 +181,16 @@ done
 for top in \
 	selected_settled_fail \
 	selected_disabled_pass \
+	selected_accept_pass \
+	selected_reject_fail \
+	selected_minimum_fail \
+	selected_minimum_pass \
+	reject_vacuous_fail \
+	reject_vacuous_pass \
+	reject_accept_fail \
+	accept_reject_pass \
+	reject_next_fail \
+	reject_next_pass \
 	antecedent_settled_fail \
 	antecedent_disabled_pass \
 	followed_settled_fail \

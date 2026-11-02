@@ -154,3 +154,24 @@ module repeated_implies_operand(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) s[*2] implies b);
 endmodule
 EOF
+
+design -reset
+
+# A monitor merging the attempts of `a ##1 b` can't tell whether one of them is still
+# in flight when the reject comes, and so whether it fails
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+read_slang <<EOF
+module reject_sequence_antecedent(input logic clk, input logic r, input logic a,
+								  input logic b, input logic c);
+	assert property (@(posedge clk) reject_on (r) (a ##1 b |-> s_eventually c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+read_slang <<EOF
+module reject_safety_part(input logic clk, input logic r, input logic a, input logic b);
+	assert property (@(posedge clk) reject_on (r) (a s_until b));
+endmodule
+EOF

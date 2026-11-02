@@ -114,9 +114,10 @@ they meet every Boolean, so a pending liveness goal is accepted in that
 sample, while the antecedent of an implication sees them dual and starts no
 consequent. A failure settled before the abort stands, so does one of a
 finite part of a liveness property, such as the left side of a followed-by or
-the first element of a selected regular sequence. `reject_on` on a pure
-liveness property adds a safety failure if the reject condition occurs while
-the obligation is active; a reject after completion does not fail. Of aborts
+the first element of a selected regular sequence. A `reject_on` gives the
+dual letters: every attempt in flight in the rejecting sample fails,
+including one in its first sample whose antecedent would not match, while a
+reject after completion or after an earlier abort does not fail. Of aborts
 holding in the same sample, the outermost one wins.
 
 A `cover` is the dual of an assertion of the negated property, so the letters
@@ -156,8 +157,9 @@ cannot preserve the SVA meaning:
 - temporal `iff`, temporal left operands of property-level `implies`, and
   response-style property `or` whose acceptance cannot be represented by one
   justice goal;
-- `reject_on` around a property that already mixes safety and liveness
-  obligations;
+- `reject_on` around a property with a safety part, or whose obligations
+  start behind an antecedent longer than one sample, since a monitor merging
+  overlapping attempts cannot tell whether one is still in flight;
 - a `disable iff` nested in a property by way of instances, which IEEE
   1800-2017 16.12 does not allow;
 - multiple or incompatible assertion clocks, sampled-value clock arguments,
