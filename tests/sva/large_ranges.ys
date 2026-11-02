@@ -9,3 +9,26 @@ endmodule
 EOF
 
 select -assert-count 4 t:$check
+
+design -reset
+
+# Each of these takes a few delay registers per tick of its range. Delaying each of the
+# paths on its own would take some 500000.
+read_slang <<EOF
+module delay_range(input logic clk, input logic a, input logic b);
+	delay_range_test: assert property (@(posedge clk) a ##[0:1025] b);
+endmodule
+
+module repetition_range(input logic clk, input logic a);
+	repetition_range_test: assert property (@(posedge clk) a[*1:1025]);
+endmodule
+
+module response_range(input logic clk, input logic rst, input logic req, input logic ack);
+	response_range_test: assert property (@(posedge clk) disable iff (rst) req |-> ##[1:1025] ack);
+endmodule
+EOF
+
+select -assert-count 3 t:$check
+select -assert-max 5000 delay_range/t:$dff
+select -assert-max 5000 repetition_range/t:$dff
+select -assert-max 5000 response_range/t:$dff

@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 #include <optional>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include "ir.h"
@@ -245,6 +246,11 @@ struct EvalContext {
 	// Tells if the expression last evaluated by `sva()` read an automatic variable
 	// or const cast of non-constant value, as those are frozen with the attempt
 	bool sva_read_frozen = false;
+
+	// Registers delaying a signal for SVA, by the signal, the initial value, and the
+	// clock, edge and enable of the registers
+	std::map<std::tuple<RTLIL::SigSpec, RTLIL::State, RTLIL::SigBit, bool, RTLIL::SigBit>,
+			 std::vector<ir::Value>> sva_delay_lines;
 
 	friend class EnterAutomaticScopeGuard;
 };

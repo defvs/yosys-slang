@@ -47,16 +47,21 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int cycles, 
 		return ir::Value(ir::Sx, sig.size());
 	}
 
+	// A signal delayed again by any number of ticks reuses the registers made for it
+	// before, so the delays of all the paths of an assertion take one line of registers
 	auto &trigger = procedural->timing.triggers[0];
-	for (int i = 0; i < cycles; i++) {
+	auto &line = eval.sva_delay_lines[{sig.raw(), init, trigger.signal.raw(), trigger.edge_polarity,
+									   procedural->timing.background_enable.raw()}];
+	while ((int) line.size() < cycles) {
+		ir::Value prev = line.empty() ? sig : line.back();
 		ir::Value next = eval.netlist.add_placeholder_signal(sig.size(), name_hint);
 		eval.netlist.set_initialization(next, ir::Const(init, sig.size()));
 		eval.netlist.add_dffe(eval.netlist.backend->new_id(std::string(name_hint)),
-							  trigger.signal, procedural->timing.background_enable, sig, next,
+							  trigger.signal, procedural->timing.background_enable, prev, next,
 							  trigger.edge_polarity, true);
-		sig = next;
+		line.push_back(next);
 	}
-	return sig;
+	return line[cycles - 1];
 }
 
 struct AssertionMatch {
@@ -322,23 +327,20 @@ static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> pa
 static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
 	assert_invariant(!paths.empty());
 
-	int max_start = 0;
-	for (auto path : paths) {
-		assert_invariant(!path.empty);
-		max_start = std::max(max_start, path.start);
-	}
+	// Going by start, what's collected so far is delayed up to the start of the next
+	// path. That takes as many delay registers as the longest path, rather than as all
+	// the paths together.
+	std::sort(paths.begin(), paths.end(), [](const AssertionMatch& a, const AssertionMatch& b) {
+		return a.start < b.start;
+	});
 
-	std::optional<AssertionMatch> collapsed;
-	for (auto path : paths) {
-		if (path.start < max_start)
-			path = path.shift(max_start - path.start);
-
-		if (collapsed.has_value())
-			collapsed = collapsed.value() || path;
-		else
-			collapsed = path;
+	AssertionMatch collapsed = paths[0];
+	assert_invariant(!collapsed.empty);
+	for (size_t i = 1; i < paths.size(); i++) {
+		assert_invariant(!paths[i].empty);
+		collapsed = collapsed.shift(paths[i].start - collapsed.start) || paths[i];
 	}
-	return collapsed.value();
+	return collapsed;
 }
 
 // Paths of a sequence used as a property. An empty match is no success, and with no
@@ -423,16 +425,6 @@ static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, const Attem
 	return compress_paths(paths);
 }
 
-static std::vector<AssertionMatch> repeat_count(const AttemptContext& ctx, OperandPaths& operand, int count) {
-	if (count == 0)
-		return {};
-
-	std::vector<AssertionMatch> result = operand.at(0);
-	for (int i = 1; i < count; i++)
-		result = seq_vec(ctx, result, 1, 1, operand);
-	return result;
-}
-
 static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const AttemptContext& ctx,
 													const ast::AssertionExpr& expr,
 													std::optional<ast::SequenceRepetition> repetition,
@@ -446,13 +438,18 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 	}
 
 	std::vector<AssertionMatch> repeated;
-	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
-		if (count == 0)
-			repeated.push_back(AssertionMatch::Empty(eval, expr_loc(expr)));
-		else {
-			auto count_paths = repeat_count(ctx, operand, (int)count);
+	if (repetition->range.min == 0)
+		repeated.push_back(AssertionMatch::Empty(eval, expr_loc(expr)));
+
+	// Each count of repetitions is the count before followed by one more
+	std::vector<AssertionMatch> count_paths;
+	for (uint32_t count = 1; count <= repetition->range.max.value(); count++) {
+		count_paths = count == 1 ? operand.at(0) : seq_vec(ctx, count_paths, 1, 1, operand);
+		// No match for this count, none for the counts above
+		if (count_paths.empty())
+			break;
+		if (count >= repetition->range.min)
 			repeated.insert(repeated.end(), count_paths.begin(), count_paths.end());
-		}
 	}
 
 	return compress_paths(repeated);
