@@ -219,7 +219,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(AssertionUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVALivenessAcceptanceUnsupported,
-		"liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells");
+		"property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption");
 	engine.setSeverity(SVALivenessAcceptanceUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAMatchItemsUnsupported,
@@ -231,11 +231,11 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(SVATemporalCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVARejectOnUnsupported,
-					  "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations");
+					  "`reject_on` is supported around a liveness property with no safety part, no `always` and nothing but a boolean antecedent ahead of its obligations");
 	engine.setSeverity(SVARejectOnUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAVacuousCoverUnsupported,
-					  "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes");
+					  "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes");
 	engine.setSeverity(SVAVacuousCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAWeakSequenceUnsupported,

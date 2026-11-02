@@ -1,4 +1,4 @@
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module unsupported_generalized_liveness(
 	input logic clk,
@@ -54,7 +54,7 @@ EOF
 design -reset
 
 # Where `c` is low these succeed with no check started to show it
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_if_cover(input logic clk, input logic c, input logic a, input logic b);
 	cover property (@(posedge clk) if (c) a ##1 b);
@@ -63,7 +63,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_implies_cover(input logic clk, input logic x, input logic c,
 								 input logic a);
@@ -73,7 +73,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_case_cover(input logic clk, input logic c, input logic a);
 	cover property (@(posedge clk) case (c) 1'b1: a; endcase);
@@ -83,7 +83,7 @@ EOF
 design -reset
 
 # An attempt with a match of the antecedent followed by `b` can fail on a later one
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_unbounded_antecedent_cover(input logic clk, input logic c,
 											  input logic a, input logic b);
@@ -108,7 +108,7 @@ EOF
 design -reset
 
 # One monitor for both sides of an `or` can't select an attempt for one of them
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module unsupported_selected_or(
 	input logic clk,
@@ -187,7 +187,7 @@ design -reset
 
 # A monitor merging the attempts of `a ##1 b` can't tell whether one of them is still
 # in flight when the reject comes, and so whether it fails
-test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part, no `always` and nothing but a boolean antecedent ahead of its obligations"
 read_slang <<EOF
 module reject_sequence_antecedent(input logic clk, input logic r, input logic a,
 								  input logic b, input logic c);
@@ -197,7 +197,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part, no `always` and nothing but a boolean antecedent ahead of its obligations"
 read_slang <<EOF
 module reject_safety_part(input logic clk, input logic r, input logic a, input logic b);
 	assert property (@(posedge clk) reject_on (r) (a s_until b));
@@ -371,7 +371,7 @@ EOF
 design -reset
 
 # Where `x` is low the attempt succeeds with no check started
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_consequent_cover(input logic clk, input logic x, input logic a,
 									input logic b);
@@ -547,7 +547,7 @@ design -reset
 
 # An eventuality on the left of `iff` or `implies`, or in `or` with a safety side, needs a Boolean
 # combination of justice goals
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module iff_temporal(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) (s_eventually a) iff b);
@@ -556,7 +556,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module implies_temporal(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) (s_eventually a) implies b);
@@ -565,7 +565,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module or_live_safety(input logic clk, input logic a, input logic b, input logic c);
 	assert property (@(posedge clk) (s_eventually a) or (b until c));
@@ -574,7 +574,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
 read_slang <<EOF
 module or_live_boolean(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) (s_eventually a) or b);
@@ -584,7 +584,7 @@ EOF
 design -reset
 
 # A rejection fails the attempts in flight, which a monitor of `always` merges
-test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part, no `always` and nothing but a boolean antecedent ahead of its obligations"
 read_slang <<EOF
 module reject_always(input logic clk, input logic r, input logic a);
 	assert property (@(posedge clk) reject_on (r) always s_eventually a);
@@ -695,5 +695,43 @@ test_slangdiag -expect "unsupported assertion statement"
 read_slang <<EOF
 module eventually_always(input logic clk, input logic a);
 	assert property (@(posedge clk) s_eventually always a);
+endmodule
+EOF
+
+design -reset
+
+# A temporal operand with no liveness in it is no different
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
+read_slang <<EOF
+module or_until_boolean(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) (a until b) or c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property needs an acceptance condition that Yosys $live/$fair cells and safety checks cannot represent: `or` with a temporal operand unless both are unbounded eventualities, `iff` or the left of `implies` with a temporal operand, or an unbounded sequence whose attempts would each need a selection, under an eventuality or in an assumption"
+read_slang <<EOF
+module implies_until(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) (a until b) implies c);
+endmodule
+EOF
+
+design -reset
+
+# The vacuous successes of a nested `if` go unseen as well
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+read_slang <<EOF
+module if_and_cover(input logic clk, input logic a, input logic b, input logic c);
+	cover property (@(posedge clk) (if (a) b) and c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "cover of a property with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+read_slang <<EOF
+module followed_if_cover(input logic clk, input logic x, input logic a, input logic b);
+	cover property (@(posedge clk) x #-# (if (a) b));
 endmodule
 EOF
