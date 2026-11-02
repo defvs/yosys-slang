@@ -25,6 +25,35 @@ module disable_abort_fail ((* gclk *) input logic clk);
 		disable iff (1'b0) request |-> s_eventually grant);
 endmodule
 
+module disable_or_pass ((* gclk *) input logic clk);
+	logic [1:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 3)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire reset = age >= 2;
+	wire grant = 1'b0;
+
+	// The disable aborts the attempt that neither side meets
+	assert property (@(posedge clk)
+		disable iff (reset) request |-> (s_eventually grant) or (s_eventually (grant ##1 grant)));
+endmodule
+
+module disable_or_fail ((* gclk *) input logic clk);
+	logic [1:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 3)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire reset = 1'b0;
+	wire grant = 1'b0;
+
+	assert property (@(posedge clk)
+		disable iff (reset) request |-> (s_eventually grant) or (s_eventually (grant ##1 grant)));
+endmodule
+
 module minimum_delay_pass ((* gclk *) input logic clk);
 	logic [2:0] age = 0;
 	always_ff @(posedge clk)

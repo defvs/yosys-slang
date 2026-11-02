@@ -33,7 +33,7 @@ in the next section:
 | `a |-> property`, `a |=> property` | one consequent attempt per antecedent match |
 | `a #=# property`, `a #-# property` | left-side match plus consequent obligation |
 | property `and` | union of both obligation sets |
-| direct justice `or` | one justice goal over the disjunction |
+| direct justice `or` | one response monitor over the matches of both sides |
 | simple property `implies` and `iff` | gated property or cycle-local equality |
 | property `if` / `else` and `case` | launch-time branch selection |
 | `disable iff`, `accept_on`, `reject_on` | abort or rejection logic as described below |

@@ -1,6 +1,8 @@
 [tasks]
 disable_pass
 disable_fail
+disable_or_pass
+disable_or_fail
 minimum_pass
 minimum_fail
 fairness_pass
@@ -12,6 +14,7 @@ overlapping_requests_pass
 [options]
 mode live
 disable_fail: expect fail
+disable_or_fail: expect fail
 minimum_fail: expect fail
 fairness_fail: expect fail
 suffix_pretrigger_fail: expect fail
@@ -24,6 +27,10 @@ disable_pass: read_rtlil disable_abort_pass.il
 disable_pass: prep -top disable_abort_pass
 disable_fail: read_rtlil disable_abort_fail.il
 disable_fail: prep -top disable_abort_fail
+disable_or_pass: read_rtlil disable_or_pass.il
+disable_or_pass: prep -top disable_or_pass
+disable_or_fail: read_rtlil disable_or_fail.il
+disable_or_fail: prep -top disable_or_fail
 minimum_pass: read_rtlil minimum_delay_pass.il
 minimum_pass: prep -top minimum_delay_pass
 minimum_fail: read_rtlil minimum_delay_fail.il
@@ -42,6 +49,8 @@ overlapping_requests_pass: prep -top overlapping_requests_pass
 [files]
 disable_abort_pass.il
 disable_abort_fail.il
+disable_or_pass.il
+disable_or_fail.il
 minimum_delay_pass.il
 minimum_delay_fail.il
 fairness_pass.il

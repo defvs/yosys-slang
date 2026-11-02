@@ -64,3 +64,18 @@ module unsupported_unbounded_first_match(
 	assert property (@(posedge clk) first_match(a ##[1:$] b) |-> c);
 endmodule
 EOF
+
+design -reset
+
+# One monitor for both sides of an `or` can't select an attempt for one of them
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module unsupported_selected_or(
+	input logic clk,
+	input logic a,
+	input logic b,
+	input logic c
+);
+	assert property (@(posedge clk) (s_eventually (a[*1:$] ##1 b)) or (s_eventually c));
+endmodule
+EOF

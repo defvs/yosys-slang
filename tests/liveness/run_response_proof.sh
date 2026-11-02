@@ -41,6 +41,8 @@ yosys -q -m "${plugin}" -p "
 for top in \
 	disable_abort_pass \
 	disable_abort_fail \
+	disable_or_pass \
+	disable_or_fail \
 	minimum_delay_pass \
 	minimum_delay_fail \
 	fairness_pass \

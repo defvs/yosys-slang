@@ -2174,6 +2174,39 @@ static bool is_direct_justice_property(const ast::AssertionExpr& expr) {
 			!nested->range->max.has_value());
 }
 
+// The matches that meet a direct justice property, for a response monitor to
+// discharge its attempts by
+static std::optional<std::vector<EventualCandidate>>
+justice_candidates(EvalContext& eval, const ast::AssertionExpr& expr) {
+	if (expr.kind == ast::AssertionExprKind::Simple) {
+		const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+		return justice_candidates(
+			eval, simple.expr.as<ast::AssertionInstanceExpression>().body);
+	}
+
+	const auto& unary = expr.as<ast::UnaryAssertionExpr>();
+	if (unary.op == ast::UnaryAssertionOperator::Not) {
+		const auto& nested = unary.expr.as<ast::UnaryAssertionExpr>();
+		auto violation = simple_property_signal(eval, nested.expr, true);
+		if (!violation.has_value()) {
+			eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+			return std::nullopt;
+		}
+		uint32_t minimum = nested.range.has_value() ? nested.range->min : 0;
+		return std::vector<EventualCandidate>{{violation.value(), minimum}};
+	}
+
+	uint32_t minimum = unary.range.has_value() ? unary.range->min : 0;
+	if (!assertion_has_unbounded_sequence(unary.expr))
+		return finite_eventual_candidates(eval, unary.expr, minimum);
+	if (!is_suffix_eventual_sequence(unary.expr)) {
+		// Every attempt would need a selection of its own
+		eval.netlist.add_diag(diag::SVALivenessAcceptanceUnsupported, expr_loc(expr));
+		return std::nullopt;
+	}
+	return suffix_eventual_candidates(eval, unary.expr, minimum);
+}
+
 static PropertyResult lower_eventual(EvalContext& eval,
 									 const ast::UnaryAssertionExpr& eventual,
 									 ir::Net trigger, ir::Net disable) {
@@ -2696,37 +2729,22 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					!property_requires_temporal_obligations(binary.right))
 					break;
 				if (!is_direct_justice_property(binary.left) ||
-					!is_direct_justice_property(binary.right) ||
-					trigger != ir::S1) {
+					!is_direct_justice_property(binary.right)) {
 					eval.netlist.add_diag(
 						diag::SVALivenessAcceptanceUnsupported,
 						expr_loc(expr));
 					return {{}, false};
 				}
-				PropertyResult left =
-					lower_property(eval, binary.left, trigger, disable);
-				PropertyResult right =
-					lower_property(eval, binary.right, trigger, disable);
-				if (!left.valid || !right.valid ||
-					left.obligations.size() != 1 ||
-					right.obligations.size() != 1 ||
-					left.obligations[0].kind !=
-						PropertyObligationKind::Liveness ||
-					right.obligations[0].kind !=
-						PropertyObligationKind::Liveness ||
-					left.obligations[0].en != right.obligations[0].en) {
-					eval.netlist.add_diag(diag::AssertionUnsupported,
-										  expr_loc(expr));
+				// One monitor takes the matches of both sides, an attempt is met by a
+				// match of either that starts late enough for it
+				auto candidates = justice_candidates(eval, binary.left);
+				auto right = justice_candidates(eval, binary.right);
+				if (!candidates.has_value() || !right.has_value())
 					return {{}, false};
-				}
+				candidates->insert(candidates->end(), right->begin(), right->end());
 				PropertyResult result;
-				add_liveness_obligation(
-					result, eval,
-					eval.netlist.LogicOr(
-						eval.netlist.ReduceBool(left.obligations[0].a),
-						eval.netlist.ReduceBool(right.obligations[0].a)),
-					eval.netlist.ReduceBool(left.obligations[0].en),
-					ir::S0);
+				add_response_liveness_obligation(
+					result, eval, *candidates, trigger, disable, expr_loc(expr));
 				return result;
 			}
 		default:
