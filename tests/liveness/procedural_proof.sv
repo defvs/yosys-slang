@@ -324,3 +324,61 @@ module iff_fair_fail ((* gclk *) input logic clk, input logic g);
 
 	assert property (@(posedge clk) s_eventually (!en && g));
 endmodule
+
+// Each tick from the one the attempt of `always P` starts on, an attempt of P starts
+module guard_always_pass ((* gclk *) input logic clk);
+	logic [2:0] cnt = 0;
+	logic first = 1;
+	always_ff @(posedge clk) begin
+		cnt <= cnt + 1'b1;
+		first <= 0;
+	end
+
+	always @(posedge clk)
+		if (first)
+			assert property (always ((cnt == 1) |-> s_eventually (cnt == 5)));
+endmodule
+
+// The attempt of P on the second tick with cnt == 1 never sees cnt == 5 unwrapped
+module guard_always_fail ((* gclk *) input logic clk);
+	logic [2:0] cnt = 0;
+	logic first = 1;
+	logic wrapped = 0;
+	always_ff @(posedge clk) begin
+		cnt <= cnt + 1'b1;
+		first <= 0;
+		if (cnt == 7)
+			wrapped <= 1;
+	end
+
+	always @(posedge clk)
+		if (first)
+			assert property (always ((cnt == 1) |-> s_eventually (cnt == 5 && !wrapped)));
+endmodule
+
+// The attempts of P start on the ticks 2 and 3 only, past the one with cnt == 1
+module guard_ranged_always_pass ((* gclk *) input logic clk);
+	logic [2:0] cnt = 0;
+	logic first = 1;
+	always_ff @(posedge clk) begin
+		cnt <= cnt + 1'b1;
+		first <= 0;
+	end
+
+	always @(posedge clk)
+		if (first)
+			assert property (always [2:3] ((cnt == 1) |-> s_eventually first));
+endmodule
+
+module guard_ranged_always_fail ((* gclk *) input logic clk);
+	logic [2:0] cnt = 0;
+	logic first = 1;
+	always_ff @(posedge clk) begin
+		cnt <= cnt + 1'b1;
+		first <= 0;
+	end
+
+	always @(posedge clk)
+		if (first)
+			assert property (always [1:2] ((cnt == 1) |-> s_eventually first));
+endmodule

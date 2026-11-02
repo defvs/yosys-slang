@@ -138,7 +138,11 @@ for top in \
 	iff_response_pass \
 	iff_response_fail \
 	iff_fair_pass \
-	iff_fair_fail
+	iff_fair_fail \
+	guard_always_pass \
+	guard_always_fail \
+	guard_ranged_always_pass \
+	guard_ranged_always_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/procedural_proof.sv;

@@ -24,7 +24,7 @@ in the next section:
 | --- | --- |
 | `eventually p`, `s_eventually p`, `s_eventually [m:$] p` | response monitor plus `$live` or `$fair` |
 | bounded `eventually`, `s_eventually`, `nexttime`, `s_nexttime` | finite safety monitor |
-| `always p`, `s_always p`, bounded and unbounded ranges | safety checks active over the requested interval |
+| `always p`, `s_always p`, bounded and unbounded ranges | one attempt of `p` per tick of the requested interval |
 | `not (s_eventually p)` / `not (always p)` | dual safety / liveness form |
 | `p until q`, `p until_with q` | weak-until safety monitor |
 | `p s_until q`, `p s_until_with q` | safety monitor plus progress obligation |
@@ -83,7 +83,9 @@ Vacuity and triggering follow the property structure:
 - a nonoverlapped implication or followed-by delays the launch by one sampled
   clock;
 - no antecedent match means no response obligation;
-- a top-level eventual property launches on every enabled sampled clock.
+- a top-level eventual property launches on every enabled sampled clock;
+- `always p` launches `p` on every tick of its interval, where the attempts
+  of overlapping intervals are one and the same.
 
 The condition of a property `if` or `case` is a sampled value, like the
 operands, and so is the condition of an abort, synchronous or not. An abort
@@ -160,14 +162,15 @@ cannot preserve the SVA meaning:
   environment constraint;
 - sequence-language products nested inside a larger unbounded concatenation
   when they would require full automaton product/determinization;
-- `always` or `until` operands that are themselves temporal rather than simple
-  Boolean properties;
+- `until` operands that are themselves temporal rather than simple Boolean
+  properties;
 - temporal `iff`, temporal left operands of property-level `implies`, and
   response-style property `or` whose acceptance cannot be represented by one
   justice goal;
-- `reject_on` around a property with a safety part, or whose obligations
-  start behind an antecedent longer than one sample, since a monitor merging
-  overlapping attempts cannot tell whether one is still in flight;
+- `reject_on` around a property with a safety part, around `always`, or around
+  one whose obligations start behind an antecedent longer than one sample,
+  since a monitor merging overlapping attempts cannot tell whether one is still
+  in flight;
 - a `disable iff` nested in a property by way of instances, which IEEE
   1800-2017 16.12 does not allow;
 - an automatic variable or a const cast read on a later tick than the one the

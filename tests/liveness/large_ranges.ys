@@ -46,6 +46,16 @@ endmodule
 module late_selected(input logic clk, input logic a, input logic b);
 	late_selected_test: assert property (@(posedge clk) s_eventually [2000:$] (a ##[1:$] b));
 endmodule
+
+module always_response(input logic clk, input logic rst, input logic req, input logic ack);
+	always_response_test: assert property (@(posedge clk) disable iff (rst)
+		always (req |-> ##[1:3000] ack));
+endmodule
+
+module late_always_response(input logic clk, input logic rst, input logic a, input logic b);
+	late_always_response_test: assert property (@(posedge clk) disable iff (rst)
+		always [2000:$] (a |-> s_eventually b));
+endmodule
 EOF
 
 select -assert-count 1 late_response/t:$check r:FLAVOR=live %i
@@ -56,7 +66,9 @@ select -assert-count 1 long_suffix/t:$check r:FLAVOR=live %i
 select -assert-count 1 long_suffix/t:$check
 select -assert-max 24000 long_suffix/t:$dff
 
-select -assert-min 1 ranged_always/t:$check r:FLAVOR=assert %i
+# One check over the ticks of the interval
+select -assert-count 1 ranged_always/t:$check r:FLAVOR=assert %i
+select -assert-count 1 ranged_always/t:$check
 select -assert-none ranged_always/t:$check r:FLAVOR=live %i
 select -assert-none ranged_always/t:$check r:FLAVOR=fair %i
 select -assert-max 6000 ranged_always/t:$dff
@@ -98,6 +110,15 @@ select -assert-count 1 late_selected/t:$check r:FLAVOR=live %i
 select -assert-count 1 late_selected/t:$check r:FLAVOR=fair %i
 select -assert-count 2 late_selected/t:$check
 select -assert-max 6000 late_selected/t:$dff
+
+# The attempts of the operand on all the ticks of the interval are one and the same
+select -assert-count 1 always_response/t:$check r:FLAVOR=assert %i
+select -assert-count 1 always_response/t:$check
+select -assert-max 16000 always_response/t:$dff
+
+select -assert-count 1 late_always_response/t:$check r:FLAVOR=live %i
+select -assert-count 1 late_always_response/t:$check
+select -assert-max 6000 late_always_response/t:$dff
 
 async2sync
 formalff -clk2ff

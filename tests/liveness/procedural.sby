@@ -21,6 +21,10 @@ iff_response_pass
 iff_response_fail
 iff_fair_pass
 iff_fair_fail
+guard_always_pass
+guard_always_fail
+guard_ranged_always_pass
+guard_ranged_always_fail
 
 [options]
 mode live
@@ -35,6 +39,8 @@ iff_zero_fail: expect fail
 iff_minimum_fail: expect fail
 iff_response_fail: expect fail
 iff_fair_fail: expect fail
+guard_always_fail: expect fail
+guard_ranged_always_fail: expect fail
 
 [engines]
 aiger suprove
@@ -84,6 +90,14 @@ iff_fair_pass: read_rtlil iff_fair_pass.il
 iff_fair_pass: prep -top iff_fair_pass
 iff_fair_fail: read_rtlil iff_fair_fail.il
 iff_fair_fail: prep -top iff_fair_fail
+guard_always_pass: read_rtlil guard_always_pass.il
+guard_always_pass: prep -top guard_always_pass
+guard_always_fail: read_rtlil guard_always_fail.il
+guard_always_fail: prep -top guard_always_fail
+guard_ranged_always_pass: read_rtlil guard_ranged_always_pass.il
+guard_ranged_always_pass: prep -top guard_ranged_always_pass
+guard_ranged_always_fail: read_rtlil guard_ranged_always_fail.il
+guard_ranged_always_fail: prep -top guard_ranged_always_fail
 
 [files]
 guard_response_pass: guard_response_pass.il
@@ -108,3 +122,7 @@ iff_response_pass: iff_response_pass.il
 iff_response_fail: iff_response_fail.il
 iff_fair_pass: iff_fair_pass.il
 iff_fair_fail: iff_fair_fail.il
+guard_always_pass: guard_always_pass.il
+guard_always_fail: guard_always_fail.il
+guard_ranged_always_pass: guard_ranged_always_pass.il
+guard_ranged_always_fail: guard_ranged_always_fail.il

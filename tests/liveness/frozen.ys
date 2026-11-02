@@ -161,6 +161,18 @@ design -reset
 
 test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
 read_slang <<EOF
+module always_property_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (always (t |-> s_eventually b));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
 module until_operand(input logic clk, input logic a, input logic b);
 	always @(posedge clk) begin
 		automatic logic t = a ^ b;
@@ -226,11 +238,12 @@ module first_tick(input logic clk, input logic a, input logic b, input logic c);
 		antecedent_check: assert property (t ##1 b[*1:$] |-> c);
 		cast_check: assert property (const'(x) |-> s_eventually b);
 		within_check: assert property (strong(b within (t ##1 c[->1])));
+		always_property_check: assert property (always [0:0] (t |-> s_eventually b));
 	end
 endmodule
 EOF
 
-select -assert-count 15 t:$check
-select -assert-count 8 t:$check r:FLAVOR=live %i
+select -assert-count 16 t:$check
+select -assert-count 9 t:$check r:FLAVOR=live %i
 select -assert-count 2 t:$check r:FLAVOR=fair %i
 select -assert-count 5 t:$check r:FLAVOR=assert %i

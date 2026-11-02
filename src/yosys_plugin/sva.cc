@@ -2393,6 +2393,13 @@ static bool in_flight_by_obligations(const ast::AssertionExpr& expr) {
 			return !instance.isRecursiveProperty && in_flight_by_obligations(instance.body);
 		}
 	case ast::AssertionExprKind::Unary:
+		{
+			// An attempt of `always P` is in flight through its interval, past the
+			// first tick of the attempts of P it starts
+			auto op = expr.as<ast::UnaryAssertionExpr>().op;
+			return op != ast::UnaryAssertionOperator::Always &&
+				   op != ast::UnaryAssertionOperator::SAlways;
+		}
 	case ast::AssertionExprKind::StrongWeak:
 		// Lowered to obligations that start on the trigger
 		return true;
@@ -2525,47 +2532,46 @@ static PropertyResult lower_eventual(EvalContext& eval,
 	return result;
 }
 
+// An attempt of `always P` starts one of P on each tick of its interval, those of
+// overlapping attempts on the same tick are one and the same
 static PropertyResult lower_always(EvalContext& eval,
 								   const ast::UnaryAssertionExpr& always_expr,
 								   ir::Net trigger, bool attempt_tick,
-								   ir::Net disable) {
+								   const PropertyAborts& aborts) {
 	PropertyResult result;
+	ir::Net disable = aborts.any(eval);
+	slang::SourceLocation loc = expr_loc(always_expr);
 	// Only `always [0:0]` reads its operand on the trigger tick alone
 	bool late = !attempt_tick || !always_expr.range.has_value() ||
 				always_expr.range->max != uint32_t(0);
 	auto condition = simple_property_signal(eval, always_expr.expr, late);
-	if (!condition.has_value()) {
-		eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(always_expr));
-		result.valid = false;
-		return result;
-	}
 
 	uint32_t minimum = always_expr.range.has_value()
 		? always_expr.range->min : 0;
-	trigger = delayed_abortable_trigger(eval, trigger, minimum, disable,
-										expr_loc(always_expr));
+	ir::Net start = delayed_abortable_trigger(eval, trigger, minimum, disable, loc);
 
+	// The ticks of the interval of some attempt, short of those a disable came upon
+	// ahead of them
+	ir::Net window;
 	if (always_expr.range.has_value() &&
 		always_expr.range->max.has_value()) {
 		uint32_t maximum = always_expr.range->max.value();
-		ir::Net enable = trigger;
-		for (uint32_t offset = minimum; offset <= maximum; offset++) {
-			if (offset != minimum)
-				enable = delayed_abortable_trigger(
-					eval, enable, 1, disable, expr_loc(always_expr));
-			add_safety_obligation(result, condition.value(),
-				eval.netlist.LogicAnd(enable, sva_not(eval, disable)));
+		ir::Net enable = start;
+		window = start;
+		for (uint32_t offset = minimum; offset < maximum; offset++) {
+			enable = delayed_abortable_trigger(eval, enable, 1, disable, loc);
+			window = eval.netlist.LogicOr(window, enable);
 		}
-		return result;
+	} else {
+		window = add_pending_monitor(eval, start, ir::S0, disable, loc);
 	}
 
-	ir::Net pending = add_pending_monitor(eval, trigger,
-											   ir::S0,
-											   disable,
-											   expr_loc(always_expr));
-	add_safety_obligation(result, condition.value(),
-		eval.netlist.LogicAnd(pending, sva_not(eval, disable)));
-	return result;
+	if (condition.has_value()) {
+		add_safety_obligation(result, condition.value(),
+			eval.netlist.LogicAnd(window, sva_not(eval, disable)));
+		return result;
+	}
+	return lower_property(eval, always_expr.expr, window, !late, aborts);
 }
 
 static PropertyResult lower_until(EvalContext& eval,
@@ -2635,7 +2641,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			return lower_eventual(eval, unary, trigger, attempt_tick, aborts);
 		if (unary.op == ast::UnaryAssertionOperator::Always ||
 			unary.op == ast::UnaryAssertionOperator::SAlways)
-			return lower_always(eval, unary, trigger, attempt_tick, disable);
+			return lower_always(eval, unary, trigger, attempt_tick, aborts);
 		if (unary.op == ast::UnaryAssertionOperator::Not) {
 			const auto *nested = unary.expr.as_if<ast::UnaryAssertionExpr>();
 			if (nested &&

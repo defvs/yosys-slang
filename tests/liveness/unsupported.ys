@@ -160,19 +160,7 @@ EOF
 
 design -reset
 
-# A repeated sequence is no Boolean operand for `always`, `until` or `implies`
-test_slangdiag -expect "unsupported assertion statement"
-read_slang <<EOF
-module repeated_always_operand(input logic clk, input logic a);
-	sequence s;
-		a;
-	endsequence
-	assert property (@(posedge clk) always (not s[*2]));
-endmodule
-EOF
-
-design -reset
-
+# A repeated sequence is no Boolean operand for `until` or `implies`
 test_slangdiag -expect "unsupported assertion statement"
 read_slang <<EOF
 module repeated_until_operand(input logic clk, input logic a, input logic b);
