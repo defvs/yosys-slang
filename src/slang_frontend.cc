@@ -3594,7 +3594,7 @@ const ast::InstanceBodySymbol &NetlistContext::find_common_ancestor(const ast::I
 	return *pa[i - 1];
 }
 
-bool NetlistContext::check_hier_ref(const ast::ValueSymbol &symbol, slang::SourceRange range, bool silent)
+bool NetlistContext::check_hier_ref(const ast::Symbol &symbol, slang::SourceRange range, bool silent)
 {
 	const ast::InstanceBodySymbol *symbol_realm = find_symbol_realm(symbol);
 	if (!symbol_realm) {

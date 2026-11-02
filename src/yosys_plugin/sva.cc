@@ -11,6 +11,7 @@
 #include <optional>
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/SemanticFacts.h"
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Compilation.h"
 #include "slang/ast/TimingControl.h"
 #include "kernel/rtlil.h"
@@ -940,6 +941,26 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 	return { sig.sig, eval.netlist.LogicAnd(attempted, sig.en) };
 }
 
+// The body of a sequence or property names signals of the instance it's declared in.
+// Unless that instance is part of the netlist we're building, those are hierarchical
+// references across a preserved module boundary.
+static bool check_instance_realms(NetlistContext &netlist, const ast::AssertionExpr &expr)
+{
+	bool ok = true;
+	auto visitor = ast::makeVisitor([&](auto &visitor, const ast::AssertionInstanceExpression &instance) {
+		// Declarations in a package belong to no realm
+		if (netlist.find_symbol_realm(instance.symbol) &&
+				!netlist.check_hier_ref(instance.symbol, instance.sourceRange)) {
+			ok = false;
+			return;
+		}
+		if (!instance.isRecursiveProperty)
+			visitor.visitDefault(instance);
+	});
+	expr.visit(visitor);
+	return ok;
+}
+
 // Process a 'concurrent assertion'
 //
 // Any top level clocking expressions have been stripped. Clocking is part
@@ -949,6 +970,9 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 						  ProceduralContext &procedural, const ast::AssertionExpr &top_expr)
 {
 	auto &netlist = procedural.netlist;
+
+	if (!check_instance_realms(netlist, top_expr))
+		return;
 
 	const ast::AssertionExpr *expr = &top_expr;
 	if (auto clocking_expr = get_top_clocking_expr(*expr)) {
@@ -1080,6 +1104,9 @@ void process_freestanding_sva_property(NetlistContext &netlist,
 {
 	const ast::AssertionExpr &spec = statement.propertySpec;
 	const ast::Scope *scope = netlist.process_scope;
+
+	if (!check_instance_realms(netlist, spec))
+		return;
 
 	if (auto clocking_expr = get_top_clocking_expr(spec)) {
 		// Need to strip clocking

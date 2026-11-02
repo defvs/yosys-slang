@@ -743,7 +743,7 @@ struct NetlistContext : GraphBuilder, public DiagnosticIssuer {
 	// this will be the top module.
 	const ast::InstanceBodySymbol *find_symbol_realm(const ast::Symbol &symbol);
 	const ast::InstanceBodySymbol &find_common_ancestor(const ast::InstanceBodySymbol &a, const ast::InstanceBodySymbol &b);
-	bool check_hier_ref(const ast::ValueSymbol &symbol, slang::SourceRange range, bool silent=false);
+	bool check_hier_ref(const ast::Symbol &symbol, slang::SourceRange range, bool silent=false);
 
 	void register_driven(const VariableBits &vbits);
 	void register_driven(const ast::Symbol &symbol);
