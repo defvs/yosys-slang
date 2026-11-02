@@ -33,6 +33,7 @@ set(ALL_TESTS
     liveness/large_ranges.ys
     liveness/procedural.ys
     liveness/property_conditions.ys
+    liveness/frozen.ys
     sva/seqequiv.tcl
     sva/action_blocks.ys
     sva/comb_default_clocking.ys

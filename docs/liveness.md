@@ -170,9 +170,13 @@ cannot preserve the SVA meaning:
   overlapping attempts cannot tell whether one is still in flight;
 - a `disable iff` nested in a property by way of instances, which IEEE
   1800-2017 16.12 does not allow;
-- an automatic variable or a const cast in the condition of a `disable iff`
-  or an abort, whose value a monitor would read on later ticks than the one
-  the attempt was queued on;
+- an automatic variable or a const cast read on a later tick than the one the
+  attempt was queued on, which is where it keeps its value (IEEE 1800-2017
+  16.14.6.1): in the condition of a `disable iff` or an abort, in an operand of
+  `always`, `until` or an eventuality, after a delay or an unbounded repetition
+  in a sequence, or in a consequent that starts on a later tick. On the first
+  tick of the attempt, as in the antecedent `t` of `t |-> s_eventually b` or in
+  the condition of a property `if`, it is read as frozen;
 - multiple or incompatible assertion clocks, sampled-value clock arguments,
   and temporal monitors with no single clock edge to run on: in `always_comb`
   or `always @*` with neither a clock of the assertion's own nor a default

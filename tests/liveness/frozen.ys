@@ -1,0 +1,236 @@
+# An automatic variable or a const cast keeps the value it had when the attempt was
+# queued (IEEE Std 1800-2017 section 16.14.6.1), which the monitors only have on the
+# first tick of the attempt. Read on a later tick, or for another attempt, it has to
+# be rejected.
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module eventual_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (s_eventually t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module eventual_cast(input logic clk, input logic a);
+	logic x;
+	always @(posedge clk) begin
+		x = a;
+		assert property (s_eventually [2:$] const'(x));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module suffix_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (strong(##[1:$] t ##1 b));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module selected_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (strong(b ##[1:$] t));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module goto_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (strong(t[->1]));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module throughout_condition(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (strong(t throughout b[->1]));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module within_operand(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (strong((t ##1 b) within c[->2]));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module unbounded_antecedent(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (b[*1:$] ##1 t |-> c);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module late_consequent(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (b[*1:$] ##1 c |-> t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module late_condition(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (b |=> if (t) s_eventually c);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module late_followed(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (b #=# (t implies s_eventually c));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module always_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (always t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module ranged_always_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (always [0:2] t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module until_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (b until t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module not_always_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (not (always [0:2] t));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module not_eventually_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property (not (s_eventually t));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module justice_or_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		assert property ((s_eventually b) or (not (always t)));
+	end
+endmodule
+EOF
+
+design -reset
+
+# On the first tick of the attempt they keep their value
+read_slang <<EOF
+module first_tick(input logic clk, input logic a, input logic b, input logic c);
+	logic x;
+	always @(posedge clk) begin
+		automatic logic t = a ^ b;
+		x = a;
+		response_check: assert property (t |-> s_eventually b);
+		selected_check: assert property (strong(t ##[1:$] b));
+		if_check: assert property (if (t) s_eventually b);
+		case_check: assert property (case (t) 1'b1: s_eventually b; endcase);
+		iff_check: assert property (t iff b);
+		implies_check: assert property (t implies s_eventually b);
+		always_check: assert property (always [0:0] t);
+		not_always_check: assert property (not (always [0:0] t));
+		followed_check: assert property (t #-# s_eventually b);
+		antecedent_check: assert property (t ##1 b[*1:$] |-> c);
+		cast_check: assert property (const'(x) |-> s_eventually b);
+		within_check: assert property (strong(b within (t ##1 c[->1])));
+	end
+endmodule
+EOF
+
+select -assert-count 15 t:$check
+select -assert-count 8 t:$check r:FLAVOR=live %i
+select -assert-count 2 t:$check r:FLAVOR=fair %i
+select -assert-count 5 t:$check r:FLAVOR=assert %i
