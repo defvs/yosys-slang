@@ -18,8 +18,8 @@ _VARIOUS_TESTS = [
 
 # sva/seqequiv.tcl is CMake-only as it needs yosys-abc for its proofs
 _SVA_TESTS = [
-    "frozen_past_first_tick", "kept_hierarchy", "local_variables", "nested_disable",
-    "range_guard", "repeated_labels", "unsupported_clocking",
+    "comb_default_clocking", "frozen_past_first_tick", "kept_hierarchy", "local_variables",
+    "nested_disable", "range_guard", "repeated_labels", "unsupported_clocking",
     "unsupported_sampled_clocking", "vector_delay_init",
 ]
 

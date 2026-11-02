@@ -961,18 +961,17 @@ static bool check_instance_realms(NetlistContext &netlist, const ast::AssertionE
 	return ok;
 }
 
-// Process a 'concurrent assertion'
+// Lower a concurrent assertion to a check on the timing of `procedural`, with `attempt`
+// for the procedural code around the assertion queueing an attempt
 //
 // Any top level clocking expressions have been stripped. Clocking is part
-// of the created procedural context.
-void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
-						  const ast::StatementBlockSymbol *block,
-						  ProceduralContext &procedural, const ast::AssertionExpr &top_expr)
+// of the procedural context.
+static void lower_sva_property(const ast::ConcurrentAssertionStatement &statement,
+							   const ast::StatementBlockSymbol *block,
+							   ProceduralContext &procedural, const ast::AssertionExpr &top_expr,
+							   ir::Net attempt)
 {
 	auto &netlist = procedural.netlist;
-
-	if (!check_instance_realms(netlist, top_expr))
-		return;
 
 	const ast::AssertionExpr *expr = &top_expr;
 	if (auto clocking_expr = get_top_clocking_expr(*expr)) {
@@ -988,7 +987,7 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 
 	AssertionResult result;
 	try {
-		result = eval_assertion(procedural.eval, *expr, procedural.case_enable(),
+		result = eval_assertion(procedural.eval, *expr, attempt,
 								statement.assertionKind == ast::AssertionKind::CoverProperty);
 	} catch (const SvaLimitExceeded &) {
 		netlist.add_diag(diag::AssertionUnsupported, expr_loc(*expr));
@@ -1078,18 +1077,50 @@ static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingC
 	return true;
 }
 
+// The clock of an assertion with none inferred from its surroundings: its own, which
+// gets stripped from `expr`, or else the default clocking (IEEE Std 1800-2017 sections
+// 16.14.6 and 16.16)
+static const ast::TimingControl *assertion_clocking(NetlistContext &netlist,
+													const ast::AssertionExpr *&expr)
+{
+	if (auto clocking_expr = get_top_clocking_expr(*expr)) {
+		expr = &clocking_expr->expr;
+		return &clocking_expr->clocking;
+	}
+
+	const ast::Scope *scope = netlist.process_scope;
+	if (!scope)
+		return nullptr;
+
+	auto default_clocking = scope->getCompilation().getDefaultClocking(*scope);
+	return default_clocking ? &default_clocking->as<ast::ClockingBlockSymbol>().getEvent() : nullptr;
+}
+
+// Lower a concurrent assertion on a clock of its own. In a process the attempts are
+// queued by the code around the assertion, as of the clock tick, outside of one there's
+// an attempt on each tick.
 static void process_clocked_sva_property(NetlistContext &netlist,
 										 const ast::ConcurrentAssertionStatement &statement,
 										 const ast::StatementBlockSymbol *block,
 										 const ast::TimingControl &clocking,
-										 const ast::AssertionExpr &expr)
+										 const ast::AssertionExpr &expr,
+										 ProceduralContext *process = nullptr)
 {
 	ProcessTiming timing(ProcessTiming::EdgeTriggered);
 	if (!timing_from_sva_clocking(netlist, clocking, timing))
 		return;
 
 	ProceduralContext procedure(netlist, timing);
-	process_sva_property(statement, block, procedure, expr);
+	ir::Net attempt;
+	if (process) {
+		// Read the variables of the process as they are at the assertion
+		procedure.eval.scope_nest_level = process->eval.scope_nest_level;
+		procedure.inherit_state(*process);
+		attempt = process->case_enable();
+	} else {
+		attempt = procedure.case_enable();
+	}
+	lower_sva_property(statement, block, procedure, expr, attempt);
 
 	RTLIL::Process *rtlil_proc = netlist.backend->canvas->addProcess(netlist.backend->new_id());
 	transfer_attrs(netlist, statement, rtlil_proc);
@@ -1098,32 +1129,46 @@ static void process_clocked_sva_property(NetlistContext &netlist,
 #endif
 }
 
-void process_freestanding_sva_property(NetlistContext &netlist,
-									   const ast::ConcurrentAssertionStatement &statement,
-						  			   const ast::StatementBlockSymbol *block)
+// Process a concurrent assertion in procedural code
+void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
+						  const ast::StatementBlockSymbol *block,
+						  ProceduralContext &procedural, const ast::AssertionExpr &top_expr)
 {
-	const ast::AssertionExpr &spec = statement.propertySpec;
-	const ast::Scope *scope = netlist.process_scope;
+	auto &netlist = procedural.netlist;
 
-	if (!check_instance_realms(netlist, spec))
+	if (!check_instance_realms(netlist, top_expr))
 		return;
 
-	if (auto clocking_expr = get_top_clocking_expr(spec)) {
-		// Need to strip clocking
-		process_clocked_sva_property(netlist, statement, block, clocking_expr->clocking,
-									 clocking_expr->expr);
-		return;
-	} else if (scope) {
-		if (auto default_clocking = scope->getCompilation().getDefaultClocking(*scope)) {
-			const auto &clocking = default_clocking->as<ast::ClockingBlockSymbol>().getEvent();
-			process_clocked_sva_property(netlist, statement, block, clocking, spec);
+	// No clock gets inferred from a process with no edge in its event control. The
+	// branches of an asynchronous reset have none either, but belong to one with an edge.
+	if (procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) {
+		const ast::AssertionExpr *expr = &top_expr;
+		if (auto clocking = assertion_clocking(netlist, expr)) {
+			process_clocked_sva_property(netlist, statement, block, *clocking, *expr, &procedural);
 			return;
 		}
 	}
 
+	lower_sva_property(statement, block, procedural, top_expr, procedural.case_enable());
+}
+
+void process_freestanding_sva_property(NetlistContext &netlist,
+									   const ast::ConcurrentAssertionStatement &statement,
+						  			   const ast::StatementBlockSymbol *block)
+{
+	const ast::AssertionExpr *expr = &statement.propertySpec;
+
+	if (!check_instance_realms(netlist, *expr))
+		return;
+
+	if (auto clocking = assertion_clocking(netlist, expr)) {
+		process_clocked_sva_property(netlist, statement, block, *clocking, *expr);
+		return;
+	}
+
 	// No clocking
 	ProceduralContext procedure(netlist, ProcessTiming::implicit);
-	process_sva_property(statement, block, procedure, spec);
+	lower_sva_property(statement, block, procedure, *expr, procedure.case_enable());
 
 	RTLIL::Process *rtlil_proc = netlist.backend->canvas->addProcess(netlist.backend->new_id());
 	transfer_attrs(netlist, statement, rtlil_proc);

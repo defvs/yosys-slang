@@ -35,6 +35,25 @@ design -reset
 
 test_slangdiag -expect "encountered unsupported SVA feature"
 read_slang <<EOF
+module explicit_clock_in_reset_branch(input logic clk, input logic rst, input logic a, input logic b,
+									  input logic d, output logic q);
+	always_ff @(posedge clk or posedge rst) begin
+		if (rst) begin
+			reset_test: assert property (@(posedge clk) a |=> b);
+			q <= 1'b0;
+		end else begin
+			q <= d;
+		end
+	end
+endmodule
+EOF
+
+select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
 module repeated_clocked_sequence(input logic clk, input logic a, input logic b);
 	sequence s;
 		@(posedge clk) a ##1 b;
