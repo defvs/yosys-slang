@@ -141,8 +141,8 @@ DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
 DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
 DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
-DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1094);
-DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1095);
+DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
+DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
