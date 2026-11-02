@@ -26,5 +26,5 @@ module liveness_regular_sequences (
 		strong((a ##1 b) within (##[0:$] c)));
 
 	nested_eventual: assert property (@(posedge clk)
-		s_eventually (a ##[0:$] b));
+		s_eventually strong(a ##[0:$] b));
 endmodule

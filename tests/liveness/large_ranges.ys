@@ -44,7 +44,7 @@ module late_not_always(input logic clk, input logic a);
 endmodule
 
 module late_selected(input logic clk, input logic a, input logic b);
-	late_selected_test: assert property (@(posedge clk) s_eventually [2000:$] (a ##[1:$] b));
+	late_selected_test: assert property (@(posedge clk) s_eventually [2000:$] strong(a ##[1:$] b));
 endmodule
 
 module always_response(input logic clk, input logic rst, input logic req, input logic ack);

@@ -46,7 +46,7 @@ module guard_selected_pass ((* gclk *) input logic clk);
 
 	always @(posedge clk)
 		if (c)
-			assert property (s_eventually (a ##[1:$] b));
+			assert property (s_eventually strong(a ##[1:$] b));
 endmodule
 
 module guard_selected_fail ((* gclk *) input logic clk);
@@ -61,7 +61,7 @@ module guard_selected_fail ((* gclk *) input logic clk);
 
 	always @(posedge clk)
 		if (c)
-			assert property (s_eventually (a ##[1:$] b));
+			assert property (s_eventually strong(a ##[1:$] b));
 endmodule
 
 module guard_or_pass ((* gclk *) input logic clk);

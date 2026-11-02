@@ -116,7 +116,7 @@ module unsupported_selected_or(
 	input logic b,
 	input logic c
 );
-	assert property (@(posedge clk) (s_eventually (a[*1:$] ##1 b)) or (s_eventually c));
+	assert property (@(posedge clk) (s_eventually strong(a[*1:$] ##1 b)) or (s_eventually c));
 endmodule
 EOF
 
@@ -201,5 +201,75 @@ test_slangdiag -expect "`reject_on` is supported around a liveness property with
 read_slang <<EOF
 module reject_safety_part(input logic clk, input logic r, input logic a, input logic b);
 	assert property (@(posedge clk) reject_on (r) (a s_until b));
+endmodule
+EOF
+
+design -reset
+
+# A sequence used as a property is weak in an assertion or an assumption (IEEE
+# 1800-2017 16.12.2). With an unbounded match it holds as long as one is still to
+# come, so this assumption constrains nothing, while reading it strong would make
+# `b` come.
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_eventual_assume(input logic clk, input logic b);
+	assume property (@(posedge clk) s_eventually (##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_eventual_assert(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> s_eventually (a ##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_eventual_named(input logic clk, input logic a, input logic b);
+	sequence s;
+		a[*1:$] ##1 b;
+	endsequence
+	assert property (@(posedge clk) s_eventually [2:$] s);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_eventual_nexttime(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) s_eventually (nexttime (a ##[1:$] b)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_eventual_or(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) (s_eventually (##[1:$] b)) or (s_eventually c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_explicit(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> s_eventually weak(a ##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_top(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) weak(a ##[1:$] b));
 endmodule
 EOF

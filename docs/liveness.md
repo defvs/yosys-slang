@@ -149,7 +149,11 @@ cannot preserve the SVA meaning:
 
 - SVA match items, sequence local-variable assignments, and action subroutines;
 - recursive named properties or sequences;
-- weak sequences with an unbounded match;
+- weak sequences with an unbounded match. In `assert` and `assume` a sequence
+  used as a property is weak unless written `strong(...)` (IEEE 1800-2017
+  16.12.2), and so is the operand of an eventuality: `s_eventually (a ##[1:$]
+  b)` is met by an `a` with no `b` after it, while `s_eventually strong(a
+  ##[1:$] b)` needs the `b` and is lowered;
 - `cover property` of `always`, `until` or liveness properties, because their
   obligations describe what has to keep holding rather than an observable
   point of success;

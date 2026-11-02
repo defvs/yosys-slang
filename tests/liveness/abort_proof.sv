@@ -71,7 +71,7 @@ module selected_minimum_fail ((* gclk *) input logic clk);
 	wire q = t == 1, a = t == 3, b = t == 4;
 
 	assert property (@(posedge clk)
-		start |-> reject_on (q) s_eventually [2:$] (a ##[1:$] b));
+		start |-> reject_on (q) s_eventually [2:$] strong(a ##[1:$] b));
 endmodule
 
 module selected_minimum_pass ((* gclk *) input logic clk);
@@ -84,7 +84,7 @@ module selected_minimum_pass ((* gclk *) input logic clk);
 	wire q = t == 5, a = t == 3, b = t == 4;
 
 	assert property (@(posedge clk)
-		start |-> reject_on (q) s_eventually [2:$] (a ##[1:$] b));
+		start |-> reject_on (q) s_eventually [2:$] strong(a ##[1:$] b));
 endmodule
 
 // An antecedent sees the letters of a reject_on dual, so it matches from the

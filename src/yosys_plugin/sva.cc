@@ -90,6 +90,8 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int cycles, 
 	return line[cycles - 1];
 }
 
+static bool assertion_has_unbounded_sequence(const ast::AssertionExpr& expr);
+
 // This regular-sequence monitor follows the NFA representation used by Yosys'
 // Verific SVA frontend.  Keeping the representation here, instead of expanding
 // unbounded ranges, is what makes unbounded SVA synthesis finite and exact.
@@ -641,6 +643,20 @@ public:
 			return {start, false};
 
 		case ast::AssertionExprKind::StrongWeak:
+			{
+				// A sequence used as a property, as is the operand of `nexttime` in an
+				// eventuality. A weak one is strong where it's bounded, and an empty
+				// match is no success either way.
+				const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
+				if (strong_weak.strength == ast::StrongWeakAssertionExpr::Weak &&
+					assertion_has_unbounded_sequence(strong_weak.expr)) {
+					eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(expr));
+					valid = false;
+					return {start, false};
+				}
+				return {parse(start, strong_weak.expr).end, false};
+			}
+
 		case ast::AssertionExprKind::Abort:
 		case ast::AssertionExprKind::Conditional:
 		case ast::AssertionExprKind::Case:
@@ -1600,6 +1616,85 @@ static bool assertion_has_unbounded_sequence(const ast::AssertionExpr& expr) {
 	assert_invariant(false && "unreachable");
 }
 
+// A sequence with an unbounded match that's read as weak in the property, if it has one.
+// A sequence used as a property of an assertion or an assumption is weak unless written
+// strong() (IEEE Std 1800-2017 section 16.12.2). It holds then as long as a match is still
+// to come, and the monitors only tell where one came.
+static const ast::AssertionExpr* find_weak_unbounded_sequence(const ast::AssertionExpr& expr) {
+	const ast::AssertionExpr& top = unwrap_property_instances(expr);
+	if (!is_property(top))
+		return assertion_has_unbounded_sequence(top) ? &expr : nullptr;
+
+	auto either = [](const ast::AssertionExpr* left, const ast::AssertionExpr* right) {
+		return left ? left : right;
+	};
+	switch (top.kind) {
+	case ast::AssertionExprKind::StrongWeak:
+		{
+			const auto& strong_weak = top.as<ast::StrongWeakAssertionExpr>();
+			bool weak = strong_weak.strength == ast::StrongWeakAssertionExpr::Weak;
+			return weak && assertion_has_unbounded_sequence(strong_weak.expr) ? &top : nullptr;
+		}
+	case ast::AssertionExprKind::Unary:
+		return find_weak_unbounded_sequence(top.as<ast::UnaryAssertionExpr>().expr);
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = top.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::OverlappedImplication:
+			case ast::BinaryAssertionOperator::NonOverlappedImplication:
+			case ast::BinaryAssertionOperator::OverlappedFollowedBy:
+			case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
+				// The left side is a sequence, not used as a property
+				return find_weak_unbounded_sequence(binary.right);
+			default:
+				return either(find_weak_unbounded_sequence(binary.left),
+							  find_weak_unbounded_sequence(binary.right));
+			}
+		}
+	case ast::AssertionExprKind::Abort:
+		return find_weak_unbounded_sequence(top.as<ast::AbortAssertionExpr>().expr);
+	case ast::AssertionExprKind::Conditional:
+		{
+			const auto& conditional = top.as<ast::ConditionalAssertionExpr>();
+			return either(find_weak_unbounded_sequence(conditional.ifExpr),
+						  conditional.elseExpr
+							  ? find_weak_unbounded_sequence(*conditional.elseExpr)
+							  : nullptr);
+		}
+	case ast::AssertionExprKind::Case:
+		{
+			const auto& case_expr = top.as<ast::CaseAssertionExpr>();
+			for (const auto& item : case_expr.items)
+				if (auto weak = find_weak_unbounded_sequence(*item.body))
+					return weak;
+			return case_expr.defaultCase
+				? find_weak_unbounded_sequence(*case_expr.defaultCase) : nullptr;
+		}
+	case ast::AssertionExprKind::Clocking:
+		return find_weak_unbounded_sequence(top.as<ast::ClockingAssertionExpr>().expr);
+	case ast::AssertionExprKind::DisableIff:
+		return find_weak_unbounded_sequence(top.as<ast::DisableIffAssertionExpr>().expr);
+	default:
+		return nullptr;
+	}
+}
+
+// The operand of an eventuality, which is read as strong by the monitors, with a strong()
+// around it taken off. An error is raised if it has a weak sequence they can't read so.
+static const ast::AssertionExpr* eventual_operand(EvalContext& eval,
+												   const ast::AssertionExpr& expr) {
+	if (auto weak = find_weak_unbounded_sequence(expr)) {
+		eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(*weak));
+		return nullptr;
+	}
+	// The sequence of a weak() is bounded, it then holds where it's strong
+	const ast::AssertionExpr& top = unwrap_property_instances(expr);
+	if (top.kind == ast::AssertionExprKind::StrongWeak)
+		return &top.as<ast::StrongWeakAssertionExpr>().expr;
+	return &expr;
+}
+
 // A suffix-eventual sequence has a finite suffix preceded by one unbounded
 // delay.  Its completion event can be shared by all pending triggers, provided
 // the finite suffix duration is tracked.  More general unbounded regular
@@ -2470,14 +2565,17 @@ justice_candidates(EvalContext& eval, const ast::AssertionExpr& expr) {
 	}
 
 	uint32_t minimum = unary.range.has_value() ? unary.range->min : 0;
-	if (!assertion_has_unbounded_sequence(unary.expr))
-		return finite_eventual_candidates(eval, unary.expr, minimum);
-	if (!is_suffix_eventual_sequence(unary.expr)) {
+	const ast::AssertionExpr* operand = eventual_operand(eval, unary.expr);
+	if (operand == nullptr)
+		return std::nullopt;
+	if (!assertion_has_unbounded_sequence(*operand))
+		return finite_eventual_candidates(eval, *operand, minimum);
+	if (!is_suffix_eventual_sequence(*operand)) {
 		// Every attempt would need a selection of its own
 		eval.netlist.add_diag(diag::SVALivenessAcceptanceUnsupported, expr_loc(expr));
 		return std::nullopt;
 	}
-	return suffix_eventual_candidates(eval, unary.expr, minimum);
+	return suffix_eventual_candidates(eval, *operand, minimum);
 }
 
 static PropertyResult lower_eventual(EvalContext& eval,
@@ -2492,8 +2590,11 @@ static PropertyResult lower_eventual(EvalContext& eval,
 
 	ir::Net disable = aborts.any(eval);
 	uint32_t minimum = eventual.range.has_value() ? eventual.range->min : 0;
-	if (assertion_has_unbounded_sequence(eventual.expr) &&
-		!is_suffix_eventual_sequence(eventual.expr)) {
+	const ast::AssertionExpr* operand = eventual_operand(eval, eventual.expr);
+	if (operand == nullptr)
+		return {{}, false};
+	if (assertion_has_unbounded_sequence(*operand) &&
+		!is_suffix_eventual_sequence(*operand)) {
 		ir::Net selected = add_selected_trigger(
 			result, eval, trigger, disable, expr_loc(eventual));
 		if (!result.valid)
@@ -2509,7 +2610,7 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		// tick from the minimum delay on.
 		bool admits_empty;
 		auto goal = synthesize_selected_sequence(
-			eval, eventual.expr, future_start, ir::S0, false, admits_empty);
+			eval, *operand, future_start, ir::S0, false, admits_empty);
 		if (!goal.has_value())
 			return {{}, false};
 		// The attempt is in flight from the tick it was selected on, all through the
@@ -2519,10 +2620,10 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		return result;
 	}
 	std::optional<std::vector<EventualCandidate>> candidates;
-	if (assertion_has_unbounded_sequence(eventual.expr))
-		candidates = suffix_eventual_candidates(eval, eventual.expr, minimum);
+	if (assertion_has_unbounded_sequence(*operand))
+		candidates = suffix_eventual_candidates(eval, *operand, minimum);
 	else
-		candidates = finite_eventual_candidates(eval, eventual.expr, minimum);
+		candidates = finite_eventual_candidates(eval, *operand, minimum);
 	if (!candidates.has_value()) {
 		result.valid = false;
 		return result;
@@ -2719,7 +2820,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			// Weak only changes end-of-simulation behavior.  For a finite
 			// sequence, the ordinary finite monitor is exact.
 			if (assertion_has_unbounded_sequence(strong_weak.expr)) {
-				eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+				eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(expr));
 				return {{}, false};
 			}
 			return lower_finite_property_from_trigger(

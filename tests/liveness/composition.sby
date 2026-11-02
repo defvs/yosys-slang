@@ -1,0 +1,38 @@
+[tasks]
+strong_assumed_pass
+strong_assumed_fail
+strong_next_pass
+strong_next_fail
+weak_bounded_fail
+strong_bounded_pass
+
+[options]
+mode live
+strong_assumed_fail: expect fail
+strong_next_fail: expect fail
+weak_bounded_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+strong_assumed_pass: read_rtlil strong_assumed_pass.il
+strong_assumed_pass: prep -top strong_assumed_pass
+strong_assumed_fail: read_rtlil strong_assumed_fail.il
+strong_assumed_fail: prep -top strong_assumed_fail
+strong_next_pass: read_rtlil strong_next_pass.il
+strong_next_pass: prep -top strong_next_pass
+strong_next_fail: read_rtlil strong_next_fail.il
+strong_next_fail: prep -top strong_next_fail
+weak_bounded_fail: read_rtlil weak_bounded_fail.il
+weak_bounded_fail: prep -top weak_bounded_fail
+strong_bounded_pass: read_rtlil strong_bounded_pass.il
+strong_bounded_pass: prep -top strong_bounded_pass
+
+[files]
+strong_assumed_pass: strong_assumed_pass.il
+strong_assumed_fail: strong_assumed_fail.il
+strong_next_pass: strong_next_pass.il
+strong_next_fail: strong_next_fail.il
+weak_bounded_fail: weak_bounded_fail.il
+strong_bounded_pass: strong_bounded_pass.il

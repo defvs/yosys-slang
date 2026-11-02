@@ -44,7 +44,7 @@ module named_eventually_pass ((* gclk *) input logic clk);
 		##[1:$] a;
 	endsequence
 
-	assert property (@(posedge clk) request |-> s_eventually s[*2]);
+	assert property (@(posedge clk) request |-> s_eventually strong(s[*2]));
 endmodule
 
 module named_eventually_fail ((* gclk *) input logic clk);
@@ -60,7 +60,7 @@ module named_eventually_fail ((* gclk *) input logic clk);
 		##[1:$] a;
 	endsequence
 
-	assert property (@(posedge clk) request |-> s_eventually s[*2]);
+	assert property (@(posedge clk) request |-> s_eventually strong(s[*2]));
 endmodule
 
 // A leading `##0` keeps only the non-empty matches of what follows. Taking the empty
@@ -101,7 +101,7 @@ module nexttime_empty_pass ((* gclk *) input logic clk);
 	wire request = age == 0;
 	wire a = age == 3;
 
-	assert property (@(posedge clk) request |-> s_eventually nexttime (a[*1:$]));
+	assert property (@(posedge clk) request |-> s_eventually nexttime strong(a[*1:$]));
 endmodule
 
 module nexttime_empty_fail ((* gclk *) input logic clk);
@@ -112,7 +112,7 @@ module nexttime_empty_fail ((* gclk *) input logic clk);
 
 	wire request = age == 0;
 
-	assert property (@(posedge clk) request |-> s_eventually nexttime (1'b0[*0:$]));
+	assert property (@(posedge clk) request |-> s_eventually nexttime strong(1'b0[*0:$]));
 endmodule
 
 // An empty match of a sequence used as a property is no success

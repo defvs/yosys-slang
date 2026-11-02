@@ -33,6 +33,7 @@ cp -- "${test_dir}/sequence_safety.sby" "${work_dir}/sequence_safety.sby"
 cp -- "${test_dir}/abort.sby" "${work_dir}/abort.sby"
 cp -- "${test_dir}/abort_safety.sby" "${work_dir}/abort_safety.sby"
 cp -- "${test_dir}/constants.sby" "${work_dir}/constants.sby"
+cp -- "${test_dir}/composition.sby" "${work_dir}/composition.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -239,6 +240,25 @@ do
 	"
 done
 
+for top in \
+	strong_assumed_pass \
+	strong_assumed_fail \
+	strong_next_pass \
+	strong_next_fail \
+	weak_bounded_fail \
+	strong_bounded_pass
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/composition_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
 yosys -q -m "${plugin}" -p "
 	read_slang -DMUTATE_LIVENESS ${test_dir}/response_proof.sv;
 	prep -top response_proof;
@@ -275,4 +295,6 @@ yosys -q -m "${plugin}" -p "
 	sby --prefix "${work_dir}/abort_safety" -f abort_safety.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/constants" \
 		-f constants.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/composition" \
+		-f composition.sby
 )

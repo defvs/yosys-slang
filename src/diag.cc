@@ -148,6 +148,7 @@ DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1096);
 DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1097);
 DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1098);
 DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1099);
+DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1100);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -233,6 +234,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVAVacuousCoverUnsupported,
 					  "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported");
 	engine.setSeverity(SVAVacuousCoverUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAWeakSequenceUnsupported,
+					  "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`");
+	engine.setSeverity(SVAWeakSequenceUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);
