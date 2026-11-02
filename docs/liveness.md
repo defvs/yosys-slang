@@ -54,10 +54,11 @@ Unbounded sequence monitors support:
 - `throughout` with a simple Boolean left operand;
 - `nexttime` and `s_nexttime`;
 - named sequences;
-- `first_match` without match actions as the goal of a strong sequence or an
-  eventuality, where only the existence of a match matters. It is rejected in
-  any other position, as a monitor merging overlapping attempts cannot tell
-  which match of an attempt came first.
+- `first_match` without match actions as the goal of an eventuality, where
+  only the existence of a match matters, and with sequence `and`,
+  `intersect` and `within` as described below. A monitor merging overlapping
+  attempts cannot tell which match of an attempt came first, so it is
+  rejected in a concatenation or a repetition.
 
 Empty matches follow IEEE 1800-2017 16.9.2.1 in concatenation and repetition,
 so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`, while `##0 b[*0:$]` has only the
@@ -67,13 +68,26 @@ the first tick. The same goes for the left side of `#-#` and `#=#`. A sequence
 used as a property, as under `strong`, `nexttime` or `s_eventually`, is not met
 by an empty match, and with no other match it fails every attempt.
 
-For asserted generalized regular liveness, high-level sequence `and`,
-`intersect`, `within`, and `throughout` are composed from independently
-monitored operands. A fresh `$anyseq` bit selects one enabled assertion attempt,
-and an auxiliary fairness condition requires some enabled attempt to be
-selected. Since the proof must hold for every fair selector trace, every
-possible attempt is checked without merging histories from overlapping
-attempts.
+Sequence `and`, `intersect`, `within` and `first_match` compose matches of
+their operands from one and the same start, which a monitor taking the
+matches of overlapping attempts at once cannot keep apart. They are supported
+in an asserted `strong(...)` sequence, at the top of the property or in a
+consequent. A fresh `$anyseq` bit selects one enabled assertion attempt, and
+an auxiliary fairness condition requires some enabled attempt to be selected.
+Since the proof must hold for every fair selector trace, every possible
+attempt is checked without merging histories from overlapping attempts. The
+operands of the selected attempt are monitored apart and composed as IEEE
+1800-2017 F.3.4.2.4 defines them: a match of `and` ends with the later of a
+match of each operand, an empty match of an operand puts no constraint on the
+other one, `first_match` keeps the match of the attempt that ends first, and
+the left operand of `within` may start on any tick of the right one.
+
+Under an eventuality, whose attempts start on many ticks, and on the left of
+`within`, all that counts is whether there was a match by a tick. There
+`first_match` is the identity and sequence `or` and `throughout` compose,
+while `and`, `intersect` and `within` of an unbounded sequence are rejected.
+A `throughout` with none of these in its right operand is taken by the
+sequence monitor, under any number of attempts.
 
 ## Exact temporal behavior
 
@@ -166,6 +180,9 @@ cannot preserve the SVA meaning:
   environment constraint;
 - sequence-language products nested inside a larger unbounded concatenation
   when they would require full automaton product/determinization;
+- sequence `and`, `intersect` and `within` of an unbounded sequence under an
+  eventuality or on the left of `within`, where the matches of many attempts
+  would have to be told apart;
 - `until` operands that are themselves temporal rather than simple Boolean
   properties;
 - temporal `iff`, temporal left operands of property-level `implies`, and

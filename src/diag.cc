@@ -149,6 +149,7 @@ DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1097);
 DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1098);
 DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1099);
 DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1100);
+DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1101);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -238,6 +239,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVAWeakSequenceUnsupported,
 					  "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`");
 	engine.setSeverity(SVAWeakSequenceUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVASequenceProductUnsupported,
+					  "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`");
+	engine.setSeverity(SVASequenceProductUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);

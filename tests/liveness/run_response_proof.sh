@@ -246,7 +246,25 @@ for top in \
 	strong_next_pass \
 	strong_next_fail \
 	weak_bounded_fail \
-	strong_bounded_pass
+	strong_bounded_pass \
+	and_intersect_pass \
+	and_intersect_fail \
+	and_within_pass \
+	and_within_fail \
+	first_match_intersect_pass \
+	first_match_intersect_fail \
+	first_match_within_pass \
+	first_match_within_fail \
+	and_empty_pass \
+	and_empty_fail \
+	within_empty_pass \
+	within_empty_fail \
+	within_throughout_pass \
+	within_throughout_fail \
+	first_match_attempts_fail \
+	intersect_attempts_pass \
+	eventual_throughout_pass \
+	eventual_throughout_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/composition_proof.sv;

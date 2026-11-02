@@ -5,12 +5,39 @@ strong_next_pass
 strong_next_fail
 weak_bounded_fail
 strong_bounded_pass
+and_intersect_pass
+and_intersect_fail
+and_within_pass
+and_within_fail
+first_match_intersect_pass
+first_match_intersect_fail
+first_match_within_pass
+first_match_within_fail
+and_empty_pass
+and_empty_fail
+within_empty_pass
+within_empty_fail
+within_throughout_pass
+within_throughout_fail
+first_match_attempts_fail
+intersect_attempts_pass
+eventual_throughout_pass
+eventual_throughout_fail
 
 [options]
 mode live
 strong_assumed_fail: expect fail
 strong_next_fail: expect fail
 weak_bounded_fail: expect fail
+and_intersect_fail: expect fail
+and_within_fail: expect fail
+first_match_intersect_fail: expect fail
+first_match_within_fail: expect fail
+and_empty_fail: expect fail
+within_empty_fail: expect fail
+within_throughout_fail: expect fail
+first_match_attempts_fail: expect fail
+eventual_throughout_fail: expect fail
 
 [engines]
 aiger suprove
@@ -28,6 +55,42 @@ weak_bounded_fail: read_rtlil weak_bounded_fail.il
 weak_bounded_fail: prep -top weak_bounded_fail
 strong_bounded_pass: read_rtlil strong_bounded_pass.il
 strong_bounded_pass: prep -top strong_bounded_pass
+and_intersect_pass: read_rtlil and_intersect_pass.il
+and_intersect_pass: prep -top and_intersect_pass
+and_intersect_fail: read_rtlil and_intersect_fail.il
+and_intersect_fail: prep -top and_intersect_fail
+and_within_pass: read_rtlil and_within_pass.il
+and_within_pass: prep -top and_within_pass
+and_within_fail: read_rtlil and_within_fail.il
+and_within_fail: prep -top and_within_fail
+first_match_intersect_pass: read_rtlil first_match_intersect_pass.il
+first_match_intersect_pass: prep -top first_match_intersect_pass
+first_match_intersect_fail: read_rtlil first_match_intersect_fail.il
+first_match_intersect_fail: prep -top first_match_intersect_fail
+first_match_within_pass: read_rtlil first_match_within_pass.il
+first_match_within_pass: prep -top first_match_within_pass
+first_match_within_fail: read_rtlil first_match_within_fail.il
+first_match_within_fail: prep -top first_match_within_fail
+and_empty_pass: read_rtlil and_empty_pass.il
+and_empty_pass: prep -top and_empty_pass
+and_empty_fail: read_rtlil and_empty_fail.il
+and_empty_fail: prep -top and_empty_fail
+within_empty_pass: read_rtlil within_empty_pass.il
+within_empty_pass: prep -top within_empty_pass
+within_empty_fail: read_rtlil within_empty_fail.il
+within_empty_fail: prep -top within_empty_fail
+within_throughout_pass: read_rtlil within_throughout_pass.il
+within_throughout_pass: prep -top within_throughout_pass
+within_throughout_fail: read_rtlil within_throughout_fail.il
+within_throughout_fail: prep -top within_throughout_fail
+first_match_attempts_fail: read_rtlil first_match_attempts_fail.il
+first_match_attempts_fail: prep -top first_match_attempts_fail
+intersect_attempts_pass: read_rtlil intersect_attempts_pass.il
+intersect_attempts_pass: prep -top intersect_attempts_pass
+eventual_throughout_pass: read_rtlil eventual_throughout_pass.il
+eventual_throughout_pass: prep -top eventual_throughout_pass
+eventual_throughout_fail: read_rtlil eventual_throughout_fail.il
+eventual_throughout_fail: prep -top eventual_throughout_fail
 
 [files]
 strong_assumed_pass: strong_assumed_pass.il
@@ -36,3 +99,21 @@ strong_next_pass: strong_next_pass.il
 strong_next_fail: strong_next_fail.il
 weak_bounded_fail: weak_bounded_fail.il
 strong_bounded_pass: strong_bounded_pass.il
+and_intersect_pass: and_intersect_pass.il
+and_intersect_fail: and_intersect_fail.il
+and_within_pass: and_within_pass.il
+and_within_fail: and_within_fail.il
+first_match_intersect_pass: first_match_intersect_pass.il
+first_match_intersect_fail: first_match_intersect_fail.il
+first_match_within_pass: first_match_within_pass.il
+first_match_within_fail: first_match_within_fail.il
+and_empty_pass: and_empty_pass.il
+and_empty_fail: and_empty_fail.il
+within_empty_pass: within_empty_pass.il
+within_empty_fail: within_empty_fail.il
+within_throughout_pass: within_throughout_pass.il
+within_throughout_fail: within_throughout_fail.il
+first_match_attempts_fail: first_match_attempts_fail.il
+intersect_attempts_pass: intersect_attempts_pass.il
+eventual_throughout_pass: eventual_throughout_pass.il
+eventual_throughout_fail: eventual_throughout_fail.il

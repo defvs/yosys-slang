@@ -2113,18 +2113,24 @@ static ir::Net add_pending_monitor(EvalContext& eval, ir::Net trigger,
 	return active;
 }
 
+// High from the first tick of `event` on, until a `clear`. `earlier` gets the same as of
+// the ticks before, if given.
 static ir::Net add_sticky_observation(
 		EvalContext& eval, ir::Net event, ir::Net clear,
-		slang::SourceLocation loc, std::string_view name) {
+		slang::SourceLocation loc, std::string_view name, ir::Net *earlier = nullptr) {
 	ir::Net wire = add_sva_state(eval, name);
 	ir::Net observed = eval.netlist.LogicOr(wire, event);
 	ir::Net next =
 		eval.netlist.LogicAnd(observed, sva_not(eval, clear));
 
 	if (!sva_clock_ready(eval, loc)) {
+		if (earlier)
+			*earlier = ir::Sx;
 		return ir::Sx;
 	}
 	add_sva_flop(eval, next, wire, name);
+	if (earlier)
+		*earlier = wire;
 	return observed;
 }
 
@@ -2165,135 +2171,238 @@ static ir::Net add_selected_trigger(
 	return selected;
 }
 
-// High on the last tick of a non-empty match of the sequence the selected attempt
-// started. An empty match has no such tick, `admits_empty` reports it. The letters of
-// the attempt are T where `top` is high, see AttemptContext. `attempt_tick` tells if
-// the trigger is on the first tick of the attempt only.
-static std::optional<ir::Net> synthesize_selected_sequence(
-		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net top, bool attempt_tick, bool& admits_empty);
+// Does the sequence take `and`, `intersect`, `within` or `first_match`? Those compose
+// matches, which the NFA of a regular sequence has no way to.
+static bool has_sequence_product(const ast::AssertionExpr& expr) {
+	switch (expr.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+				return false;
+			const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+			return !instance.isRecursiveProperty && has_sequence_product(instance.body);
+		}
+	case ast::AssertionExprKind::SequenceConcat:
+		for (const auto& element : expr.as<ast::SequenceConcatExpr>().elements)
+			if (has_sequence_product(*element.sequence))
+				return true;
+		return false;
+	case ast::AssertionExprKind::SequenceWithMatch:
+		return has_sequence_product(expr.as<ast::SequenceWithMatchExpr>().expr);
+	case ast::AssertionExprKind::FirstMatch:
+		return true;
+	case ast::AssertionExprKind::Unary:
+		return has_sequence_product(expr.as<ast::UnaryAssertionExpr>().expr);
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = expr.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::And:
+			case ast::BinaryAssertionOperator::Intersect:
+			case ast::BinaryAssertionOperator::Within:
+				return true;
+			default:
+				return has_sequence_product(binary.left) || has_sequence_product(binary.right);
+			}
+		}
+	case ast::AssertionExprKind::StrongWeak:
+		return has_sequence_product(expr.as<ast::StrongWeakAssertionExpr>().expr);
+	default:
+		return false;
+	}
+}
 
+// High on the last tick of a non-empty match of the sequence the attempts on the trigger
+// started. An empty match has no such tick, `admits_empty` reports it. The letters of the
+// attempt are T where `top` is high, see AttemptContext. `attempt_tick` tells if the
+// trigger is on the first tick of the attempts only.
+//
+// The NFA of a regular sequence takes the matches of any number of attempts at once.
+// `and`, `intersect` and `within` compose a match of each operand from one and the same
+// start, and `first_match` picks from the matches of one start, so their operands are
+// monitored apart from a trigger that is high on one tick at most, as `single_start`
+// says. With `earliest` the caller only takes whether there was a match by a tick, all
+// it goes by is the first tick the result is high on.
 static std::optional<ir::Net> synthesize_selected_sequence(
-		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net top, bool attempt_tick, bool& admits_empty) {
+		EvalContext& eval, const ast::AssertionExpr& sequence, ir::Net trigger, ir::Net top,
+		bool attempt_tick, bool single_start, bool earliest, bool& admits_empty) {
 	admits_empty = false;
-	if (sequence.kind == ast::AssertionExprKind::Simple) {
-		const auto& simple = sequence.as<ast::SimpleAssertionExpr>();
-		if (!simple.repetition.has_value() &&
-			simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
-			const auto& instance =
-				simple.expr.as<ast::AssertionInstanceExpression>();
-			if (!instance.isRecursiveProperty)
-				return synthesize_selected_sequence(
-					eval, instance.body, trigger, top, attempt_tick, admits_empty);
+	if (!has_sequence_product(sequence))
+		return synthesize_unbounded_sequence(
+			eval, sequence, trigger, ir::S0, top, attempt_tick, &admits_empty);
+
+	slang::SourceLocation loc = expr_loc(sequence);
+	auto operand = [&](const ast::AssertionExpr& expr, bool operand_earliest, bool& empty) {
+		return synthesize_selected_sequence(eval, expr, trigger, top, attempt_tick,
+											single_start, operand_earliest, empty);
+	};
+	// The operands of the attempt that started on the trigger, apart from other attempts
+	auto one_start = [&]() {
+		if (single_start)
+			return true;
+		eval.netlist.add_diag(diag::SVASequenceProductUnsupported, loc);
+		return false;
+	};
+	// High from the start of the attempt on
+	auto started = [&]() {
+		return add_sticky_observation(eval, trigger, ir::S0, loc, "sva_select_started");
+	};
+
+	switch (sequence.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& simple = sequence.as<ast::SimpleAssertionExpr>();
+			if (simple.repetition.has_value() ||
+				simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+				break;
+			const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+			if (instance.isRecursiveProperty)
+				break;
+			return operand(instance.body, earliest, admits_empty);
 		}
-	}
-	if (sequence.kind == ast::AssertionExprKind::FirstMatch) {
-		const auto& first = sequence.as<ast::FirstMatchAssertionExpr>();
-		if (!first.matchItems.empty()) {
-			eval.netlist.add_diag(diag::SVAMatchItemsUnsupported,
-								  expr_loc(sequence));
-			return std::nullopt;
+
+	case ast::AssertionExprKind::StrongWeak:
+		{
+			// A sequence used as a property, as an operand of a property `or` in an
+			// eventuality. A weak one is strong where it's bounded.
+			const auto& strong_weak = sequence.as<ast::StrongWeakAssertionExpr>();
+			if (strong_weak.strength == ast::StrongWeakAssertionExpr::Weak &&
+				assertion_has_unbounded_sequence(strong_weak.expr)) {
+				eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, loc);
+				return std::nullopt;
+			}
+			auto match = operand(strong_weak.expr, earliest, admits_empty);
+			admits_empty = false;
+			return match;
 		}
-		auto match = synthesize_selected_sequence(
-			eval, first.seq, trigger, top, attempt_tick, admits_empty);
-		// An empty match comes ahead of any other, so it's the only first match
-		if (match.has_value() && admits_empty)
-			return ir::S0;
-		return match;
-	}
-	if (sequence.kind == ast::AssertionExprKind::Binary) {
-		const auto& binary = sequence.as<ast::BinaryAssertionExpr>();
-		bool left_empty = false;
-		bool right_empty = false;
-		switch (binary.op) {
-		case ast::BinaryAssertionOperator::Or:
-			{
-				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, top, attempt_tick, left_empty);
-				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, top, attempt_tick, right_empty);
-				if (!left.has_value() || !right.has_value())
-					return std::nullopt;
-				admits_empty = left_empty || right_empty;
-				return eval.netlist.LogicOr(left.value(), right.value());
+
+	case ast::AssertionExprKind::FirstMatch:
+		{
+			const auto& first = sequence.as<ast::FirstMatchAssertionExpr>();
+			if (!first.matchItems.empty()) {
+				eval.netlist.add_diag(diag::SVAMatchItemsUnsupported, loc);
+				return std::nullopt;
 			}
-		case ast::BinaryAssertionOperator::And:
-			{
-				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, top, attempt_tick, left_empty);
-				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, top, attempt_tick, right_empty);
-				if (!left.has_value() || !right.has_value())
-					return std::nullopt;
-				admits_empty = left_empty && right_empty;
-				ir::Net left_seen = add_sticky_observation(
-					eval, left.value(), ir::S0, expr_loc(binary.left),
-					"sva_and_left");
-				ir::Net right_seen = add_sticky_observation(
-					eval, right.value(), ir::S0, expr_loc(binary.right),
-					"sva_and_right");
-				return eval.netlist.LogicAnd(left_seen, right_seen);
-			}
-		case ast::BinaryAssertionOperator::Intersect:
-			{
-				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, top, attempt_tick, left_empty);
-				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, top, attempt_tick, right_empty);
-				if (!left.has_value() || !right.has_value())
-					return std::nullopt;
-				admits_empty = left_empty && right_empty;
-				return eval.netlist.LogicAnd(left.value(), right.value());
-			}
-		case ast::BinaryAssertionOperator::Within:
-			{
-				ir::Net delayed_start = add_sticky_observation(
-					eval, trigger, ir::S0, expr_loc(binary.left),
-					"sva_within_start");
-				auto inner = synthesize_selected_sequence(
-					eval, binary.left, delayed_start, top, false, left_empty);
-				auto outer = synthesize_selected_sequence(
-					eval, binary.right, trigger, top, attempt_tick, right_empty);
-				if (!inner.has_value() || !outer.has_value())
-					return std::nullopt;
-				admits_empty = left_empty && right_empty;
-				ir::Net inner_seen = add_sticky_observation(
-					eval, inner.value(), ir::S0, expr_loc(binary.left),
-					"sva_within_seen");
-				return eval.netlist.LogicAnd(inner_seen, outer.value());
-			}
-		case ast::BinaryAssertionOperator::Throughout:
-			{
-				// Read on each tick of the attempt
-				auto condition =
-					simple_property_signal(eval, binary.left, true);
-				if (!condition.has_value()) {
-					eval.netlist.add_diag(diag::AssertionUnsupported,
-										  expr_loc(binary.left));
-					return std::nullopt;
+			// The first match is the first one to end, which is all that is taken of
+			// the matches with `earliest`
+			if (!earliest && !one_start())
+				return std::nullopt;
+			auto match = operand(first.seq, earliest, admits_empty);
+			if (!match.has_value())
+				return std::nullopt;
+			// An empty match comes ahead of any other, so it's the only first match
+			if (admits_empty)
+				return ir::S0;
+			if (earliest)
+				return match;
+			ir::Net earlier;
+			add_sticky_observation(eval, *match, ir::S0, loc, "sva_first_match_seen", &earlier);
+			return eval.netlist.LogicAnd(*match, sva_not(eval, earlier));
+		}
+
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = sequence.as<ast::BinaryAssertionExpr>();
+			bool left_empty = false;
+			bool right_empty = false;
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::Or:
+				{
+					auto left = operand(binary.left, earliest, left_empty);
+					auto right = operand(binary.right, earliest, right_empty);
+					if (!left.has_value() || !right.has_value())
+						return std::nullopt;
+					admits_empty = left_empty || right_empty;
+					return eval.netlist.LogicOr(left.value(), right.value());
 				}
-				auto body = synthesize_selected_sequence(
-					eval, binary.right, trigger, top, attempt_tick, admits_empty);
-				if (!body.has_value())
-					return std::nullopt;
-				ir::Net active = add_sticky_observation(
-					eval, trigger, ir::S0, expr_loc(binary.right),
-					"sva_throughout_active");
-				ir::Net invalid = add_sticky_observation(
-					eval,
-					eval.netlist.LogicAnd(active, sva_not(eval,
-						eval.netlist.LogicOr(condition.value(), top))),
-					ir::S0, expr_loc(binary.right),
-					"sva_throughout_invalid");
-				return eval.netlist.LogicAnd(
-					body.value(),
-					eval.netlist.LogicAnd(active, sva_not(eval, invalid)));
+			case ast::BinaryAssertionOperator::And:
+				{
+					if (!one_start())
+						return std::nullopt;
+					auto left = operand(binary.left, earliest, left_empty);
+					auto right = operand(binary.right, earliest, right_empty);
+					if (!left.has_value() || !right.has_value())
+						return std::nullopt;
+					admits_empty = left_empty && right_empty;
+					// A match ends with that of one operand, the other one having had one
+					// by then. An empty match of an operand puts no constraint on the
+					// other one (IEEE Std 1800-2017 section F.3.4.2.4).
+					ir::Net from_start = left_empty || right_empty ? started() : ir::S0;
+					ir::Net left_seen = left_empty ? from_start : add_sticky_observation(
+						eval, left.value(), ir::S0, expr_loc(binary.left), "sva_and_left");
+					ir::Net right_seen = right_empty ? from_start : add_sticky_observation(
+						eval, right.value(), ir::S0, expr_loc(binary.right), "sva_and_right");
+					return eval.netlist.LogicOr(
+						eval.netlist.LogicAnd(left.value(), right_seen),
+						eval.netlist.LogicAnd(right.value(), left_seen));
+				}
+			case ast::BinaryAssertionOperator::Intersect:
+				{
+					if (!one_start())
+						return std::nullopt;
+					auto left = operand(binary.left, false, left_empty);
+					auto right = operand(binary.right, false, right_empty);
+					if (!left.has_value() || !right.has_value())
+						return std::nullopt;
+					admits_empty = left_empty && right_empty;
+					return eval.netlist.LogicAnd(left.value(), right.value());
+				}
+			case ast::BinaryAssertionOperator::Within:
+				{
+					if (!one_start())
+						return std::nullopt;
+					// The inner match can start on any tick of the outer one, it takes no
+					// more than one of them to end by the end of the outer one
+					ir::Net inner_start = started();
+					auto inner = synthesize_selected_sequence(
+						eval, binary.left, inner_start, top, false, false, true, left_empty);
+					auto outer = operand(binary.right, false, right_empty);
+					if (!inner.has_value() || !outer.has_value())
+						return std::nullopt;
+					admits_empty = left_empty && right_empty;
+					// An empty inner match lies within any outer one (F.3.4.2.4)
+					ir::Net inner_seen = left_empty ? inner_start : add_sticky_observation(
+						eval, inner.value(), ir::S0, expr_loc(binary.left), "sva_within_seen");
+					return eval.netlist.LogicAnd(inner_seen, outer.value());
+				}
+			case ast::BinaryAssertionOperator::Throughout:
+				{
+					// Read on each tick of the attempt
+					auto condition =
+						simple_property_signal(eval, binary.left, true);
+					if (!condition.has_value()) {
+						eval.netlist.add_diag(diag::AssertionUnsupported,
+											  expr_loc(binary.left));
+						return std::nullopt;
+					}
+					// Without a product in it, the NFA takes it all from any start
+					if (!one_start())
+						return std::nullopt;
+					auto body = operand(binary.right, earliest, admits_empty);
+					if (!body.has_value())
+						return std::nullopt;
+					ir::Net active = started();
+					ir::Net invalid = add_sticky_observation(
+						eval,
+						eval.netlist.LogicAnd(active, sva_not(eval,
+							eval.netlist.LogicOr(condition.value(), top))),
+						ir::S0, expr_loc(binary.right),
+						"sva_throughout_invalid");
+					return eval.netlist.LogicAnd(
+						body.value(),
+						eval.netlist.LogicAnd(active, sva_not(eval, invalid)));
+				}
+			default:
+				break;
 			}
-		default:
 			break;
 		}
+
+	default:
+		break;
 	}
+	// A product nested in a concatenation or a repetition, which the NFA rejects
 	return synthesize_unbounded_sequence(
 		eval, sequence, trigger, ir::S0, top, attempt_tick, &admits_empty);
 }
@@ -2610,7 +2719,7 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		// tick from the minimum delay on.
 		bool admits_empty;
 		auto goal = synthesize_selected_sequence(
-			eval, *operand, future_start, ir::S0, false, admits_empty);
+			eval, *operand, future_start, ir::S0, false, false, true, admits_empty);
 		if (!goal.has_value())
 			return {{}, false};
 		// The attempt is in flight from the tick it was selected on, all through the
@@ -2889,7 +2998,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			// An empty match is no success of the sequence used as a property
 			bool admits_empty;
 			auto goal = synthesize_selected_sequence(
-				eval, strong_weak.expr, selected, top, attempt_tick, admits_empty);
+				eval, strong_weak.expr, selected, top, attempt_tick, true, true, admits_empty);
 			if (!goal.has_value())
 				return {{}, false};
 			add_liveness_obligation(

@@ -273,3 +273,48 @@ module weak_top(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) weak(a ##[1:$] b));
 endmodule
 EOF
+
+design -reset
+
+test_slangdiag -expect "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`"
+read_slang <<EOF
+module product_eventual_and(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) s_eventually strong((a ##[1:$] b) and (c ##[1:$] d)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`"
+read_slang <<EOF
+module product_eventual_intersect(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) a |-> s_eventually strong((a ##[1:$] c) intersect (b ##[1:$] c)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`"
+read_slang <<EOF
+module product_eventual_within(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) s_eventually strong((a ##[1:$] b) within (c ##[1:$] d)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`"
+read_slang <<EOF
+module product_eventual_throughout(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) s_eventually strong(d throughout ((a ##[1:$] b) and c[*1:$])));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`"
+read_slang <<EOF
+module product_within_inner(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) strong(((a ##[1:$] b) intersect (c ##[1:$] b)) within (d ##[1:$] b)));
+endmodule
+EOF

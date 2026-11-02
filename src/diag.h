@@ -102,6 +102,7 @@ extern slang::DiagCode SVATemporalCoverUnsupported;
 extern slang::DiagCode SVARejectOnUnsupported;
 extern slang::DiagCode SVAVacuousCoverUnsupported;
 extern slang::DiagCode SVAWeakSequenceUnsupported;
+extern slang::DiagCode SVASequenceProductUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag
