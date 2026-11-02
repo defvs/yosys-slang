@@ -56,6 +56,14 @@ module late_always_response(input logic clk, input logic rst, input logic a, inp
 	late_always_response_test: assert property (@(posedge clk) disable iff (rst)
 		always [2000:$] (a |-> s_eventually b));
 endmodule
+
+module bounded_response(input logic clk, input logic req, input logic ack);
+	bounded_response_test: assert property (@(posedge clk) req |-> s_eventually [0:2000] ack);
+endmodule
+
+module goto_range(input logic clk, input logic a, input logic b);
+	goto_range_test: assert property (@(posedge clk) a |=> strong(b[->1:1500]));
+endmodule
 EOF
 
 select -assert-count 1 late_response/t:$check r:FLAVOR=live %i
@@ -119,6 +127,15 @@ select -assert-max 16000 always_response/t:$dff
 select -assert-count 1 late_always_response/t:$check r:FLAVOR=live %i
 select -assert-count 1 late_always_response/t:$check
 select -assert-max 6000 late_always_response/t:$dff
+
+select -assert-count 1 bounded_response/t:$check r:FLAVOR=assert %i
+select -assert-count 1 bounded_response/t:$check
+select -assert-max 8000 bounded_response/t:$dff
+
+select -assert-count 1 goto_range/t:$check r:FLAVOR=live %i
+select -assert-count 1 goto_range/t:$check r:FLAVOR=fair %i
+select -assert-count 2 goto_range/t:$check
+select -assert-max 6000 goto_range/t:$dff
 
 async2sync
 formalff -clk2ff
