@@ -92,16 +92,36 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int cycles, 
 
 static bool assertion_has_unbounded_sequence(const ast::AssertionExpr& expr);
 
-// This regular-sequence monitor follows the NFA representation used by Yosys'
-// Verific SVA frontend.  Keeping the representation here, instead of expanding
-// unbounded ranges, is what makes unbounded SVA synthesis finite and exact.
+// ---- Begin of the portion adapted from Yosys ----
+//
+// SvaNfaNode, SvaSequenceNfa, SvaSequenceBuilder and synthesize_unbounded_sequence()
+// are adapted from the SvaFsm class and the sequence parser of Yosys' Verific SVA
+// frontend, frontends/verific/verificsva.cc, which carries this notice:
+//
+//   Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
+//
+//   Permission to use, copy, modify, and/or distribute this software for any
+//   purpose with or without fee is hereby granted, provided that the above
+//   copyright notice and this permission notice appear in all copies.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+//   WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+//   MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+//   ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+//   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+//   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+//   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//
+// Reworked for the Slang AST and the sv-elab netlist (see git history); the changes
+// are distributed under the same ISC terms.
+
+// This regular-sequence monitor follows the NFA representation of that frontend.
+// Keeping the representation here, instead of expanding unbounded ranges, is what
+// makes unbounded SVA synthesis finite and exact.
 //
 // The graph has two kinds of arcs:
 //   * links are evaluated without consuming a sampled clock tick;
 //   * edges transfer active states on the next sampled clock tick.
-//
-// Copyright (C) 2017-2026 Claire Xenia Wolf and Yosys contributors.
-// Adapted for the Slang AST and sv-elab under the ISC license.
 struct SvaNfaNode {
 	std::vector<std::pair<int, ir::Net>> edges;
 	std::vector<std::pair<int, ir::Net>> links;
@@ -690,6 +710,8 @@ synthesize_unbounded_sequence(EvalContext& eval, const ast::AssertionExpr& seque
 	fsm.create_link(match.end, fsm.accept_node);
 	return fsm.materialize_accept();
 }
+
+// ---- End of the portion adapted from Yosys ----
 
 struct AssertionMatch {
 	EvalContext& eval;
