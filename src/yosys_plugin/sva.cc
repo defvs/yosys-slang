@@ -317,7 +317,7 @@ static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
 static std::vector<AssertionMatch> synthesize_disable_iff(EvalContext& eval, const ast::Expression& condition,
 														 std::vector<AssertionMatch> inner,
 														 slang::SourceLocation loc) {
-	auto disable = AssertionMatch(eval, eval(condition), loc);
+	auto disable = AssertionMatch(eval, eval.sva(condition), loc);
 	if (inner.empty())
 		inner.push_back(AssertionMatch(eval, ir::S0, loc));
 
