@@ -11,33 +11,74 @@ and Yosys formal cells. Finite failures become `$check` cells with
 - a mixed property such as `s_until` becomes both a safety check and a
   liveness check.
 
+The label of a property names its progress obligation, or its first check
+when it has none. The other checks of the property are named after the label:
+`label$obligation` for a further obligation and `label$select_fair` for the
+fairness of a selected attempt.
+
 No unbounded operator is replaced with a selected finite depth. Bounded ranges
 are lowered whatever their size, with no limit on the number of samples;
 unbounded ranges use finite-state monitors.
 
 ## Supported property forms
 
-The following forms are supported when their operands satisfy the restrictions
-in the next section:
+The following forms are supported where they appear as described in the next
+section. `b` and `c` stand for Boolean expressions, `s` for a sequence, `f` for
+a finite property made of sequences and their `not`, `and`, `or` and
+implications, and `p` and `q` for properties.
 
 | SVA form | Lowering |
 | --- | --- |
-| `eventually p`, `s_eventually p`, `s_eventually [m:$] p` | response monitor plus `$live` or `$fair` |
-| bounded `eventually`, `s_eventually`, `nexttime`, `s_nexttime` | finite safety monitor |
-| `always p`, `s_always p`, bounded and unbounded ranges | one attempt of `p` per tick of the requested interval |
-| `not (s_eventually p)` / `not (always p)` | dual safety / liveness form |
-| `p until q`, `p until_with q` | weak-until safety monitor |
-| `p s_until q`, `p s_until_with q` | safety monitor plus progress obligation |
-| `strong(sequence)` | finite safety or exact unbounded sequence acceptance |
-| `weak(sequence)` | finite sequences only |
-| `a |-> property`, `a |=> property` | one consequent attempt per antecedent match |
-| `a #=# property`, `a #-# property` | left-side match plus consequent obligation, for a left side whose matches end on one tick |
-| property `and` | union of both obligation sets |
-| direct justice `or` | one response monitor over the matches of both sides |
-| simple property `implies` and `iff` | gated property or cycle-local equality |
-| property `if` / `else` and `case` | launch-time branch selection on sampled conditions |
-| `disable iff`, `accept_on`, `reject_on` | abort or rejection logic as described below |
-| named sequences and named properties | recursively lowered, except recursion |
+| `s_eventually f`, `s_eventually [m:$] f` | response monitor plus `$live` or `$fair` |
+| `eventually [m:n] f`, `s_eventually [m:n] f`, `nexttime f`, `s_nexttime f`, `nexttime [n] f`, `s_nexttime [n] f` | finite safety monitor |
+| `always p`, `always [m:$] p`, `always [m:n] p`, `s_always [m:n] p` | one attempt of `p` per tick of the interval |
+| `not (s_eventually b)`, `not (s_eventually [m:$] b)` | safety monitor of the dual `always` |
+| `not (always b)`, `not (always [m:$] b)` | liveness of the dual eventuality |
+| `b until c`, `b until_with c` | weak-until safety monitor |
+| `b s_until c`, `b s_until_with c` | safety monitor plus progress obligation |
+| `strong(s)` | finite safety check of a bounded `s`, exact acceptance of an unbounded one |
+| `weak(s)` | bounded `s` only, where it agrees with `strong(s)` |
+| `s \|-> p`, `s \|=> p` | one attempt of `p` per match of `s` |
+| `s #-# p`, `s #=# p` | a match of `s` plus `p` started on it, with the limits listed under rejected constructs |
+| `p and q` | union of both obligation sets |
+| `p or q` of two unbounded eventualities | one response monitor over the matches of both sides |
+| `b implies p` | `p` started where `b` holds |
+| `b iff c` | cycle-local equality |
+| `if (b) p else q`, `case (e) ... endcase` | branch chosen on the first tick of the attempt |
+| `disable iff (b)`, `accept_on (b)`, `reject_on (b)` and their `sync_` forms | abort letters, see below |
+| named sequences and named properties | lowered in place, recursion rejected |
+
+Finite properties are lowered to safety checks. Sequences and their `not`,
+`or` and `and` are lowered along the paths of their matches; property `if`,
+`case`, `implies`, `iff`, `disable iff` and `accept_on` as in the table, which
+leaves out `not` and `or` of them.
+
+`eventually p` and `s_always p` with no range, and `eventually [m:$] p` and
+`s_always [m:$] p`, are not legal SystemVerilog: the grammar of IEEE 1800-2017
+16.12 gives these two operators a bounded range. slang rejects them before
+lowering.
+
+## Where unbounded operators may appear
+
+An unbounded eventuality, `always` with any range, an `until` operator, or
+`strong(s)` of an unbounded `s` may appear:
+
+- at the top of the property, and under `disable iff`, `accept_on` and
+  `reject_on` (see the limits on `reject_on` below);
+- as the operand of `always` with any range and of a bounded `s_always`;
+- in the branches of a property `if`/`else` and `case`;
+- in either operand of property `and`;
+- in the consequent of `|->`, `|=>`, `#-#` and `#=#`, and on the right of
+  `implies`;
+- on both sides of `or` where both sides are unbounded eventualities
+  (`s_eventually` or `not always` with no upper bound).
+
+They may not appear under `not` other than in the dual forms of the table,
+under `nexttime` or `s_nexttime`, under an eventuality other than as
+`s_eventually strong(s)` (`s_eventually always b` is rejected), in an operand
+of `until` or `iff`, on the left of `implies`, or in any other `or`.
+
+## Sequences
 
 Finite sequences retain the path-based lowering, including
 concatenation delays, bounded ranges, consecutive repetition, sequence
@@ -67,6 +108,14 @@ does not start the consequent of `|->`, and starts the consequent of `|=>` on
 the first tick. The same goes for the left side of `#-#` and `#=#`. A sequence
 used as a property, as under `strong`, `nexttime` or `s_eventually`, is not met
 by an empty match, and with no other match it fails every attempt.
+
+A sequence used as a property is weak in `assert` and `assume` unless written
+`strong(...)`, and strong in `cover` (IEEE 1800-2017 16.12.2). So is the
+operand of an eventuality: `s_eventually (a ##[1:$] b)` is met by an `a` with
+no `b` after it, while `s_eventually strong(a ##[1:$] b)` needs the `b`. A
+weak sequence with an unbounded match is rejected: `a |-> b ##[1:$] c` in an
+assertion is, while `a |-> strong(b ##[1:$] c)`, which also requires the `c`
+to come, is lowered.
 
 Sequence `and`, `intersect`, `within` and `first_match` compose matches of
 their operands from one and the same start, which a monitor taking the
@@ -140,6 +189,13 @@ including one in its first sample whose antecedent would not match, while a
 reject after completion or after an earlier abort does not fail. Of aborts
 holding in the same sample, the outermost one wins.
 
+`reject_on` is supported around a liveness property with no safety part (so
+no `until`, no finite consequent and no `strong` sequence that settles a
+failure on its own), no `always`, and nothing but a Boolean antecedent ahead
+of its obligations, as `b |-> s_eventually c`. Elsewhere, around a finite
+property too, a monitor merging overlapping attempts cannot tell whether one
+is still in flight, and it is rejected.
+
 A `cover` is the dual of an assertion of the negated property, so the letters
 of its `disable iff` are the dual of T: an attempt is a success where it was
 settled true before the disable, such as by a completed match, while one
@@ -156,117 +212,181 @@ Monitor state and finite-history enables are initialized explicitly. A finite
 check is disabled until every required historical sample exists, including
 paths involving empty repetitions.
 
-## Deliberate synthesis limits
+## Rejected constructs
 
-The frontend diagnoses constructs for which the current Yosys formal model
-cannot preserve the SVA meaning:
+The frontend raises an error for every construct it cannot lower exactly,
+rather than lowering it to a bounded approximation or a weaker check. Each
+of these has a negative test in `tests/liveness/unsupported.ys` or
+`tests/sva/*.ys`. The diagnostic is given by the start of its message.
 
-- SVA match items, sequence local-variable assignments, and action subroutines;
-- recursive named properties or sequences;
-- weak sequences with an unbounded match. In `assert` and `assume` a sequence
-  used as a property is weak unless written `strong(...)` (IEEE 1800-2017
-  16.12.2), and so is the operand of an eventuality: `s_eventually (a ##[1:$]
-  b)` is met by an `a` with no `b` after it, while `s_eventually strong(a
-  ##[1:$] b)` needs the `b` and is lowered;
-- `cover property` of `always`, `until` or liveness properties, because their
-  obligations describe what has to keep holding rather than an observable
-  point of success;
-- `cover property` of a property `if`, `case` or `implies`, or of an
-  implication with an unbounded antecedent: a vacuous success starts no check
-  to report it, and an attempt whose antecedent may match again later is no
-  success yet;
-- generalized regular liveness used as an assumption when it needs prophecy
-  selection. Using existential selection for an assumption would weaken the
-  environment constraint;
-- sequence-language products nested inside a larger unbounded concatenation
-  when they would require full automaton product/determinization;
-- sequence `and`, `intersect` and `within` of an unbounded sequence under an
-  eventuality or on the left of `within`, where the matches of many attempts
-  would have to be told apart;
-- `until` operands that are themselves temporal rather than simple Boolean
-  properties;
-- followed-by with an unbounded left operand or a temporal right operand
-  where the matches of the left operand can start the right one on more than
-  one tick. `R #-# P` takes one match of `R` with `P` holding from it, which
-  is no single obligation started on every match of `R`;
-- temporal `iff`, temporal left operands of property-level `implies`, and
-  response-style property `or` whose acceptance cannot be represented by one
-  justice goal;
-- `reject_on` around a property with a safety part, around `always`, or around
-  one whose obligations start behind an antecedent longer than one sample,
-  since a monitor merging overlapping attempts cannot tell whether one is still
-  in flight;
-- a `disable iff` nested in a property by way of instances, which IEEE
-  1800-2017 16.12 does not allow;
-- an automatic variable or a const cast read on a later tick than the one the
-  attempt was queued on, which is where it keeps its value (IEEE 1800-2017
-  16.14.6.1): in the condition of a `disable iff` or an abort, in an operand of
-  `always`, `until` or an eventuality, after a delay or an unbounded repetition
-  in a sequence, or in a consequent that starts on a later tick. On the first
-  tick of the attempt, as in the antecedent `t` of `t |-> s_eventually b` or in
-  the condition of a property `if`, it is read as frozen;
-- multiple or incompatible assertion clocks, sampled-value clock arguments,
-  and temporal monitors with no single clock edge to run on: in `always_comb`
-  or `always @*` with neither a clock of the assertion's own nor a default
-  clocking, or in a process with an asynchronous reset.
+| Construct | Diagnostic |
+| --- | --- |
+| `restrict property`, `cover sequence` | unsupported assertion statement |
+| a weak sequence with an unbounded match, as a bare `a ##[1:$] b` in `assert` or `assume`, in a consequent, under an eventuality or in `weak(...)` | weak sequence with an unbounded match is unsupported |
+| `cover property` of `always`, `until`, an unbounded eventuality or a sequence with an unbounded match | cover of a property with `always`, `until`, ... |
+| `cover property` with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent: no check would see its vacuous successes | cover of a property with a property `if`, ... |
+| `cover property` of an `and` or followed-by with `iff` or an abort in an operand, whose parts would each be covered on their own | cover of a property `and`, or of followed-by, ... |
+| an unbounded generalized sequence in an assumption where it needs attempt selection, which would weaken the assumption | property needs an acceptance condition ... |
+| `or` with a temporal operand, unless both sides are unbounded eventualities of sequences the monitor takes without an attempt selection; a temporal operand of `iff` or on the left of `implies` | property needs an acceptance condition ... |
+| sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence under an eventuality or on the left of `within` | sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where ... |
+| `first_match` or a sequence product of an unbounded sequence inside a concatenation or a repetition | unsupported assertion statement |
+| followed-by with an unbounded left operand, or whose left operand ends on more than one tick, when the right operand is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it | followed-by with an unbounded left operand, ... |
+| `reject_on` around a finite property, or around a liveness property with a safety part, with `always`, or with more than a Boolean antecedent ahead of its obligations | `reject_on` is supported around a liveness property ... |
+| temporal operands of `until`, `s_until`, `until_with` and `s_until_with` | unsupported assertion statement |
+| liveness under `not` (other than the dual forms), `nexttime` or `s_nexttime`, or under an eventuality other than as `strong(s)`; `not` of `until` or of an unbounded `strong` sequence | unsupported assertion statement |
+| recursive named properties | unsupported assertion statement |
+| SVA match items, sequence local-variable assignments and action subroutines | SVA match items and local-variable actions are not synthesizable |
+| a `disable iff` nested in a property by way of instances, which IEEE 1800-2017 16.12 does not allow | unsupported assertion statement |
+| an automatic variable or a const cast read on a later tick than the one the attempt was queued on (in the condition of a `disable iff` or an abort, in an operand of `always`, `until` or an eventuality, after a delay or an unbounded repetition, or in a consequent that starts on a later tick) | automatic variable or const cast of non-constant value used past the first tick of an assertion attempt |
+| several or incompatible clocks in one property, such as liveness on a second clock, and sampled-value clock arguments | encountered unsupported SVA feature |
+| a temporal monitor with no single clock edge to run on: in `always_comb` or `always @*` with neither a clock of the assertion's own nor a default clocking, or in a process with an asynchronous reset | SVA temporal delay requires exactly one clock edge |
 
-These cases produce an error rather than a bounded approximation or a silently
-weakened proof.
+An automatic variable or a const cast read on the first tick of the attempt,
+as in the antecedent `t` of `t |-> s_eventually b` or in the condition of a
+property `if`, is read as frozen (IEEE 1800-2017 16.14.6.1).
 
-## Proof tools
+## Proving liveness
 
-The solver-backed tests use SymbiYosys `mode live` with the `aiger suprove`
-engine. Install the pinned runtime:
+### Prerequisites
 
-```sh
-tools/setup_liveness_tools.sh
-```
+- Yosys with the sv-elab plugin;
+- SymbiYosys (`sby`), with `yosys-smtbmc` and z3 for the safety and
+  reachability checks;
+- `suprove`, for the liveness checks, from the pinned OSS CAD Suite release.
+  `tools/setup_liveness_tools.sh` installs it and needs `curl`, `sha256sum`
+  and `tar`;
+- for the OpenTitan proofs, `git` to fetch OpenTitan and yices, the default
+  solver of the stress run (`SOLVER` selects another).
 
-The script downloads the OSS CAD Suite Linux x64 release dated 2026-07-27,
-verifies SHA-256
+The setup script downloads the OSS CAD Suite Linux x64 release dated
+2026-07-27, verifies SHA-256
 `d5cd8fb0276b51ae6b35945e70e03f222d82a863f2e3523b33b937be0ea416f4`,
 and extracts `suprove` plus its runtime dependencies. The default install root
 is the sibling `.tools` directory and can be changed with
-`YOSYS_SLANG_TOOL_ROOT`. The script does not replace the system Yosys or ABC.
+`YOSYS_SLANG_TOOL_ROOT`. The script does not replace the system Yosys or ABC,
+and prints the path of `suprove` as `SUPROVE_EXECUTABLE=...`.
 
 Distribution packages do not consistently name the standalone ABC executable.
 CTest discovers either `yosys-abc` or `abc` and passes the exact path only to
 the equivalence test; no global compatibility symlink is installed.
 
-Suprove reports one status per AIGER justice property, while the tested
-SymbiYosys release consumes only the first status from an AIGER engine.
-Solver-backed tests therefore route multi-justice designs through
-`tools/suprove_all_justice.py`. The wrapper verifies that the pinned backend
-reported every justice property and gives SBY one aggregate PASS only when all
-of them passed. Single-justice runs execute suprove directly.
+### Running a proof
 
-Configure and run the complete controlled proof set with the path printed by
-the installer:
+Lower the design as the tests do:
+
+```sh
+yosys -m build/slang.so -p '
+  read_slang design.sv
+  prep -top top
+  async2sync
+  formalff -clk2ff
+  chformal -lower
+  opt_clean
+  write_rtlil top.il
+'
+```
+
+SymbiYosys `mode live` proves the `$live` checks under the `$fair` ones, but
+it turns every `assert` into an assumption and drops the covers. The safety
+part of a property, such as the left operand of `s_until` or the finite
+first element of a selected sequence, is then assumed rather than proven. Run
+it in `mode prove` as well, where SymbiYosys removes the live and fair checks:
+
+```
+[tasks]
+live
+safety
+
+[options]
+live: mode live
+safety: mode prove
+
+[engines]
+live: aiger suprove
+safety: smtbmc z3
+
+[script]
+read_rtlil top.il
+prep -top top
+
+[files]
+top.il
+```
+
+```sh
+YOSYS_SLANG_REAL_SUPROVE=/absolute/path/to/suprove \
+  sby --suprove tools/suprove_all_justice.py -f top.sby
+```
+
+`tools/suprove_all_justice.py` stands in for `suprove`. A model with several
+justice properties is common: two liveness assertions, or a strong sequence
+whose selected attempt brings a fairness constraint of its own next to any other
+liveness obligation. For
+such a model suprove reports one status per justice property, of which
+SymbiYosys reads only the first, and with a fairness constraint as well it
+reports none. The wrapper proves each justice property on its own, on a copy of
+the model that keeps every fairness constraint, and reports a failure with the
+witness of the property that failed, or a pass when all of them pass. A model
+with one justice property goes to suprove unchanged.
+
+Before relying on a proof, also establish non-vacuity: cover the
+antecedent or request path in `mode cover`, inspect the generated `live` and
+`fair` checks, and keep a broken-design run that the liveness engine must
+reject.
+
+### Tests
+
+`tests/liveness/run_response_proof.sh PLUGIN SUPROVE` runs every
+solver-backed liveness test in an isolated temporary directory and requires
+each expected `PASS` and each intentional `FAIL`. In `mode live`, most shapes
+with a failing variant next to the passing one:
+
+- `response.sby`: a request-grant response, and the same with the grant
+  mutated away;
+- `semantics.sby`: `disable iff` and `reject_on` around a response, `or` of
+  eventualities, minimum delays, fairness assumptions, suffix ages and
+  overlapping requests;
+- `regular.sby`: the unbounded sequence operators;
+- `procedural.sby`: procedural assertions, guards, `iff` clocking and default
+  clocking;
+- `sequence.sby`: named sequences, `nexttime` and empty matches;
+- `abort.sby`: aborts around selected sequences, implications and
+  followed-by, and their order;
+- `constants.sby`: elaboration-time constants in properties;
+- `composition.sby`: strong and weak sequences, sequence products and
+  followed-by;
+- `justice.sby`: several justice properties with a fairness constraint;
+- `operators.sby`: the progress part of strong until, and liveness under
+  `implies`, `if` and `case`.
+
+The safety parts of mixed properties are proven in `mode prove`
+(`*_safety.sby`), the antecedents are covered (`*reachability.sby`), and
+`raw_live.sby` checks the solver flow on hand-written RTLIL.
+
+The OpenTitan liveness tests fetch a pinned OpenTitan revision on demand. The
+arbiter test proves safety, reachability and starvation freedom of
+`prim_arbiter_ppc`, then requires separate safety and liveness mutations to
+fail. The stress-target test lowers and inspects the liveness properties of
+`prim_alert_rxtx`, `prim_esc_rxtx`, `sha3pad` and `tlul` and runs their
+bounded safety portions after checking the number of live and fair checks.
+Small target-specific models separately prove the corresponding liveness
+shapes, antecedent reachability and intentional non-progress failures. The
+unconstrained whole peripheral harnesses are not claimed as end-to-end
+liveness proofs.
+
+Through CTest:
 
 ```sh
 cmake -S . -B build \
   -DENABLE_LIVENESS_PROOFS=ON \
-  -DENABLE_OPENTITAN_SVA_STRESS=ON \
   -DSUPROVE_EXECUTABLE=/absolute/path/to/suprove
 cmake --build build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -L liveness --output-on-failure
 ```
 
-The liveness proof driver creates an isolated temporary directory and requires
-both expected `PASS` results and intentional `FAIL` results. It covers direct
-response, minimum delay, fairness, disable/accept/reject behavior, exact suffix
-age tracking, overlapping requests, regular-sequence composition, strong-until
-safety, and antecedent reachability.
-
-The OpenTitan tests fetch a pinned OpenTitan revision on demand. The arbiter test proves safety,
-reachability, and starvation freedom on the real arbiter, then requires
-separate safety and liveness mutations to fail. The opt-in stress targets lower
-and inspect the real alert-handler, escalation-timer, SHA3 padding, and TL-UL
-properties and run their bounded safety portions after retaining evidence of
-the emitted live/fair cells. Small target-specific models separately prove the
-corresponding liveness shapes, antecedent reachability, and intentional
-non-progress failures. The unconstrained whole peripheral harnesses are not
-claimed as end-to-end liveness proofs.
+`ENABLE_LIVENESS_PROOFS` alone registers the response proofs. With
+`-DENABLE_OPENTITAN_SVA_STRESS=ON` as well, the OpenTitan liveness tests are
+registered too, next to the OpenTitan SVA stress test.
 
 ## Inspecting generated obligations
 
@@ -280,8 +400,3 @@ yosys -m build/slang.so -p '
 '
 grep -E '\\$check|FLAVOR|sva_(pending|nfa|response|select)' design.il
 ```
-
-Before relying on a proof, also establish non-vacuity. Prove or cover the
-antecedent/request path separately, inspect the generated `live` and `fair`
-cells, and retain an intentional broken-design run that the liveness engine
-must reject.

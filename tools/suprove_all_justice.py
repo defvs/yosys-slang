@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prove every justice property of an AIGER model with suprove for SymbiYosys.
 
-SymbiYosys 0.66 consumes only the first status in the AIGER solver stream.
+SymbiYosys takes only the first status in the AIGER solver stream.
 Suprove emits one status for each justice property of a model without fairness
 constraints, so a later failure can be lost, and for a model with several
 justice properties and a fairness constraint it emits no status at all. For a
