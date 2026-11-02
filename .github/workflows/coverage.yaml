@@ -37,7 +37,7 @@ jobs:
           cache-name: cache-yosys
         with:
           path: tests/third_party/yosys
-          key: yosys-${{ runner.os }}-${{ matrix.yosys_version }}
+          key: yosys-abc-${{ runner.os }}-${{ matrix.yosys_version }}
       - if: ${{ steps.cache-yosys.outputs.cache-hit != 'true' }}
         name: Pull Yosys
         run: |
@@ -46,7 +46,6 @@ jobs:
             --branch ${{ matrix.yosys_version }} \
             -- https://github.com/YosysHQ/yosys.git yosys_build
           make -C yosys_build config-gcc
-          echo "ENABLE_ABC := 0" >> yosys_build/Makefile.conf
           make -C yosys_build -j$(nproc)
           make -C yosys_build install DESTDIR=$(pwd)/yosys/
       - name: Install Yosys

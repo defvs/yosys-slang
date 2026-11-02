@@ -49,7 +49,6 @@ extern slang::DiagCode BboxExportPortWidths;
 extern slang::DiagCode NoteIgnoreInitial;
 extern slang::DiagCode PortCorrespondence;
 extern slang::DiagCode UnsynthesizableFeature;
-extern slang::DiagCode SVAUnsupported;
 extern slang::DiagCode ExpectStatementUnsupported;
 extern slang::DiagCode ProgramUnsupported;
 extern slang::DiagCode ForbiddenDemotion;

@@ -35,6 +35,10 @@ Unsupported or rewritten OpenTitan constructs:
 
 ## Main Suite Integration
 
+The OpenTitan tree is large and only these tests need it, so it is not a
+submodule. `common/fetch_opentitan.sh` checks out the pinned revision into
+`tests/third_party/opentitan` on first use.
+
 Opt-in:
 
 ```sh

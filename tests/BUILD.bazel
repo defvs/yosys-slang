@@ -16,6 +16,12 @@ _VARIOUS_TESTS = [
     "program_test", "synthesis_define", "issue400"
 ]
 
+# sva/seqequiv.tcl is CMake-only as it needs yosys-abc for its proofs
+_SVA_TESTS = [
+    "range_guard", "unsupported_clocking", "unsupported_sampled_clocking",
+    "vector_delay_init",
+]
+
 _UNIT_DATA = glob(["unit/*.sv"])
 _VARIOUS_DATA = glob([
     "various/*.sv", "various/*.v", "various/*.hex", "various/*.bin",
@@ -37,6 +43,14 @@ _VARIOUS_DATA = glob([
         data = _VARIOUS_DATA,
     )
     for t in _VARIOUS_TESTS
+]
+
+[
+    yosys_test(
+        name = "sva_" + t,
+        script = "sva/%s.ys" % t,
+    )
+    for t in _SVA_TESTS
 ]
 
 yosys_test(

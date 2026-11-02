@@ -1,5 +1,6 @@
 /build/
 __pycache__/
+/tests/third_party/opentitan/
 /bazel-*
 /MODULE.bazel.lock
 .*

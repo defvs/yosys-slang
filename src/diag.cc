@@ -96,7 +96,6 @@ DiagCode BboxExportPortWidths(DiagSubsystem::Netlist, 1040);
 DiagCode NoteIgnoreInitial(DiagSubsystem::Netlist, 1041);
 DiagCode PortCorrespondence(DiagSubsystem::Netlist, 1042);
 DiagCode UnsynthesizableFeature(DiagSubsystem::Netlist, 1043);
-DiagCode SVAUnsupported(DiagSubsystem::Netlist, 1044);
 DiagCode ExpectStatementUnsupported(DiagSubsystem::Netlist, 1045);
 DiagCode ProgramUnsupported(DiagSubsystem::Netlist, 1046);
 DiagCode ForbiddenDemotion(DiagSubsystem::Netlist, 1047);
@@ -255,9 +254,6 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(PortCorrespondence, DiagnosticSeverity::Error);
 
 	engine.setMessage(UnsynthesizableFeature, "unsynthesizable feature");
-
-	engine.setMessage(SVAUnsupported, "SVA unsupported (ignore all assertions with '--ignore-assertions')");
-	engine.setSeverity(SVAUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(ExpectStatementUnsupported, "expect statement will not be synthesized");
 	engine.setSeverity(ExpectStatementUnsupported, DiagnosticSeverity::Warning);

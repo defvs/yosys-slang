@@ -4,6 +4,3 @@
 [submodule "third_party/fmt"]
 	path = third_party/fmt
 	url = ../../fmtlib/fmt.git
-[submodule "tests/third_party/opentitan"]
-	path = tests/third_party/opentitan
-	url = ../../lowRISC/opentitan.git
