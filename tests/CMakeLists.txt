@@ -30,9 +30,9 @@ set(ALL_TESTS
     sva/final_assertions.ys
     sva/frozen_past_first_tick.ys
     sva/kept_hierarchy.ys
+    sva/large_ranges.ys
     sva/local_variables.ys
     sva/nested_disable.ys
-    sva/range_guard.ys
     sva/repeated_labels.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys

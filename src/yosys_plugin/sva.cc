@@ -30,19 +30,6 @@ namespace slang_frontend {
 // This portion was written by Louis-Emile Ploix "mndstrmr" (c) 2025; ISC licence
 // Brought into Slang head by Mel Young 2026, since reworked and extended (see git history)
 
-static constexpr uint32_t SVA_ENUMERATION_LIMIT = 1024;
-
-// Ranges within the limit above still multiply when nested or put in a row, so these
-// limits go by an assertion as a whole: the first by the ticks it spans, the second by
-// the delay registers and logic cells it lowers to. Those take about 1.4 KiB each,
-// and `a ##[0:1024] b` gets through a third of the limit.
-static constexpr int SVA_LENGTH_LIMIT = 1 << 16;
-static constexpr uint64_t SVA_COST_LIMIT = 3000000;
-
-// Lowering can have a long way to go past the point we know it's in vain, so we
-// leave it altogether on hitting a limit
-struct SvaLimitExceeded {};
-
 static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
 	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
 }
@@ -92,12 +79,6 @@ private:
 				   bool frozen_, slang::SourceLocation loc_):
 		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
 
-	void add_cost(int cost) const {
-		eval.sva_lowering_cost += cost;
-		if (eval.sva_lowering_cost > SVA_COST_LIMIT)
-			throw SvaLimitExceeded {};
-	}
-
 public:
 	static AssertionMatch Empty(EvalContext& eval, slang::SourceLocation loc) {
 		return { eval, ir::S1, ir::S1, 0, true, false, loc };
@@ -120,10 +101,6 @@ public:
 	}
 
 	AssertionMatch shift(int time) const {
-		if (start + time > SVA_LENGTH_LIMIT)
-			throw SvaLimitExceeded {};
-		add_cost(time);
-
 		if (empty)
 			return { eval, sig, en, start + time, true, frozen, loc };
 
@@ -138,7 +115,6 @@ public:
 
 	AssertionMatch operator||(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
-		add_cost(1);
 
 		ir::Value gated = en.is_fully_const() && en.as_bool() ? sig : ir::Value(eval.netlist.LogicAnd(en, sig));
 		ir::Value other_gated = other.en.is_fully_const() && other.en.as_bool()
@@ -151,7 +127,6 @@ public:
 
 	AssertionMatch operator&&(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
-		add_cost(1);
 
 		ir::Value result_en = eval.netlist.LogicAnd(en, other.en);
 		int result_start = std::max(other.start, start);
@@ -170,7 +145,6 @@ public:
 
 	AssertionMatch operator!() const {
 		assert_invariant(!empty);
-		add_cost(1);
 
 		if (sig.is_fully_const()) return { eval, sig.as_bool() ? ir::S0 : ir::S1, en, start, false, frozen, loc };
 		return { eval, eval.netlist.LogicNot(sig), en, start, false, frozen, loc };
@@ -392,15 +366,6 @@ static ir::Value gated_signal(const AssertionMatch& path) {
 	return path.eval.netlist.LogicAnd(path.en, path.sig);
 }
 
-static bool check_finite_range(EvalContext& eval, const ast::AssertionExpr& expr,
-							   uint32_t min, uint32_t max) {
-	if (max < min || max > SVA_ENUMERATION_LIMIT) {
-		eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
-		return false;
-	}
-	return true;
-}
-
 // `a` being synthesized in the context `ctx`
 static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vector<AssertionMatch> a,
 										   int min, int max, OperandPaths& b) {
@@ -479,8 +444,6 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 		eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 		return {};
 	}
-	if (!check_finite_range(eval, expr, repetition->range.min, repetition->range.max.value()))
-		return {};
 
 	std::vector<AssertionMatch> repeated;
 	for (uint32_t count = repetition->range.min; count <= repetition->range.max.value(); count++) {
@@ -591,8 +554,6 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
 					}
-					if (!check_finite_range(eval, expr, delay.min, delay.max.value()))
-						return {};
 
 					// slang gives a bare first element a delay of zero too, which is
 					// not the same as an explicit `##0` if the element can be empty
@@ -619,8 +580,6 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
 					}
-					if (!check_finite_range(eval, expr, uop.range->min, uop.range->max.value()))
-						return {};
 
 					std::vector<AssertionMatch> true_path = {{eval, ir::S1, expr_loc(expr)}};
 					OperandPaths operand(ctx, [&](const AttemptContext& at) {
@@ -638,8 +597,6 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 							eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 							return {};
 						}
-						if (!check_finite_range(eval, expr, uop.range->min, uop.range->max.value()))
-							return {};
 						delay = uop.range->min;
 					}
 
@@ -904,8 +861,6 @@ static bool clocking_matches_process(const ProcessTiming &clocking, const Proces
 // in flight run to completion regardless (IEEE Std 1800-2017 section 16.14.6).
 static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion,
 									  ir::Net attempt, bool cover) {
-	eval.sva_lowering_cost = 0;
-
 	const ast::AssertionExpr *property = &assertion;
 	const ast::Expression *condition = nullptr;
 	slang::SourceLocation disable_loc = expr_loc(assertion);
@@ -985,14 +940,8 @@ static void lower_sva_property(const ast::ConcurrentAssertionStatement &statemen
 		expr = &clocking_expr->expr;
 	}
 
-	AssertionResult result;
-	try {
-		result = eval_assertion(procedural.eval, *expr, attempt,
-								statement.assertionKind == ast::AssertionKind::CoverProperty);
-	} catch (const SvaLimitExceeded &) {
-		netlist.add_diag(diag::AssertionUnsupported, expr_loc(*expr));
-		return;
-	}
+	AssertionResult result = eval_assertion(procedural.eval, *expr, attempt,
+											statement.assertionKind == ast::AssertionKind::CoverProperty);
 
 	std::string flavor;
 	switch (statement.assertionKind) {

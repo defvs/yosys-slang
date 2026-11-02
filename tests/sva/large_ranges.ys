@@ -1,0 +1,11 @@
+# There's no limit on the size of a range, ranges past 1024 lower like any other
+read_slang <<EOF
+module large_ranges(input logic clk, input logic a, input logic b);
+	constant_range_test: assert property (@(posedge clk) 1'b1 ##[0:2000] 1'b1);
+	long_delay_test: assert property (@(posedge clk) a ##4096 b);
+	long_repetition_test: assert property (@(posedge clk) a[*1025] |-> b);
+	long_nexttime_test: assert property (@(posedge clk) nexttime [1500] a);
+endmodule
+EOF
+
+select -assert-count 4 t:$check
