@@ -9,16 +9,20 @@ The default `run_all.sh` path is expected to pass. TLUL uses
 `ASSUME_LEGAL_D2H=1` by default so the harness checks SVA lowering rather than
 failing on an intentionally unconstrained response channel.
 
+A property dropped in lowering would pass BMC unnoticed, so each target also
+fails unless the model it hands to BMC has the number of checks below. Those
+count the assertions, assumptions and covers, including the ones of the harness.
+
 ## Coverage
 
 | Target | Enabled checks | Expected result |
 | --- | ---: | --- |
 | `prim_fifo_sync` | 21 | PASS |
-| `prim_alert_rxtx` | 7 | PASS |
+| `prim_alert_rxtx` | 10 | PASS |
 | `prim_esc_rxtx` | 10 | PASS |
 | `clkmgr` | 5 | PASS |
 | `sha3pad` | 1 | PASS |
-| `tlul` | generated from `tlul_assert.sv` | PASS with legal D2H assumption |
+| `tlul` | 12 | PASS with legal D2H assumption |
 
 Unsupported or rewritten OpenTitan constructs:
 

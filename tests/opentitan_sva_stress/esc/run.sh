@@ -15,7 +15,7 @@ prepare_source "$OT/hw/ip/prim/rtl/prim_esc_receiver.sv" "$FILTERED/prim_esc_rec
 prepare_source "$OT/hw/ip/prim/rtl/prim_count.sv" "$FILTERED/prim_count.sv"
 prepare_source "$OT/hw/ip/prim/rtl/prim_diff_decode.sv" "$FILTERED/prim_diff_decode.sv"
 
-run_case esc prim_esc_rxtx_sva_harness "$DEPTH" \
+run_case esc prim_esc_rxtx_sva_harness "$DEPTH" 10 \
   "$OT/hw/ip/prim/rtl/prim_util_pkg.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop_en.sv" \

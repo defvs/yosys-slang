@@ -37,18 +37,19 @@ done
   echo "This run checks:"
   echo
   echo "- synthesis through yosys-slang and Yosys;"
+  echo "- the number of checks synthesized for each target;"
   echo "- bounded model checking through yosys-smtbmc;"
   echo "- filtered OpenTitan SVA properties, not OpenTitan \`YOSYS\` macro mode."
   echo
-  echo "| Target | Synthesis | BMC | Log |"
-  echo "| --- | --- | --- | --- |"
+  echo "| Target | Synthesis | Checks | BMC | Log |"
+  echo "| --- | --- | --- | --- | --- |"
   for case in "${CASES[@]}"; do
     result="$BUILD_ROOT/$case/result.txt"
     if [ -f "$result" ]; then
-      IFS='|' read -r name synth bmc dir < "$result"
-      echo "| $name | $synth | $bmc | \`$dir\` |"
+      IFS='|' read -r name synth checks bmc dir < "$result"
+      echo "| $name | $synth | $checks | $bmc | \`$dir\` |"
     else
-      echo "| $case | FAIL | SKIP | missing result |"
+      echo "| $case | FAIL | SKIP | SKIP | missing result |"
     fi
   done
   echo

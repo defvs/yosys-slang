@@ -20,11 +20,20 @@ prepare_source() {
   python3 "$STRESS_DIR/common/prepare_sources.py" --src "$src" --dst "$dst"
 }
 
+# Count the checks in a model written by write_smt2
+count_checks() {
+  grep -c -E '^; yosys-smt2-(assert|assume|cover) ' "$1" || true
+}
+
+# Synthesize a harness and run BMC on it. A property dropped in lowering would
+# pass BMC unnoticed, so the case also fails unless the model has the expected
+# number of checks.
 run_case() {
   local name="$1"
   local top="$2"
   local depth="$3"
-  shift 3
+  local expected_checks="$4"
+  shift 4
 
   local case_dir="$BUILD_ROOT/$name"
   local ys="$case_dir/$name.ys"
@@ -63,6 +72,17 @@ EOF
     synth_status=FAIL
   fi
 
+  local checks_status=SKIP
+  local checks=
+  if [ "$synth_status" = PASS ]; then
+    checks=$(count_checks "$smt")
+    if [ "$checks" = "$expected_checks" ]; then
+      checks_status=PASS
+    else
+      checks_status=FAIL
+    fi
+  fi
+
   local bmc_status=SKIP
   if [ "$synth_status" = PASS ]; then
     if "$SMTBMC" --keep-going -s "$SOLVER" -t "$depth" "$smt" >"$bmc_log" 2>&1; then
@@ -73,15 +93,19 @@ EOF
   fi
 
   {
-    echo "$name|$synth_status|$bmc_status|$case_dir"
+    echo "$name|$synth_status|$checks_status|$bmc_status|$case_dir"
     if [ "$synth_status" = FAIL ]; then
       grep -E 'ERROR:|Assert failed|Unsupported|internal error|Exception' "$synth_log" | head -20 || true
-    elif [ "$bmc_status" = FAIL ]; then
+    fi
+    if [ "$checks_status" = FAIL ]; then
+      echo "Expected $expected_checks checks, found $checks."
+    fi
+    if [ "$bmc_status" = FAIL ]; then
       grep -E 'Assert failed|Status:|BMC failed|FAILED' "$bmc_log" || true
-    else
+    elif [ "$bmc_status" = PASS ]; then
       grep -E 'Status:|PASSED' "$bmc_log" || true
     fi
   } > "$case_dir/result.txt"
 
-  [ "$synth_status" = PASS ] && [ "$bmc_status" = PASS ]
+  [ "$synth_status" = PASS ] && [ "$checks_status" = PASS ] && [ "$bmc_status" = PASS ]
 }

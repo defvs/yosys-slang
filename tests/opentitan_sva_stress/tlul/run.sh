@@ -12,12 +12,17 @@ BUILD="$BUILD_ROOT/tlul"
 ASSUME_LEGAL_D2H="${ASSUME_LEGAL_D2H:-1}"
 ASSUME_LEGAL_D2H_IMMEDIATE="${ASSUME_LEGAL_D2H_IMMEDIATE:-0}"
 EXPLICIT_TLUL_CLOCKING="${EXPLICIT_TLUL_CLOCKING:-0}"
+# The checks enabled in tlul_assert.sv, plus four from the harness if it
+# assumes legal D2H responses
+EXPECTED_CHECKS=8
 SLANG_DEFINES=()
 if [ "$ASSUME_LEGAL_D2H" = 1 ]; then
   SLANG_DEFINES=(-D TLUL_ASSUME_LEGAL_D2H)
+  EXPECTED_CHECKS=12
 fi
 if [ "$ASSUME_LEGAL_D2H_IMMEDIATE" = 1 ]; then
   SLANG_DEFINES=(-D TLUL_ASSUME_LEGAL_D2H_IMMEDIATE)
+  EXPECTED_CHECKS=12
 fi
 
 TLUL_ASSERT_SRC="$OT/hw/ip/tlul/rtl/tlul_assert.sv"
@@ -62,6 +67,17 @@ if ! "$YOSYS" -m "$PLUGIN" "$BUILD/tlul_sva.ys" >"$SYNTH_LOG" 2>&1; then
   synth_status=FAIL
 fi
 
+checks_status=SKIP
+checks=
+if [ "$synth_status" = PASS ]; then
+  checks=$(count_checks "$SMT")
+  if [ "$checks" = "$EXPECTED_CHECKS" ]; then
+    checks_status=PASS
+  else
+    checks_status=FAIL
+  fi
+fi
+
 bmc_status=SKIP
 if [ "$synth_status" = PASS ]; then
   if "$SMTBMC" --keep-going -s "$SOLVER" -t "$DEPTH" "$SMT" >"$BMC_LOG" 2>&1; then
@@ -78,6 +94,7 @@ fi
   echo "- Checker source: $TLUL_ASSERT_SRC"
   echo "- Filtered checker: $TLUL_ASSERT_FILTERED"
   echo "- Yosys synthesis: $synth_status"
+  echo "- Checks: ${checks:-none} of $EXPECTED_CHECKS expected"
   echo "- BMC depth: $DEPTH"
   echo "- BMC solver: $SOLVER"
   echo "- Assume legal D2H responses: $ASSUME_LEGAL_D2H"
@@ -137,15 +154,19 @@ fi
 } > "$SUMMARY"
 
 {
-  echo "tlul|$synth_status|$bmc_status|$BUILD"
+  echo "tlul|$synth_status|$checks_status|$bmc_status|$BUILD"
   if [ "$synth_status" = FAIL ]; then
     grep -E 'ERROR:|Assert failed|Unsupported|internal error|Exception' "$SYNTH_LOG" | head -20 || true
-  elif [ "$bmc_status" = FAIL ]; then
+  fi
+  if [ "$checks_status" = FAIL ]; then
+    echo "Expected $EXPECTED_CHECKS checks, found $checks."
+  fi
+  if [ "$bmc_status" = FAIL ]; then
     grep -E 'Assert failed|Status:|BMC failed|FAILED' "$BMC_LOG" || true
-  else
+  elif [ "$bmc_status" = PASS ]; then
     grep -E 'Status:|PASSED' "$BMC_LOG" || true
   fi
 } > "$RESULT"
 
 echo "$SUMMARY"
-exit $([ "$synth_status" = PASS ] && [ "$bmc_status" = PASS ] && echo 0 || echo 1)
+exit $([ "$synth_status" = PASS ] && [ "$checks_status" = PASS ] && [ "$bmc_status" = PASS ] && echo 0 || echo 1)
