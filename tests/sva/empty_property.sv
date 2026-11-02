@@ -29,7 +29,7 @@ module empty_property(input clk_i, input logic a, input logic b, input logic c, 
 		or_ref: assert(!a || b);
 		disable_ref: assert(r);
 		disable_only_empty_ref: assert(r);
-		disable_other_match_ref: assert(!gate1 || r || r_d1 || b_d1);
+		disable_other_match_ref: assert(!gate1 || r_d1 || b_d1);
 
 		gate1 <= 1;
 		gate2 <= gate1;

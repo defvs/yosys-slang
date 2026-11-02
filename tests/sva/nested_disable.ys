@@ -1,0 +1,51 @@
+# A property can only have a disable iff at its top. slang catches the instances of one
+# which has it elsewhere, but not if it's got there by way of another instance.
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module nested_disable(input logic clk, input logic r, input logic a, input logic b);
+	property disabled;
+		disable iff (r) a;
+	endproperty
+
+	property instance_of_disabled;
+		disabled;
+	endproperty
+
+	nested_test: assert property (@(posedge clk) b |=> instance_of_disabled);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module negated_disable(input logic clk, input logic r, input logic a);
+	property disabled;
+		disable iff (r) a;
+	endproperty
+
+	property instance_of_disabled;
+		disabled;
+	endproperty
+
+	negated_test: assert property (@(posedge clk) not instance_of_disabled);
+endmodule
+EOF
+
+design -reset
+
+read_slang <<EOF
+module top_disable(input logic clk, input logic r, input logic a);
+	property disabled;
+		disable iff (r) a;
+	endproperty
+
+	property instance_of_disabled;
+		disabled;
+	endproperty
+
+	top_test: assert property (@(posedge clk) instance_of_disabled);
+endmodule
+EOF
+
+select -assert-count 1 t:$check
