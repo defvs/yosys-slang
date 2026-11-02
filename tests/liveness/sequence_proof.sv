@@ -114,3 +114,65 @@ module nexttime_empty_fail ((* gclk *) input logic clk);
 
 	assert property (@(posedge clk) request |-> s_eventually nexttime (1'b0[*0:$]));
 endmodule
+
+// An empty match of a sequence used as a property is no success
+module empty_eventually_pass ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire b = age == 2;
+
+	assert property (@(posedge clk) request |-> s_eventually (1'b0[*0:1] ##1 b));
+endmodule
+
+module empty_eventually_fail ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+
+	assert property (@(posedge clk) request |-> s_eventually 1'b0[*0:1]);
+endmodule
+
+// `R #=# P` is `(R ##1 `true) #-# P`, which an empty match of R matches on the attempt's
+// tick, while `R #-# P` takes a non-empty match of R
+module empty_followed_pass ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire b = age == 2;
+
+	assert property (@(posedge clk) request |-> (1'b0[*0:1] #=# s_eventually b));
+endmodule
+
+module empty_followed_fail ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire b = 1'b0;
+
+	assert property (@(posedge clk) request |-> (1'b0[*0:1] #=# s_eventually b));
+endmodule
+
+module empty_overlapped_fail ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire b = age == 2;
+
+	assert property (@(posedge clk) request |-> (1'b0[*0:1] #-# s_eventually b));
+endmodule

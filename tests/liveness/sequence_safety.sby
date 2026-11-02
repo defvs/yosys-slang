@@ -1,0 +1,25 @@
+[tasks]
+followed_pass
+overlapped_fail
+
+[options]
+mode prove
+depth 10
+overlapped_fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+followed_pass: read_rtlil empty_followed_pass.il
+followed_pass: chformal -live -remove
+followed_pass: chformal -fair -remove
+followed_pass: prep -top empty_followed_pass
+overlapped_fail: read_rtlil empty_overlapped_fail.il
+overlapped_fail: chformal -live -remove
+overlapped_fail: chformal -fair -remove
+overlapped_fail: prep -top empty_overlapped_fail
+
+[files]
+followed_pass: empty_followed_pass.il
+overlapped_fail: empty_overlapped_fail.il

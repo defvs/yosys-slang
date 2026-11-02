@@ -1584,8 +1584,11 @@ finite_eventual_candidates(EvalContext& eval, const ast::AssertionExpr& sequence
 	if (assertion_has_unbounded_sequence(sequence))
 		return std::nullopt;
 
-	// The disable is up to the monitor
-	auto paths = synthesize_assertion_expr(eval, AttemptContext(), sequence);
+	// The disable is up to the monitor. The operand is used as a property, so an
+	// empty match of it meets nothing.
+	AttemptContext ctx;
+	auto paths = property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, sequence),
+								expr_loc(sequence));
 
 	std::vector<EventualCandidate> candidates;
 	for (const auto& path : compress_paths(paths)) {
@@ -1775,15 +1778,16 @@ static void add_response_liveness_obligation(
 		 ir::S1, pending});
 }
 
+// `admits_empty` reports an empty match of the sequence
 static std::optional<ir::Net>
 antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 					   ir::Net trigger, bool nonoverlapped,
-					   ir::Net disable) {
+					   ir::Net disable, bool *admits_empty = nullptr) {
 	ir::Net result = ir::S0;
-	bool admits_empty = false;
+	bool empty = false;
 	if (assertion_has_unbounded_sequence(sequence)) {
 		auto match = synthesize_unbounded_sequence(
-			eval, sequence, trigger, disable, &admits_empty);
+			eval, sequence, trigger, disable, &empty);
 		if (!match.has_value())
 			return std::nullopt;
 		result = match.value();
@@ -1792,7 +1796,7 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 		auto paths = synthesize_assertion_expr(eval, AttemptContext(), sequence);
 		for (const auto& path : compress_paths(paths)) {
 			if (path.empty) {
-				admits_empty = true;
+				empty = true;
 				continue;
 			}
 			ir::Net path_trigger = delayed_abortable_trigger(
@@ -1804,12 +1808,14 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 			result = eval.netlist.LogicOr(result, path_match);
 		}
 	}
+	if (admits_empty)
+		*admits_empty = empty;
 	// `seq |-> p` has no tick to start `p` on after an empty match, but
 	// `seq |=> p` is `(seq ##1 `true) |-> p` where it matches on the first tick
 	if (nonoverlapped) {
 		result = delayed_abortable_trigger(
 			eval, result, 1, disable, expr_loc(sequence));
-		if (admits_empty)
+		if (empty)
 			result = eval.netlist.LogicOr(result, trigger);
 	}
 	return eval.netlist.LogicAnd(result, sva_not(eval, disable));
@@ -1951,13 +1957,16 @@ static ir::Net add_selected_trigger(
 	return selected;
 }
 
+// High on the last tick of a non-empty match of the sequence the selected attempt
+// started. An empty match has no such tick, `admits_empty` reports it.
 static std::optional<ir::Net> synthesize_selected_sequence(
 		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net disable);
+		ir::Net trigger, ir::Net disable, bool& admits_empty);
 
 static std::optional<ir::Net> synthesize_selected_sequence(
 		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net disable) {
+		ir::Net trigger, ir::Net disable, bool& admits_empty) {
+	admits_empty = false;
 	if (sequence.kind == ast::AssertionExprKind::Simple) {
 		const auto& simple = sequence.as<ast::SimpleAssertionExpr>();
 		if (!simple.repetition.has_value() &&
@@ -1966,7 +1975,7 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 				simple.expr.as<ast::AssertionInstanceExpression>();
 			if (!instance.isRecursiveProperty)
 				return synthesize_selected_sequence(
-					eval, instance.body, trigger, disable);
+					eval, instance.body, trigger, disable, admits_empty);
 		}
 	}
 	if (sequence.kind == ast::AssertionExprKind::FirstMatch) {
@@ -1976,30 +1985,38 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 								  expr_loc(sequence));
 			return std::nullopt;
 		}
-		return synthesize_selected_sequence(
-			eval, first.seq, trigger, disable);
+		auto match = synthesize_selected_sequence(
+			eval, first.seq, trigger, disable, admits_empty);
+		// An empty match comes ahead of any other, so it's the only first match
+		if (match.has_value() && admits_empty)
+			return ir::S0;
+		return match;
 	}
 	if (sequence.kind == ast::AssertionExprKind::Binary) {
 		const auto& binary = sequence.as<ast::BinaryAssertionExpr>();
+		bool left_empty = false;
+		bool right_empty = false;
 		switch (binary.op) {
 		case ast::BinaryAssertionOperator::Or:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable);
+					eval, binary.left, trigger, disable, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable);
+					eval, binary.right, trigger, disable, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
+				admits_empty = left_empty || right_empty;
 				return eval.netlist.LogicOr(left.value(), right.value());
 			}
 		case ast::BinaryAssertionOperator::And:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable);
+					eval, binary.left, trigger, disable, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable);
+					eval, binary.right, trigger, disable, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
+				admits_empty = left_empty && right_empty;
 				ir::Net left_seen = add_sticky_observation(
 					eval, left.value(), disable, expr_loc(binary.left),
 					"sva_and_left");
@@ -2011,11 +2028,12 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		case ast::BinaryAssertionOperator::Intersect:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable);
+					eval, binary.left, trigger, disable, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable);
+					eval, binary.right, trigger, disable, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
+				admits_empty = left_empty && right_empty;
 				return eval.netlist.LogicAnd(left.value(), right.value());
 			}
 		case ast::BinaryAssertionOperator::Within:
@@ -2024,11 +2042,12 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 					eval, trigger, disable, expr_loc(binary.left),
 					"sva_within_start");
 				auto inner = synthesize_selected_sequence(
-					eval, binary.left, delayed_start, disable);
+					eval, binary.left, delayed_start, disable, left_empty);
 				auto outer = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable);
+					eval, binary.right, trigger, disable, right_empty);
 				if (!inner.has_value() || !outer.has_value())
 					return std::nullopt;
+				admits_empty = left_empty && right_empty;
 				ir::Net inner_seen = add_sticky_observation(
 					eval, inner.value(), disable, expr_loc(binary.left),
 					"sva_within_seen");
@@ -2044,7 +2063,7 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 					return std::nullopt;
 				}
 				auto body = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable);
+					eval, binary.right, trigger, disable, admits_empty);
 				if (!body.has_value())
 					return std::nullopt;
 				ir::Net active = add_sticky_observation(
@@ -2065,7 +2084,7 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		}
 	}
 	return synthesize_unbounded_sequence(
-		eval, sequence, trigger, disable);
+		eval, sequence, trigger, disable, &admits_empty);
 }
 
 static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr& expr,
@@ -2263,8 +2282,10 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		ir::Net future_start = add_sticky_observation(
 			eval, selected, disable, expr_loc(eventual),
 			"sva_eventual_start");
+		// The operand is used as a property, so an empty match of it meets nothing
+		bool admits_empty;
 		auto goal = synthesize_selected_sequence(
-			eval, eventual.expr, future_start, disable);
+			eval, eventual.expr, future_start, disable, admits_empty);
 		if (!goal.has_value())
 			return {{}, false};
 		add_liveness_obligation(
@@ -2523,8 +2544,10 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				result, eval, trigger, disable, expr_loc(expr));
 			if (!result.valid)
 				return result;
+			// An empty match is no success of the sequence used as a property
+			bool admits_empty;
 			auto goal = synthesize_selected_sequence(
-				eval, strong_weak.expr, selected, disable);
+				eval, strong_weak.expr, selected, disable, admits_empty);
 			if (!goal.has_value())
 				return {{}, false};
 			add_liveness_obligation(
@@ -2709,6 +2732,11 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				bool nonoverlapped =
 					binary.op ==
 					ast::BinaryAssertionOperator::NonOverlappedFollowedBy;
+				bool admits_empty = false;
+				auto antecedent = antecedent_match_event(
+					eval, binary.left, trigger, nonoverlapped, disable, &admits_empty);
+				if (!antecedent.has_value())
+					return {{}, false};
 				PropertyResult result;
 				if (assertion_has_unbounded_sequence(binary.left)) {
 					if (!is_suffix_eventual_sequence(binary.left)) {
@@ -2724,14 +2752,12 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					add_response_liveness_obligation(
 						result, eval, *candidates, trigger, disable,
 						expr_loc(binary.left));
-				} else {
+				} else if (!(nonoverlapped && admits_empty)) {
+					// An empty match of R is none for `R #-# P`, while `R #=# P` is
+					// `(R ##1 `true) #-# P`, which it matches on the attempt's tick
 					result = lower_finite_property_from_trigger(
 						eval, binary.left, trigger, disable);
 				}
-				auto antecedent = antecedent_match_event(
-					eval, binary.left, trigger, nonoverlapped, disable);
-				if (!antecedent.has_value())
-					return {{}, false};
 				PropertyResult consequent = lower_property(
 					eval, binary.right, antecedent.value(), disable);
 				result.valid = result.valid && consequent.valid;

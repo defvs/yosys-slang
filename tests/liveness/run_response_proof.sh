@@ -29,6 +29,7 @@ cp -- "${test_dir}/regular_reachability.sby" \
 cp -- "${test_dir}/reject_safety.sby" "${work_dir}/reject_safety.sby"
 cp -- "${test_dir}/procedural.sby" "${work_dir}/procedural.sby"
 cp -- "${test_dir}/sequence.sby" "${work_dir}/sequence.sby"
+cp -- "${test_dir}/sequence_safety.sby" "${work_dir}/sequence_safety.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -155,7 +156,12 @@ for top in \
 	zero_prefix_pass \
 	zero_prefix_fail \
 	nexttime_empty_pass \
-	nexttime_empty_fail
+	nexttime_empty_fail \
+	empty_eventually_pass \
+	empty_eventually_fail \
+	empty_followed_pass \
+	empty_followed_fail \
+	empty_overlapped_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/sequence_proof.sv;
@@ -198,4 +204,5 @@ yosys -q -m "${plugin}" -p "
 		-f procedural.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/sequence" \
 		-f sequence.sby
+	sby --prefix "${work_dir}/sequence_safety" -f sequence_safety.sby
 )

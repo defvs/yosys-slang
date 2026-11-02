@@ -60,9 +60,12 @@ Unbounded sequence monitors support:
   which match of an attempt came first.
 
 Empty matches follow IEEE 1800-2017 16.9.2.1 in concatenation and repetition,
-so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`. An empty match of an implication
-antecedent does not start the consequent of `|->`, and starts the consequent of
-`|=>` on the first tick.
+so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`, while `##0 b[*0:$]` has only the
+non-empty matches of `b[*0:$]`. An empty match of an implication antecedent
+does not start the consequent of `|->`, and starts the consequent of `|=>` on
+the first tick. The same goes for the left side of `#-#` and `#=#`. A sequence
+used as a property, as under `strong`, `nexttime` or `s_eventually`, is not met
+by an empty match, and with no other match it fails every attempt.
 
 For asserted generalized regular liveness, high-level sequence `and`,
 `intersect`, `within`, and `throughout` are composed from independently
