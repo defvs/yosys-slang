@@ -1,0 +1,56 @@
+[tasks]
+guard_response_pass
+guard_response_fail
+guard_selected_pass
+guard_selected_fail
+guard_or_pass
+guard_or_fail
+guard_or_mixed_pass
+guard_or_mixed_fail
+guard_assume_pass
+guard_assume_fail
+
+[options]
+mode live
+guard_response_fail: expect fail
+guard_selected_fail: expect fail
+guard_or_fail: expect fail
+guard_or_mixed_fail: expect fail
+guard_assume_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+guard_response_pass: read_rtlil guard_response_pass.il
+guard_response_pass: prep -top guard_response_pass
+guard_response_fail: read_rtlil guard_response_fail.il
+guard_response_fail: prep -top guard_response_fail
+guard_selected_pass: read_rtlil guard_selected_pass.il
+guard_selected_pass: prep -top guard_selected_pass
+guard_selected_fail: read_rtlil guard_selected_fail.il
+guard_selected_fail: prep -top guard_selected_fail
+guard_or_pass: read_rtlil guard_or_pass.il
+guard_or_pass: prep -top guard_or_pass
+guard_or_fail: read_rtlil guard_or_fail.il
+guard_or_fail: prep -top guard_or_fail
+guard_or_mixed_pass: read_rtlil guard_or_mixed_pass.il
+guard_or_mixed_pass: prep -top guard_or_mixed_pass
+guard_or_mixed_fail: read_rtlil guard_or_mixed_fail.il
+guard_or_mixed_fail: prep -top guard_or_mixed_fail
+guard_assume_pass: read_rtlil guard_assume_pass.il
+guard_assume_pass: prep -top guard_assume_pass
+guard_assume_fail: read_rtlil guard_assume_fail.il
+guard_assume_fail: prep -top guard_assume_fail
+
+[files]
+guard_response_pass: guard_response_pass.il
+guard_response_fail: guard_response_fail.il
+guard_selected_pass: guard_selected_pass.il
+guard_selected_fail: guard_selected_fail.il
+guard_or_pass: guard_or_pass.il
+guard_or_fail: guard_or_fail.il
+guard_or_mixed_pass: guard_or_mixed_pass.il
+guard_or_mixed_fail: guard_or_mixed_fail.il
+guard_assume_pass: guard_assume_pass.il
+guard_assume_fail: guard_assume_fail.il

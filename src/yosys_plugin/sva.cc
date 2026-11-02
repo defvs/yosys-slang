@@ -2933,7 +2933,9 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 			disable = netlist.ReduceBool(procedural.eval.sva(*condition));
 	}
 
-	PropertyResult result = lower_property(procedural.eval, expr, ir::S1, disable);
+	// The monitors start an attempt where the procedural condition holds, the attempts
+	// then run to completion regardless of it
+	PropertyResult result = lower_property(procedural.eval, expr, attempt, disable);
 	if (!result.valid)
 		return;
 	for (const auto& obligation : result.obligations) {
@@ -2986,10 +2988,8 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 		ir::Net a = netlist.ReduceBool(obligation.a);
 		ir::Net en = netlist.ReduceBool(obligation.en);
 
-		// The monitors start an attempt on every tick, the procedural condition
-		// gates their checks instead
 		auto cell = netlist.backend->canvas->addCell(std::move(cell_name), ID($check));
-		procedural.timing.extract_trigger(netlist, cell, netlist.LogicAnd(attempt, en));
+		procedural.timing.extract_trigger(netlist, cell, en);
 		cell->setParam(ID::FLAVOR, flavor);
 		cell->setParam(ID::FORMAT, std::string(""));
 		cell->setParam(ID::ARGS_WIDTH, 0);

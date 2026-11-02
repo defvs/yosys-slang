@@ -82,6 +82,10 @@ Vacuity and triggering follow the property structure:
 - no antecedent match means no response obligation;
 - a top-level eventual property launches on every enabled sampled clock.
 
+An assertion in procedural code launches an attempt on the clock ticks where
+the code around it reaches the statement, the attempt then runs to completion
+whatever that code does on later ticks (IEEE 1800-2017 16.14.6).
+
 Overlapping triggers are preserved. For an eventual finite suffix of maximum
 duration `N`, the monitor keeps pending trigger ages `1..N-1` and a saturated
 older bucket. A suffix match of duration `D` can discharge only triggers whose

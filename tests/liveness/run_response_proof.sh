@@ -27,6 +27,7 @@ cp -- "${test_dir}/regular.sby" "${work_dir}/regular.sby"
 cp -- "${test_dir}/regular_reachability.sby" \
 	"${work_dir}/regular_reachability.sby"
 cp -- "${test_dir}/reject_safety.sby" "${work_dir}/reject_safety.sby"
+cp -- "${test_dir}/procedural.sby" "${work_dir}/procedural.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -110,6 +111,29 @@ do
 	"
 done
 
+for top in \
+	guard_response_pass \
+	guard_response_fail \
+	guard_selected_pass \
+	guard_selected_fail \
+	guard_or_pass \
+	guard_or_fail \
+	guard_or_mixed_pass \
+	guard_or_mixed_fail \
+	guard_assume_pass \
+	guard_assume_fail
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/procedural_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
 yosys -q -m "${plugin}" -p "
 	read_slang -DMUTATE_LIVENESS ${test_dir}/response_proof.sv;
 	prep -top response_proof;
@@ -136,4 +160,6 @@ yosys -q -m "${plugin}" -p "
 	sby --prefix "${work_dir}/regular_reachability" \
 		-f regular_reachability.sby
 	sby --prefix "${work_dir}/reject_safety" -f reject_safety.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/procedural" \
+		-f procedural.sby
 )
