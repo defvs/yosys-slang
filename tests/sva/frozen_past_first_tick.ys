@@ -1,0 +1,160 @@
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module automatic_delay(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		delay_test: assert property (b ##1 t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module const_cast_delay(input logic clk, input logic a, input logic b);
+	logic x;
+	always @(posedge clk) begin
+		x = a;
+		delay_test: assert property (b ##1 const'(x));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module prefix_delay(input logic clk, input logic a);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		prefix_test: assert property (##1 t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module implication(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		implication_test: assert property (b |=> t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module long_antecedent(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		implication_test: assert property ((b ##1 c) |-> t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module empty_left_operand(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		empty_test: assert property (b[*0] ##2 t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module repetition(input logic clk, input logic a);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		repetition_test: assert property (t[*2]);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module throughout_condition(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		throughout_test: assert property (t throughout (b ##1 c));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module disable_condition(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		disable_test: assert property (disable iff (t) b ##1 c);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module nexttime_operand(input logic clk, input logic a);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		nexttime_test: assert property (nexttime t);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module nested_first_operand(input logic clk, input logic a, input logic b, input logic c);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		nested_test: assert property (c ##1 (t ##1 b));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module function_argument(input logic clk, input logic a, input logic b);
+	function automatic logic same(logic y);
+		return y;
+	endfunction
+	always @(posedge clk) begin
+		automatic logic t = a;
+		function_test: assert property (b ##1 same(t));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module named_sequence_argument(input logic clk, input logic a, input logic b);
+	sequence later(q);
+		b ##1 q;
+	endsequence
+	always @(posedge clk) begin
+		automatic logic t = a;
+		sequence_test: assert property (later(t));
+	end
+endmodule
+EOF

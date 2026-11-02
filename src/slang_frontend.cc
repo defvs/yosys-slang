@@ -1281,6 +1281,7 @@ ir::Value EvalContext::sva(ast::Expression const &expr)
 {
 	bool in_sva_expression_save = in_sva_expression;
 	in_sva_expression = true;
+	sva_read_frozen = false;
 	auto ret = (*this)(expr);
 	in_sva_expression = in_sva_expression_save;
 	return ret;
@@ -1406,6 +1407,8 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 					break;
 				}
 				ret = procedural->substitute_rvalue(variable1);
+				if (in_sva_expression && !ret.is_fully_const())
+					sva_read_frozen = true;
 			} else {
 				ret = netlist.convert_static(variable1);
 			}
@@ -1514,6 +1517,8 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				in_sva_expression = false;
 				ret = apply_conversion(conv, (*this)(conv.operand()));
 				in_sva_expression = in_sva_expression_save;
+				if (in_sva_expression && !ret.is_fully_const())
+					sva_read_frozen = true;
 			} else if (conv.operand().kind != ast::ExpressionKind::Streaming) {
 				ret = apply_conversion(conv, (*this)(conv.operand()));
 			} else {

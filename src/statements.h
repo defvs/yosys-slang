@@ -674,7 +674,11 @@ public:
 			{
 				RegisterEscapeConstructGuard escape_guard(
 						context, EscapeConstructKind::FunctionBody, subroutine);
+				// What's frozen in an assertion are the actual arguments, the
+				// function's own variables get evaluated on each call
+				bool sva_read_frozen_save = eval.sva_read_frozen;
 				subroutine->getBody().visit(*this);
+				eval.sva_read_frozen = sva_read_frozen_save;
 			}
 
 			for (int i = 0; i < (int)arg_symbols.size(); i++) {

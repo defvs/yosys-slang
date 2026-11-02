@@ -25,6 +25,7 @@ endif()
 
 set(ALL_TESTS
     sva/seqequiv.tcl
+    sva/frozen_past_first_tick.ys
     sva/range_guard.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys

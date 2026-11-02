@@ -242,6 +242,10 @@ struct EvalContext {
 	// is static, automatic, or is part of an expression casted to `const`
 	bool in_sva_expression = false;
 
+	// Tells if the expression last evaluated by `sva()` read an automatic variable
+	// or const cast of non-constant value, as those are frozen with the attempt
+	bool sva_read_frozen = false;
+
 	friend class EnterAutomaticScopeGuard;
 };
 

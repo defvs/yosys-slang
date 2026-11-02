@@ -64,21 +64,29 @@ struct AssertionMatch {
 	ir::Value en;
 	int start;
 	bool empty;
+	// Reads a value frozen when the attempt was queued, valid for the first tick only
+	bool frozen;
 	slang::SourceLocation loc;
 
 	AssertionMatch(EvalContext& eval_, ir::Value sig_,
 				   slang::SourceLocation loc_ = slang::SourceLocation::NoLocation):
-		eval(eval_), sig(sig_), en(ir::S1), start(0), empty(false), loc(loc_) {}
+		eval(eval_), sig(sig_), en(ir::S1), start(0), empty(false), frozen(false), loc(loc_) {}
 	AssertionMatch(const AssertionMatch&) = default;
 
 private:
 	AssertionMatch(EvalContext& eval_, ir::Value sig_, ir::Value en_, int start_, bool empty_,
-				   slang::SourceLocation loc_):
-		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), loc(loc_) {}
+				   bool frozen_, slang::SourceLocation loc_):
+		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
 
 public:
 	static AssertionMatch Empty(EvalContext& eval, slang::SourceLocation loc) {
-		return { eval, ir::S1, ir::S1, 0, true, loc };
+		return { eval, ir::S1, ir::S1, 0, true, false, loc };
+	}
+
+	static AssertionMatch Operand(EvalContext& eval, const ast::Expression& expr, slang::SourceLocation loc) {
+		AssertionMatch ret(eval, eval.sva(expr), loc);
+		ret.frozen = eval.sva_read_frozen;
+		return ret;
 	}
 
 	AssertionMatch& operator=(const AssertionMatch& other) {
@@ -86,13 +94,14 @@ public:
 		en = other.en;
 		start = other.start;
 		empty = other.empty;
+		frozen = other.frozen;
 		loc = other.loc;
 		return *this;
 	}
 
 	AssertionMatch shift(int time) const {
 		if (empty)
-			return { eval, sig, en, start + time, true, loc };
+			return { eval, sig, en, start + time, true, frozen, loc };
 
 		ir::Value shifted_sig = sig;
 		ir::Value shifted_en = en;
@@ -100,7 +109,7 @@ public:
 			shifted_sig = delay_sva_sample(eval, sig, time, ir::Sx, loc);
 		if (!en.is_fully_const())
 			shifted_en = delay_sva_sample(eval, en, time, ir::S0, loc);
-		return { eval, shifted_sig, shifted_en, start + time, false, loc };
+		return { eval, shifted_sig, shifted_en, start + time, false, frozen, loc };
 	}
 
 	AssertionMatch operator||(const AssertionMatch& other) const {
@@ -112,32 +121,42 @@ public:
 									: ir::Value(eval.netlist.LogicAnd(other.en, other.sig));
 		ir::Value result_sig = eval.netlist.LogicOr(gated, other_gated);
 		ir::Value result_en = eval.netlist.LogicOr(en, other.en);
-		return { eval, result_sig, result_en, std::max(other.start, start), false, loc };
+		return { eval, result_sig, result_en, std::max(other.start, start), false, frozen || other.frozen, loc };
 	}
 
 	AssertionMatch operator&&(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
 
 		ir::Value result_en = eval.netlist.LogicAnd(en, other.en);
+		int result_start = std::max(other.start, start);
+		bool result_frozen = frozen || other.frozen;
 		if (sig.is_fully_const() && sig.as_bool())
-			return { eval, other.sig, result_en, std::max(other.start, start), false, loc };
+			return { eval, other.sig, result_en, result_start, false, result_frozen, loc };
 		if (sig.is_fully_const() && !sig.as_bool())
-			return { eval, ir::S0, result_en, std::max(other.start, start), false, loc };
+			return { eval, ir::S0, result_en, result_start, false, result_frozen, loc };
 		if (other.sig.is_fully_const() && other.sig.as_bool())
-			return { eval, sig, result_en, std::max(other.start, start), false, loc };
+			return { eval, sig, result_en, result_start, false, result_frozen, loc };
 		if (other.sig.is_fully_const() && !other.sig.as_bool())
-			return { eval, ir::S0, result_en, std::max(other.start, start), false, loc };
-		return { eval, eval.netlist.LogicAnd(sig, other.sig), result_en,
-				 std::max(other.start, start), false, loc };
+			return { eval, ir::S0, result_en, result_start, false, result_frozen, loc };
+		return { eval, eval.netlist.LogicAnd(sig, other.sig), result_en, result_start, false,
+				 result_frozen, loc };
 	}
 
 	AssertionMatch operator!() const {
 		assert_invariant(!empty);
 
-		if (sig.is_fully_const()) return { eval, sig.as_bool() ? ir::S0 : ir::S1, en, start, false, loc };
-		return { eval, eval.netlist.LogicNot(sig), en, start, false, loc };
+		if (sig.is_fully_const()) return { eval, sig.as_bool() ? ir::S0 : ir::S1, en, start, false, frozen, loc };
+		return { eval, eval.netlist.LogicNot(sig), en, start, false, frozen, loc };
 	}
 };
+
+// Automatic variables and const casts keep the value they had when the attempt
+// was queued (IEEE Std 1800-2017 section 16.14.6.1), while we evaluate a path at
+// the tick it's placed at, so such a path can't go past the attempt's first tick.
+static void check_frozen_offset(const AssertionMatch& path, int offset) {
+	if (path.frozen && offset > 0)
+		path.eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, path.loc);
+}
 
 static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> paths) {
 	std::vector<AssertionMatch> empty_paths;
@@ -240,8 +259,10 @@ static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int mi
 				}
 				if (path.empty) {
 					// `empty ##N seq` is `##(N-1) seq`
-					if (offset > 0)
+					if (offset > 0) {
+						check_frozen_offset(inner, offset - 1);
 						new_own_paths.push_back(AssertionMatch(path.eval, ir::S1, path.loc).shift(offset - 1 + inner.start) && inner);
+					}
 					continue;
 				}
 				if (inner.empty) {
@@ -250,6 +271,7 @@ static std::vector<AssertionMatch> seq_vec(std::vector<AssertionMatch> a, int mi
 						new_own_paths.push_back(path.shift(offset - 1));
 					continue;
 				}
+				check_frozen_offset(inner, path.start + offset);
 				new_own_paths.push_back(path.shift(offset + inner.start) && inner);
 			}
 		}
@@ -270,6 +292,7 @@ static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, int min, in
 				else
 					paths.push_back(inner);
 			} else {
+				check_frozen_offset(inner, offset);
 				paths.push_back(AssertionMatch(eval, ir::S1, loc).shift(offset + inner.start) && inner);
 			}
 		}
@@ -317,13 +340,14 @@ static bool apply_repetition(EvalContext& eval, const ast::AssertionExpr& expr,
 static std::vector<AssertionMatch> synthesize_disable_iff(EvalContext& eval, const ast::Expression& condition,
 														 std::vector<AssertionMatch> inner,
 														 slang::SourceLocation loc) {
-	auto disable = AssertionMatch(eval, eval.sva(condition), loc);
+	auto disable = AssertionMatch::Operand(eval, condition, loc);
 	if (inner.empty())
 		inner.push_back(AssertionMatch(eval, ir::S0, loc));
 
 	int max_start = 0;
 	for (auto path : inner)
 		max_start = std::max(max_start, path.start);
+	check_frozen_offset(disable, max_start);
 
 	std::vector<AssertionMatch> disables;
 	disables.push_back(disable);
@@ -380,7 +404,8 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					}
 					paths = synthesize_assertion_expr(eval, instance.body);
 				} else {
-					paths = {{ eval, simple.isNullExpr ? ir::Value(ir::S0) : eval.sva(simple.expr), expr_loc(expr) }};
+					paths = { simple.isNullExpr ? AssertionMatch(eval, ir::S0, expr_loc(expr))
+												: AssertionMatch::Operand(eval, simple.expr, expr_loc(expr)) };
 				}
 				if (!apply_repetition(eval, expr, simple.repetition, paths))
 					return {};
@@ -510,6 +535,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 							continue;
 						}
 
+						check_frozen_offset(condition, path.start);
 						AssertionMatch guarded = path;
 						for (int t = 0; t <= path.start; t++) {
 							auto condition_at_t = condition.shift(t);
