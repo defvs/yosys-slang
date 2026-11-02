@@ -105,6 +105,17 @@ foreach(test_script ${ALL_TESTS})
     )
 endforeach()
 
+# Distribution packages do not consistently name the standalone ABC binary
+find_program(YOSYS_ABC_EXECUTABLE
+    NAMES yosys-abc abc
+    HINTS ${YOSYS_BINDIR}
+)
+if (YOSYS_ABC_EXECUTABLE)
+    set_tests_properties(sva/seqequiv.tcl PROPERTIES
+        ENVIRONMENT "YOSYS_ABC=${YOSYS_ABC_EXECUTABLE}"
+    )
+endif()
+
 option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
 
 if (ENABLE_OPENTITAN_SVA_STRESS)
