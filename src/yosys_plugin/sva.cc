@@ -28,7 +28,7 @@
 namespace slang_frontend {
 
 // This portion was written by Louis-Emile Ploix "mndstrmr" (c) 2025; ISC licence
-// Brought into Slang head by Mel Young 2026, no additional work
+// Brought into Slang head by Mel Young 2026, since reworked and extended (see git history)
 
 static constexpr uint32_t SVA_ENUMERATION_LIMIT = 1024;
 
