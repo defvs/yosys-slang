@@ -65,7 +65,7 @@ static ir::Net sva_not(EvalContext& eval, ir::Net value) {
 	return eval.netlist.LogicNot(value);
 }
 
-static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int cycles, ir::Trit init,
+static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int64_t cycles, ir::Trit init,
 								  slang::SourceLocation loc = slang::SourceLocation::NoLocation,
 								  std::string_view name_hint = "sva_delay") {
 	if (cycles == 0)
@@ -80,7 +80,7 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int cycles, 
 	auto &trigger = timing.triggers[0];
 	auto &line = eval.sva_delay_lines[{sig.raw(), init, trigger.signal.raw(), trigger.edge_polarity,
 									   timing.background_enable.raw()}];
-	while ((int) line.size() < cycles) {
+	while ((int64_t) line.size() < cycles) {
 		ir::Value prev = line.empty() ? sig : line.back();
 		ir::Value next = eval.netlist.add_placeholder_signal(sig.size(), name_hint);
 		eval.netlist.set_initialization(next, ir::Const(init, sig.size()));
@@ -717,7 +717,8 @@ struct AssertionMatch {
 	EvalContext& eval;
 	ir::Value sig;
 	ir::Value en;
-	int start;
+	// Ticks from the attempt start. Ranges are 32-bit, so their sums take 64 bits.
+	int64_t start;
 	bool empty;
 	// Reads a value frozen when the attempt was queued, valid for the first tick only
 	bool frozen;
@@ -729,7 +730,7 @@ struct AssertionMatch {
 	AssertionMatch(const AssertionMatch&) = default;
 
 private:
-	AssertionMatch(EvalContext& eval_, ir::Value sig_, ir::Value en_, int start_, bool empty_,
+	AssertionMatch(EvalContext& eval_, ir::Value sig_, ir::Value en_, int64_t start_, bool empty_,
 				   bool frozen_, slang::SourceLocation loc_):
 		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
 
@@ -754,7 +755,7 @@ public:
 		return *this;
 	}
 
-	AssertionMatch shift(int time) const {
+	AssertionMatch shift(int64_t time) const {
 		if (empty)
 			return { eval, sig, en, start + time, true, frozen, loc };
 
@@ -783,7 +784,7 @@ public:
 		assert_invariant(!empty && !other.empty);
 
 		ir::Value result_en = eval.netlist.LogicAnd(en, other.en);
-		int result_start = std::max(other.start, start);
+		int64_t result_start = std::max(other.start, start);
 		bool result_frozen = frozen || other.frozen;
 		if (sig.is_fully_const() && sig.as_bool())
 			return { eval, other.sig, result_en, result_start, false, result_frozen, loc };
@@ -808,7 +809,7 @@ public:
 // Automatic variables and const casts keep the value they had when the attempt
 // was queued (IEEE Std 1800-2017 section 16.14.6.1), while we evaluate a path at
 // the tick it's placed at, so such a path can't go past the attempt's first tick.
-static void check_frozen_offset(const AssertionMatch& path, int offset) {
+static void check_frozen_offset(const AssertionMatch& path, int64_t offset) {
 	if (path.frozen && offset > 0)
 		path.eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, path.loc);
 }
@@ -819,22 +820,22 @@ public:
 	explicit DisableSpans(const AssertionMatch& abort): delayed({abort}) {}
 
 	// Has the condition been true on any of the ticks from `first` to `last` ago?
-	AssertionMatch span(int first, int last) {
+	AssertionMatch span(int64_t first, int64_t last) {
 		check_frozen_offset(delayed[0], last);
 
-		while ((int) delayed.size() <= last)
+		while ((int64_t) delayed.size() <= last)
 			delayed.push_back(delayed.back().shift(1));
 		auto& from_first = spans[first];
 		if (from_first.empty())
 			from_first.push_back(delayed[first]);
-		while ((int) from_first.size() <= last - first)
+		while ((int64_t) from_first.size() <= last - first)
 			from_first.push_back(from_first.back() || delayed[first + from_first.size()]);
 		return AssertionMatch(delayed[0].eval, from_first[last - first].sig, delayed[0].loc);
 	}
 
 private:
 	std::vector<AssertionMatch> delayed;
-	std::map<int, std::vector<AssertionMatch>> spans;
+	std::map<int64_t, std::vector<AssertionMatch>> spans;
 };
 
 // How a disable bears on what's being synthesized.
@@ -881,7 +882,7 @@ struct AttemptContext {
 
 	// A path of the 1'b1s of a delay, `length` ticks long. Only the last one counts, as
 	// the next boolean in a path sees the disable over the ticks before it as well.
-	AssertionMatch true_path(EvalContext& eval, int length, slang::SourceLocation loc) const {
+	AssertionMatch true_path(EvalContext& eval, int64_t length, slang::SourceLocation loc) const {
 		AssertionMatch path = AssertionMatch(eval, ir::S1, loc).shift(length);
 		if (!dual || (abort == nullptr && !settled))
 			return path;
@@ -902,7 +903,7 @@ public:
 	OperandPaths(const AttemptContext& ctx_, Synthesize synthesize_):
 		ctx(ctx_), synthesize(std::move(synthesize_)), from_start(synthesize(ctx)) {}
 
-	const std::vector<AssertionMatch>& at(int offset) {
+	const std::vector<AssertionMatch>& at(int64_t offset) {
 		if (offset == 0 || ctx.abort == nullptr || ctx.settled)
 			return from_start;
 
@@ -938,7 +939,7 @@ private:
 	Synthesize synthesize;
 	std::vector<AssertionMatch> from_start;
 	std::optional<std::vector<AssertionMatch>> settled_paths;
-	std::map<int, std::vector<AssertionMatch>> by_offset;
+	std::map<int64_t, std::vector<AssertionMatch>> by_offset;
 };
 
 static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> paths) {
@@ -961,7 +962,7 @@ static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> pa
 
 	std::vector<AssertionMatch> grouped;
 	std::optional<AssertionMatch> group;
-	int time = -1;
+	int64_t time = -1;
 	for (auto path : paths) {
 		if (path.start != time) {
 			if (group.has_value()) grouped.push_back(group.value());
@@ -1016,10 +1017,10 @@ static std::vector<AssertionMatch> not_vec(EvalContext& eval, const AttemptConte
 
 // `a` being synthesized in the context `ctx`
 static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vector<AssertionMatch> a,
-										   int min, int max, OperandPaths& b) {
+										   int64_t min, int64_t max, OperandPaths& b) {
 	std::vector<AssertionMatch> new_own_paths;
 	for (auto path : a) {
-		for (int offset = min; offset <= max; offset++) {
+		for (int64_t offset = min; offset <= max; offset++) {
 			// `empty ##0 seq` has no match
 			if (path.empty && offset == 0)
 				continue;
@@ -1053,10 +1054,10 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 	return compress_paths(new_own_paths);
 }
 
-static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, const AttemptContext& ctx, int min, int max,
+static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, const AttemptContext& ctx, int64_t min, int64_t max,
 												  OperandPaths& b, slang::SourceLocation loc) {
 	std::vector<AssertionMatch> paths;
-	for (int offset = min; offset <= max; offset++) {
+	for (int64_t offset = min; offset <= max; offset++) {
 		for (auto inner : b.at(offset)) {
 			if (inner.empty) {
 				// `##N empty` is `##(N-1) 1'b1`, for N = 0 there's no match
@@ -1106,11 +1107,11 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 // are the dual of T for the disable, T for the accept. Of the two on the same tick the
 // disable wins, being the outer one.
 static AssertionMatch cover_disabled_first(const AssertionMatch& disable, DisableSpans& accept,
-										   int length) {
+										   int64_t length) {
 	check_frozen_offset(disable, length);
 
 	AssertionMatch window = disable;
-	for (int i = 1; i <= length; i++)
+	for (int64_t i = 1; i <= length; i++)
 		window = window.shift(1) || (disable && !accept.span(1, i));
 	return window;
 }
@@ -1315,7 +1316,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 
 						check_frozen_offset(condition, path.start);
 						AssertionMatch guarded = path;
-						for (int t = 0; t <= path.start; t++) {
+						for (int64_t t = 0; t <= path.start; t++) {
 							auto condition_at_t = collapse_or(left_at.at(path.start - t)).shift(t);
 							guarded = guarded && condition_at_t;
 						}
@@ -3468,6 +3469,11 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
 	if (condition) {
+		// IEEE Std 1800-2017 section 16.12 has a simulator test the disable condition on
+		// current values at any time during the attempt. Like the other operands, we read
+		// it sampled on the ticks of the assertion's clock, as formal tools do. A condition
+		// changing on a clock edge thus takes effect one tick later than in simulation,
+		// and a pulse between two ticks goes unseen.
 		auto abort = AssertionMatch::Operand(eval, *condition, disable_loc);
 		abort.sig = eval.netlist.ReduceBool(abort.sig);
 		if (!abort.sig.is_fully_zero()) {
