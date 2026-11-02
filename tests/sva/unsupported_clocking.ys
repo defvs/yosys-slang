@@ -87,3 +87,25 @@ module procedural_repeated_sequence(input logic clk, input logic a, input logic 
 	end
 endmodule
 EOF
+
+design -reset
+
+test_slangdiag -expect "unsynthesizable feature"
+read_slang <<EOF
+module default_clocking_event(input logic clk, input logic d, output logic q);
+	default clocking cb @(posedge clk); endclocking
+	always @(cb) q <= d;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsynthesizable feature"
+read_slang <<EOF
+module sequence_event(input logic clk, input logic a, input logic b, input logic d, output logic q);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	always @(s) q <= d;
+endmodule
+EOF

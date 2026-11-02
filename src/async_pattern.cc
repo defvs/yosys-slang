@@ -64,6 +64,15 @@ void TimingPatternInterpretor::handle_always(const ast::ProceduralBlockSymbol &s
 		case ast::TimingControlKind::SignalEvent: {
 			const auto &sigev = ev->as<ast::SignalEventControl>();
 
+			// A clocking block or a sequence has an event of its own, not a value
+			// whose changes we could take for the sensitivity
+			const ast::Symbol *referenced = sigev.expr.getSymbolReference();
+			if ((referenced && referenced->kind == ast::SymbolKind::ClockingBlock) ||
+					sigev.expr.type->isSequenceType()) {
+				issuer.add_diag(diag::UnsynthesizableFeature, ev->sourceRange);
+				break;
+			}
+
 			if (sigev.iffCondition && sigev.edge == ast::EdgeKind::None)
 				issuer.add_diag(diag::IffUnsupported, sigev.iffCondition->sourceRange);
 
