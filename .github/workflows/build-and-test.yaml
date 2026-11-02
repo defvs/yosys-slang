@@ -111,6 +111,47 @@ jobs:
       - name: Print ccache statistics
         run: |
           ccache -s
+  # Unverified: written without a run on GitHub Actions
+  test-liveness:
+    runs-on: ubuntu-24.04
+    needs: [build, define-matrix]
+    env:
+      YOSYS_VERSION: ${{ fromJSON(needs.define-matrix.outputs.filtered_versions)[1] }}
+    steps:
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gperf build-essential bison flex libreadline-dev gawk tcl-dev libffi-dev git graphviz xdot pkg-config python3 libboost-system-dev libboost-python-dev libboost-filesystem-dev zlib1g-dev libfl-dev
+          sudo apt-get install -y python3-click z3 curl
+      - uses: actions/checkout@v7
+      - name: Download build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: build-${{ env.YOSYS_VERSION }}.tar
+      - name: Unpack build
+        shell: bash
+        run:
+          tar -xvf build.tar
+      - name: Install Yosys
+        shell: bash
+        run: |
+          sudo cp -r -t / tests/third_party/yosys/*
+      - name: Install SymbiYosys
+        run: |
+          git clone --depth 1 --branch "$YOSYS_VERSION" https://github.com/YosysHQ/sby.git sby
+          sudo make -C sby install
+      - name: Install suprove
+        id: suprove
+        shell: bash
+        run: |
+          tools/setup_liveness_tools.sh | tee setup.log
+          grep '^SUPROVE_EXECUTABLE=' setup.log >> "$GITHUB_OUTPUT"
+      - name: Run liveness proofs
+        run: |
+          cd tests/liveness
+          ./run_response_proof.sh "$GITHUB_WORKSPACE/build/slang.so" \
+            "${{ steps.suprove.outputs.SUPROVE_EXECUTABLE }}"
   test-croc-boot:
     runs-on: ubuntu-24.04
     needs: [build, define-matrix]
