@@ -1,5 +1,6 @@
 read_slang formal_stmts.sv
 
+select -assert-count 35 t:$check
 select -assert-count 1 m_assert/t:$check r:FLAVOR=assert %i
 select -assert-count 1 m_assume/t:$check r:FLAVOR=assume %i
 select -assert-count 1 m_cover/t:$check r:FLAVOR=cover %i
@@ -16,3 +17,31 @@ select -assert-count 1 m_labeled_assertions/t:$check n:*my_cover %i r:FLAVOR=cov
 # Test $past
 select -assert-count 3 m_past/t:$check r:FLAVOR=assert %i
 select -assert-count 7 m_past/t:$dff
+
+# Test concurrent assertions
+select -assert-count 1 m_assert_conc/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assume_conc/t:$check n:named %i r:FLAVOR=assume %i
+select -assert-count 1 m_cover_conc/t:$check n:named %i r:FLAVOR=cover %i
+select -assert-count 1 m_assert_implies/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assume_implies/t:$check n:named %i r:FLAVOR=assume %i
+select -assert-count 1 m_assert_seq_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_3/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_4/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_5/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_6/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_seq_7/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_repeat_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_repeat_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_repeat_3/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_eventually_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_eventually_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_throughout_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_throughout_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_intersect_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_intersect_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_first_match_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_first_match_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_nexttime_1/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_nexttime_2/t:$check n:named %i r:FLAVOR=assert %i
+select -assert-count 1 m_assert_nexttime_3/t:$check n:named %i r:FLAVOR=assert %i
