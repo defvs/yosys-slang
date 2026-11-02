@@ -115,7 +115,8 @@ def filter_source(src, dst):
             r"\s*prim_alert_rxtx_sva_harness\.u_tb\.i_prim_alert_receiver\.state_q inside \{"
             r"\s*prim_alert_rxtx_sva_harness\.u_tb\.i_prim_alert_receiver\.InitReq,"
             r"\s*prim_alert_rxtx_sva_harness\.u_tb\.i_prim_alert_receiver\.InitAckWait\};",
-            "assign init_pending = mubi4_test_true_strict(init_trig_i);",
+            "assign init_pending = mubi4_test_true_strict(init_trig_i) ||\n"
+            "    prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_receiver.state_q inside {3'd4, 3'd5};",
             text,
             flags=re.MULTILINE,
         )
