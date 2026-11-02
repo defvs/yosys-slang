@@ -2240,16 +2240,12 @@ static PropertyResult lower_finite_property_from_trigger(
 		match.en = eval.netlist.Mux(eval.netlist.ReduceBool(match.en),
 									eval.netlist.ReduceBool(dual.en), disabled);
 	}
-	auto init_escape = delay_sva_sample(
-		eval, ir::S0, match.start,
-		ir::S1, match.loc);
-	ir::Net frame_ready =
-		sva_not(eval, eval.netlist.ReduceBool(init_escape));
+	// Delayed with an initial low, the trigger keeps the check off until the paths
+	// have all their samples
 	ir::Net enable = delay_sva_sample(
 		eval, trigger, match.start, ir::S0, match.loc).as_net();
 	enable = eval.netlist.LogicAnd(enable,
 		eval.netlist.ReduceBool(match.en));
-	enable = eval.netlist.LogicAnd(enable, frame_ready);
 	add_safety_obligation(result, match.sig, enable);
 	return result;
 }
