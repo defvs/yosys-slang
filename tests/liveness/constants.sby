@@ -1,0 +1,56 @@
+[tasks]
+enum_pass
+enum_fail
+defparam_pass
+defparam_fail
+hierarchical_pass
+hierarchical_fail
+genvar_pass
+genvar_fail
+function_pass
+function_fail
+
+[options]
+mode live
+enum_fail: expect fail
+defparam_fail: expect fail
+hierarchical_fail: expect fail
+genvar_fail: expect fail
+function_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+enum_pass: read_rtlil constants_enum_pass.il
+enum_pass: prep -top constants_enum_pass
+enum_fail: read_rtlil constants_enum_fail.il
+enum_fail: prep -top constants_enum_fail
+defparam_pass: read_rtlil constants_defparam_pass.il
+defparam_pass: prep -top constants_defparam_pass
+defparam_fail: read_rtlil constants_defparam_fail.il
+defparam_fail: prep -top constants_defparam_fail
+hierarchical_pass: read_rtlil constants_hierarchical_pass.il
+hierarchical_pass: prep -top constants_hierarchical_pass
+hierarchical_fail: read_rtlil constants_hierarchical_fail.il
+hierarchical_fail: prep -top constants_hierarchical_fail
+genvar_pass: read_rtlil constants_genvar_pass.il
+genvar_pass: prep -top constants_genvar_pass
+genvar_fail: read_rtlil constants_genvar_fail.il
+genvar_fail: prep -top constants_genvar_fail
+function_pass: read_rtlil constants_function_pass.il
+function_pass: prep -top constants_function_pass
+function_fail: read_rtlil constants_function_fail.il
+function_fail: prep -top constants_function_fail
+
+[files]
+enum_pass: constants_enum_pass.il
+enum_fail: constants_enum_fail.il
+defparam_pass: constants_defparam_pass.il
+defparam_fail: constants_defparam_fail.il
+hierarchical_pass: constants_hierarchical_pass.il
+hierarchical_fail: constants_hierarchical_fail.il
+genvar_pass: constants_genvar_pass.il
+genvar_fail: constants_genvar_fail.il
+function_pass: constants_function_pass.il
+function_fail: constants_function_fail.il
