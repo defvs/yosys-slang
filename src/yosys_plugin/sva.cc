@@ -702,7 +702,11 @@ static bool clocking_matches_process(const ProcessTiming &clocking, const Proces
 	return true;
 }
 
-static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion) {
+// `attempt` is the condition of the procedural code around the assertion. It's read
+// when the statement is reached and decides if an attempt is queued, the attempts
+// in flight run to completion regardless (IEEE Std 1800-2017 section 16.14.6).
+static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion,
+									  ir::Net attempt) {
 	auto paths = synthesize_assertion_expr(eval, assertion);
 
 	const ast::AssertionExpr &top = unwrap_property_instances(assertion);
@@ -713,13 +717,13 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 	}
 
 	// With no possible match the property fails on every attempt
-	if (paths.empty()) return { ir::S0, ir::S1 };
+	if (paths.empty()) return { ir::S0, attempt };
 
 	auto sig = collapse_or(paths);
 
-	auto init_escape = delay_sva_sample(eval, ir::S0, sig.start, ir::S1, sig.loc);
-	auto frame_ready = eval.netlist.LogicNot(init_escape);
-	return { sig.sig, eval.netlist.LogicAnd(sig.en, frame_ready) };
+	// Starts out low, so no attempt gets reported before it had the time to finish
+	auto attempted = delay_sva_sample(eval, attempt, sig.start, ir::S0, sig.loc);
+	return { sig.sig, eval.netlist.LogicAnd(attempted, sig.en) };
 }
 
 // Process a 'concurrent assertion'
@@ -744,7 +748,7 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 		expr = &clocking_expr->expr;
 	}
 
-	AssertionResult result = eval_assertion(procedural.eval, *expr);
+	AssertionResult result = eval_assertion(procedural.eval, *expr, procedural.case_enable());
 
 	std::string flavor;
 	switch (statement.assertionKind) {
@@ -764,11 +768,9 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	}
 
 	ir::Net a = netlist.ReduceBool(result.a);
-	ir::Net en = netlist.ReduceBool(result.en);
 
 	auto cell = netlist.backend->canvas->addCell(std::move(cell_name), ID($check));
-	procedural.set_effects_trigger(cell);
-	cell->setPort(ID::EN, {netlist.LogicAnd(cell->getPort(ID::EN), en)});
+	procedural.timing.extract_trigger(netlist, cell, netlist.ReduceBool(result.en));
 	cell->setParam(ID::FLAVOR, flavor);
 	cell->setParam(ID::FORMAT, std::string(""));
 	cell->setParam(ID::ARGS_WIDTH, 0);
