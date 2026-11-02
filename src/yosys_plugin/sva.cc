@@ -198,14 +198,11 @@ static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> pa
 static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
 	assert_invariant(!paths.empty());
 
-	for (auto path : paths) {
-		if (path.empty)
-			return { path.eval, ir::S1, path.loc };
-	}
-
 	int max_start = 0;
-	for (auto path : paths)
+	for (auto path : paths) {
+		assert_invariant(!path.empty);
 		max_start = std::max(max_start, path.start);
+	}
 
 	std::optional<AssertionMatch> collapsed;
 	for (auto path : paths) {
@@ -220,11 +217,19 @@ static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
 	return collapsed.value();
 }
 
+// Paths of a sequence used as a property. An empty match is no success, and with no
+// other match to go by the property fails on every attempt.
+static std::vector<AssertionMatch> property_paths(EvalContext& eval, std::vector<AssertionMatch> paths,
+												  slang::SourceLocation loc) {
+	std::erase_if(paths, [](const AssertionMatch& path) { return path.empty; });
+	if (paths.empty())
+		paths.push_back(AssertionMatch(eval, ir::S0, loc));
+	return paths;
+}
+
 static std::vector<AssertionMatch> not_vec(EvalContext& eval, std::vector<AssertionMatch> in,
 										   slang::SourceLocation loc) {
-	// A sequence with no possible match is false on every attempt
-	if (in.empty()) return {{eval, ir::S1, loc}};
-	return { !collapse_or(in) };
+	return { !collapse_or(property_paths(eval, std::move(in), loc)) };
 }
 
 static ir::Value gated_signal(const AssertionMatch& path) {
@@ -339,8 +344,7 @@ static std::vector<AssertionMatch> synthesize_disable_iff(EvalContext& eval, con
 														 std::vector<AssertionMatch> inner,
 														 slang::SourceLocation loc) {
 	auto disable = AssertionMatch::Operand(eval, condition, loc);
-	if (inner.empty())
-		inner.push_back(AssertionMatch(eval, ir::S0, loc));
+	inner = property_paths(eval, std::move(inner), loc);
 
 	int max_start = 0;
 	for (auto path : inner)
@@ -381,6 +385,24 @@ static std::vector<AssertionMatch> synthesize_disable_iff(EvalContext& eval, con
 	results.push_back(check_failure);
 
 	return compress_paths(results);
+}
+
+// Is the expression a property proper? With `and` and `or` it's enough for one of the
+// operands to be, the other one is then used as a property even if it's a sequence.
+static bool is_property(const ast::AssertionExpr& expr) {
+	if (expr.kind == ast::AssertionExprKind::Simple) {
+		// slang gives these a sequence length, the type is what tells them apart
+		const auto& operand = expr.as<ast::SimpleAssertionExpr>().expr;
+		return operand.kind == ast::ExpressionKind::AssertionInstance && operand.type->isPropertyType();
+	}
+
+	if (expr.kind == ast::AssertionExprKind::Binary) {
+		const auto& biop = expr.as<ast::BinaryAssertionExpr>();
+		if (biop.op == ast::BinaryAssertionOperator::And || biop.op == ast::BinaryAssertionOperator::Or)
+			return is_property(biop.left) || is_property(biop.right);
+	}
+
+	return !expr.computeSequenceLength().has_value();
 }
 
 // An empty result stands for a sequence with no possible match. Constructs we
@@ -455,7 +477,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 
 					std::vector<AssertionMatch> true_path = {{eval, ir::S1, expr_loc(expr)}};
 					return seq_vec(true_path, uop.range->min, uop.range->max.value(),
-								   synthesize_assertion_expr(eval, uop.expr));
+								   property_paths(eval, synthesize_assertion_expr(eval, uop.expr), expr_loc(expr)));
 				}
 
 				case slang::ast::UnaryAssertionOperator::NextTime:
@@ -473,7 +495,8 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					}
 
 					std::vector<AssertionMatch> true_path = {{eval, ir::S1, expr_loc(expr)}};
-					return seq_vec(true_path, delay, delay, synthesize_assertion_expr(eval, uop.expr));
+					return seq_vec(true_path, delay, delay,
+								   property_paths(eval, synthesize_assertion_expr(eval, uop.expr), expr_loc(expr)));
 				}
 
 				case slang::ast::UnaryAssertionOperator::Always:
@@ -496,6 +519,11 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					When te1 and te2 are sequences, then the composite sequence te1 and te2 matches if te1 and te2 match.
 					The end time is the end time of either te1 or te2, whichever matches last.
 					*/
+					if (is_property(biop)) {
+						left = property_paths(eval, std::move(left), expr_loc(expr));
+						right = property_paths(eval, std::move(right), expr_loc(expr));
+					}
+
 					std::vector<AssertionMatch> results;
 					for (auto a : left) {
 						for (auto b : right) {
@@ -711,7 +739,7 @@ static bool clocking_matches_process(const ProcessTiming &clocking, const Proces
 // in flight run to completion regardless (IEEE Std 1800-2017 section 16.14.6).
 static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion,
 									  ir::Net attempt) {
-	auto paths = synthesize_assertion_expr(eval, assertion);
+	auto paths = property_paths(eval, synthesize_assertion_expr(eval, assertion), expr_loc(assertion));
 
 	const ast::AssertionExpr &top = unwrap_property_instances(assertion);
 	if (!ast::DisableIffAssertionExpr::isKind(top.kind) && eval.netlist.process_scope) {
@@ -719,9 +747,6 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 		if (auto condition = scope->getCompilation().getDefaultDisable(*scope))
 			paths = synthesize_disable_iff(eval, *condition, std::move(paths), expr_loc(assertion));
 	}
-
-	// With no possible match the property fails on every attempt
-	if (paths.empty()) return { ir::S0, attempt };
 
 	auto sig = collapse_or(paths);
 
