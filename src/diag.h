@@ -95,6 +95,7 @@ extern slang::DiagCode IfacePortUnsupported;
 extern slang::DiagCode OptionRequiresStandaloneSlang;
 extern slang::DiagCode ClockVarUnsupported;
 extern slang::DiagCode ActionBlockUnsupported;
+extern slang::DiagCode FinalAssertionUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

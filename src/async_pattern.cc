@@ -4,6 +4,7 @@
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
 //
+#include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Expression.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Statement.h"
@@ -361,7 +362,13 @@ void TimingPatternInterpretor::interpret(const ast::ProceduralBlockSymbol &symbo
 	case ast::ProceduralBlockKind::Initial: handle_initial_process(symbol, symbol.getBody()); break;
 
 	case ast::ProceduralBlockKind::Final:
-		// Final blocks are ignored by synthesis
+		// Final blocks are ignored by synthesis, as are the assertions in them
+		if (!settings.ignore_assertions.value_or(false)) {
+			symbol.getBody().visit(ast::makeVisitor(
+					[&](auto &, const ast::ImmediateAssertionStatement &statement) {
+						issuer.add_diag(diag::FinalAssertionUnsupported, statement.sourceRange);
+					}));
+		}
 		break;
 
 	default: assert_invariant(false && "unreachable");

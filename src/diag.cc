@@ -142,6 +142,7 @@ DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
 DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
 DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1094);
+DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1095);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -385,6 +386,9 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(ActionBlockUnsupported, "unsupported statement in assertion action block");
 	engine.setSeverity(ActionBlockUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(FinalAssertionUnsupported, "assertion in final procedure will not be synthesized");
+	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Warning);
 	// clang-format on
 }
 }; // namespace diag
