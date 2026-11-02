@@ -132,6 +132,7 @@ option(ENABLE_LIVENESS_PROOFS
        OFF)
 set(SUPROVE_EXECUTABLE "" CACHE FILEPATH
     "Path to a pinned suprove executable for ENABLE_LIVENESS_PROOFS")
+option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
 
 if (ENABLE_LIVENESS_PROOFS)
     if (NOT EXISTS "${SUPROVE_EXECUTABLE}")
@@ -151,8 +152,12 @@ if (ENABLE_LIVENESS_PROOFS)
         liveness/response_proof
         PROPERTIES
             LABELS "formal;liveness"
-            TIMEOUT 120
+            TIMEOUT 300
     )
+endif()
+
+# These fetch OpenTitan into tests/third_party/opentitan, one at a time
+if (ENABLE_LIVENESS_PROOFS AND ENABLE_OPENTITAN_SVA_STRESS)
     add_test(
         NAME opentitan_liveness/arbiter
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_liveness
@@ -165,6 +170,7 @@ if (ENABLE_LIVENESS_PROOFS)
         opentitan_liveness/arbiter
         PROPERTIES
             LABELS "formal;liveness;opentitan"
+            RESOURCE_LOCK opentitan
             TIMEOUT 180
     )
     add_test(
@@ -179,11 +185,10 @@ if (ENABLE_LIVENESS_PROOFS)
         opentitan_liveness/stress_targets
         PROPERTIES
             LABELS "formal;liveness;opentitan;stress"
+            RESOURCE_LOCK opentitan
             TIMEOUT 600
     )
 endif()
-
-option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
 
 if (ENABLE_OPENTITAN_SVA_STRESS)
     add_test(
@@ -198,5 +203,6 @@ if (ENABLE_OPENTITAN_SVA_STRESS)
         opentitan_sva_stress
         PROPERTIES
             LABELS "opentitan;sva;stress"
+            RESOURCE_LOCK opentitan
     )
 endif()

@@ -38,9 +38,11 @@ Unsupported or rewritten OpenTitan constructs:
 
 ## Main Suite Integration
 
-The OpenTitan tree is large and only these tests need it, so it is not a
-submodule. `common/fetch_opentitan.sh` checks out the pinned revision into
-`tests/third_party/opentitan` on first use.
+The OpenTitan tree is large and only these tests and the OpenTitan liveness
+proofs need it, so it is not a submodule. `common/fetch_opentitan.sh` checks out
+the pinned revision into `tests/third_party/opentitan` on first use. The tests
+that use it hold the `opentitan` CTest resource lock, so no two of them fetch it
+at once.
 
 Opt-in:
 
@@ -48,7 +50,10 @@ Opt-in:
 cmake -S . -B build -DENABLE_OPENTITAN_SVA_STRESS=ON
 ```
 
-Run only the OpenTitan stress test through CTest:
+With `-DENABLE_LIVENESS_PROOFS=ON` as well, CTest also runs the liveness proofs
+of `tests/opentitan_liveness` (see `docs/liveness.md`).
+
+Run only the OpenTitan tests through CTest:
 
 ```sh
 ctest --test-dir build -L opentitan --output-on-failure
