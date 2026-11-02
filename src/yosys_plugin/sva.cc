@@ -2525,8 +2525,11 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 	if (expr.kind == ast::AssertionExprKind::Abort) {
 		const auto& abort = expr.as<ast::AbortAssertionExpr>();
-		ir::Net condition =
-			eval.netlist.ReduceBool(eval(abort.condition));
+		// The condition of a synchronous abort is a sampled value like the operands
+		// (IEEE Std 1800-2017 section 16.12.14), that of an asynchronous one is still
+		// read as the current value
+		ir::Net condition = eval.netlist.ReduceBool(
+			abort.isSync ? eval.sva(abort.condition) : eval(abort.condition));
 		if (abort.action == ast::AbortAssertionExpr::Accept)
 			return lower_property(eval, abort.expr, trigger,
 								  eval.netlist.LogicOr(disable, condition));
@@ -2565,7 +2568,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		const auto& conditional =
 			expr.as<ast::ConditionalAssertionExpr>();
 		ir::Net condition =
-			eval.netlist.ReduceBool(eval(conditional.condition));
+			eval.netlist.ReduceBool(eval.sva(conditional.condition));
 		PropertyResult result = lower_property(
 			eval, conditional.ifExpr,
 			eval.netlist.LogicAnd(trigger, condition), disable);
@@ -2583,7 +2586,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 	if (expr.kind == ast::AssertionExprKind::Case) {
 		const auto& case_expr = expr.as<ast::CaseAssertionExpr>();
-		ir::Value control = eval(case_expr.expr);
+		ir::Value control = eval.sva(case_expr.expr);
 		ir::Net matched = ir::S0;
 		PropertyResult result;
 		for (const auto& item : case_expr.items) {
@@ -2591,7 +2594,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			for (const auto *item_expr : item.expressions)
 				item_hit = eval.netlist.LogicOr(
 					item_hit,
-					case_equality(eval, control, eval(*item_expr)));
+					case_equality(eval, control, eval.sva(*item_expr)));
 			item_hit = eval.netlist.LogicAnd(item_hit, sva_not(eval, matched));
 			PropertyResult branch = lower_property(
 				eval, *item.body,

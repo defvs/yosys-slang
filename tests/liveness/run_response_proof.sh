@@ -121,7 +121,9 @@ for top in \
 	guard_or_mixed_pass \
 	guard_or_mixed_fail \
 	guard_assume_pass \
-	guard_assume_fail
+	guard_assume_fail \
+	sampled_if_pass \
+	sampled_if_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/procedural_proof.sv;

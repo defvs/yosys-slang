@@ -1,7 +1,49 @@
-# The items of a property case compare by case equality, an x in one is no
-# wildcard: case_x_holds holds only in that reading, case_x_fails makes sure
-# its checks are not vacuous.
+# A property if/else and a property case with a default take a check for each
+# branch. Their conditions are sampled values and case items compare by case
+# equality: each *_holds module holds only in that reading, its *_fails control
+# makes sure the checks are not vacuous.
 read_slang <<EOF
+module if_else_holds(input logic clk, input logic a);
+	logic y = 0;
+	reg a_d1 = 0;
+	always @(posedge clk) begin
+		y = a;
+		// The sampled value of y is that of a_d1
+		assert property (if (y) a_d1 else !a_d1);
+		a_d1 <= a;
+	end
+endmodule
+
+module if_else_fails(input logic clk, input logic a);
+	logic y = 0;
+	reg a_d1 = 0;
+	always @(posedge clk) begin
+		y = a;
+		assert property (if (y) a else !a);
+		a_d1 <= a;
+	end
+endmodule
+
+module case_holds(input logic clk, input logic a);
+	logic y = 0;
+	reg a_d1 = 0;
+	always @(posedge clk) begin
+		y = a;
+		assert property (case (y) 1'b1: a_d1; default: !a_d1; endcase);
+		a_d1 <= a;
+	end
+endmodule
+
+module case_fails(input logic clk, input logic a);
+	logic y = 0;
+	reg a_d1 = 0;
+	always @(posedge clk) begin
+		y = a;
+		assert property (case (y) 1'b1: a; default: !a; endcase);
+		a_d1 <= a;
+	end
+endmodule
+
 module case_x_holds(input logic clk, input logic [1:0] m);
 	localparam logic [1:0] X = 2'b1x;
 	always @(posedge clk) begin
@@ -18,8 +60,14 @@ module case_x_fails(input logic clk, input logic [1:0] m);
 endmodule
 EOF
 
+select -assert-count 2 if_else_holds/t:$check
+select -assert-count 2 case_holds/t:$check
 select -assert-count 4 case_x_holds/t:$check
 
 async2sync
+sat -seq 6 -set-init-zero -prove-asserts -verify if_else_holds
+sat -seq 6 -set-init-zero -prove-asserts -falsify if_else_fails
+sat -seq 6 -set-init-zero -prove-asserts -verify case_holds
+sat -seq 6 -set-init-zero -prove-asserts -falsify case_fails
 sat -seq 6 -set-init-zero -prove-asserts -verify case_x_holds
 sat -seq 6 -set-init-zero -prove-asserts -falsify case_x_fails

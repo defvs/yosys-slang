@@ -35,7 +35,7 @@ in the next section:
 | property `and` | union of both obligation sets |
 | direct justice `or` | one response monitor over the matches of both sides |
 | simple property `implies` and `iff` | gated property or cycle-local equality |
-| property `if` / `else` and `case` | launch-time branch selection |
+| property `if` / `else` and `case` | launch-time branch selection on sampled conditions |
 | `disable iff`, `accept_on`, `reject_on` | abort or rejection logic as described below |
 | named sequences and named properties | recursively lowered, except recursion |
 
@@ -82,6 +82,8 @@ Vacuity and triggering follow the property structure:
 - no antecedent match means no response obligation;
 - a top-level eventual property launches on every enabled sampled clock.
 
+The condition of a property `if` or `case` is a sampled value, like the
+operands, and so is the condition of `sync_accept_on` and `sync_reject_on`.
 The items of a property `case` compare with case equality: an `x` in an item
 is no wildcard, it matches nothing but the same constant `x`.
 

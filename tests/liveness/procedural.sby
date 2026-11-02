@@ -9,6 +9,8 @@ guard_or_mixed_pass
 guard_or_mixed_fail
 guard_assume_pass
 guard_assume_fail
+sampled_if_pass
+sampled_if_fail
 
 [options]
 mode live
@@ -17,6 +19,7 @@ guard_selected_fail: expect fail
 guard_or_fail: expect fail
 guard_or_mixed_fail: expect fail
 guard_assume_fail: expect fail
+sampled_if_fail: expect fail
 
 [engines]
 aiger suprove
@@ -42,6 +45,10 @@ guard_assume_pass: read_rtlil guard_assume_pass.il
 guard_assume_pass: prep -top guard_assume_pass
 guard_assume_fail: read_rtlil guard_assume_fail.il
 guard_assume_fail: prep -top guard_assume_fail
+sampled_if_pass: read_rtlil sampled_if_pass.il
+sampled_if_pass: prep -top sampled_if_pass
+sampled_if_fail: read_rtlil sampled_if_fail.il
+sampled_if_fail: prep -top sampled_if_fail
 
 [files]
 guard_response_pass: guard_response_pass.il
@@ -54,3 +61,5 @@ guard_or_mixed_pass: guard_or_mixed_pass.il
 guard_or_mixed_fail: guard_or_mixed_fail.il
 guard_assume_pass: guard_assume_pass.il
 guard_assume_fail: guard_assume_fail.il
+sampled_if_pass: sampled_if_pass.il
+sampled_if_fail: sampled_if_fail.il

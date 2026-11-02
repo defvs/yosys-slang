@@ -172,3 +172,29 @@ module guard_assume_fail (
 
 	assert property (@(posedge clk) (age == 5) |-> s_eventually (g ##1 h));
 endmodule
+
+module sampled_if_pass ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire g = age == 2;
+
+	// The condition is the sampled value of v, high on the first tick only
+	logic v = 1'b1;
+	always @(posedge clk) begin
+		v = 1'b0;
+		assert property (if (v) s_eventually g);
+	end
+endmodule
+
+module sampled_if_fail ((* gclk *) input logic clk);
+	wire g = 1'b0;
+
+	logic v = 1'b1;
+	always @(posedge clk) begin
+		v = 1'b0;
+		assert property (if (v) s_eventually g);
+	end
+endmodule
