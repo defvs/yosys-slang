@@ -594,8 +594,9 @@ public:
 		if (containing_block &&
 				unwrap_statement(containing_block->tryGetStatement()) == &statement &&
 				!containing_block->name.empty()) {
-			// If we are the sole statement in a block, use the block's label
-			cell_name = netlist.id(*containing_block);
+			// If we are the sole statement in a block, use the block's label. Loops and
+			// functions can get us here more than once, a suffix tells those apart.
+			cell_name = netlist.backend->canvas->uniquify(netlist.id(*containing_block)).str();
 		} else {
 			cell_name = netlist.backend->new_id();
 		}

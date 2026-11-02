@@ -28,6 +28,7 @@ set(ALL_TESTS
     sva/frozen_past_first_tick.ys
     sva/nested_disable.ys
     sva/range_guard.ys
+    sva/repeated_labels.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
     sva/vector_delay_init.ys

@@ -1,0 +1,57 @@
+read_slang <<EOF
+module loop_immediate(input logic clk, input logic [1:0] v);
+	always_ff @(posedge clk)
+		for (int i = 0; i < 2; i++)
+			loop_label: assert (v[i]);
+endmodule
+EOF
+
+select -assert-count 2 t:$check
+select -assert-count 1 t:$check n:*.loop_label %i
+select -assert-count 1 t:$check n:*.loop_label_1 %i
+
+design -reset
+
+read_slang <<EOF
+module loop_concurrent(input logic clk, input logic [1:0] v, input logic a);
+	always_ff @(posedge clk)
+		foreach (v[i])
+			loop_label: assert property (v[i] |=> a);
+endmodule
+EOF
+
+select -assert-count 2 t:$check
+select -assert-count 1 t:$check n:*.loop_label %i
+select -assert-count 1 t:$check n:*.loop_label_1 %i
+
+design -reset
+
+read_slang <<EOF
+module loop_named_block(input logic clk, input logic [1:0] v);
+	always_ff @(posedge clk)
+		for (int i = 0; i < 2; i++) begin : loop_block
+			assert property (v[i]);
+		end
+endmodule
+EOF
+
+select -assert-count 2 t:$check
+select -assert-count 1 t:$check n:*.loop_block %i
+select -assert-count 1 t:$check n:*.loop_block_1 %i
+
+design -reset
+
+read_slang <<EOF
+module function_twice(input logic a, input logic b, output logic p, output logic q);
+	function automatic logic f(logic x);
+		function_label: assert (x);
+		return x;
+	endfunction
+	assign p = f(a);
+	assign q = f(b);
+endmodule
+EOF
+
+select -assert-count 2 t:$check
+select -assert-count 1 t:$check n:f.function_label %i
+select -assert-count 1 t:$check n:f.function_label_1 %i

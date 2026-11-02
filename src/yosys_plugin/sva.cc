@@ -982,8 +982,9 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	std::string cell_name;
 
 	if (block && unwrap_statement(block->tryGetStatement()) == &statement && !block->name.empty()) {
-		// If we are the sole statement in a block, use the block's label
-		cell_name = netlist.id(*block);
+		// If we are the sole statement in a block, use the block's label. Loops can
+		// get us here more than once, a suffix tells those apart.
+		cell_name = netlist.backend->canvas->uniquify(netlist.id(*block)).str();
 	} else {
 		cell_name = netlist.backend->new_id();
 	}
