@@ -1,0 +1,34 @@
+[tasks]
+fair_pass
+first_fail
+second_fail
+selected_pass
+selected_fail
+
+[options]
+mode live
+first_fail: expect fail
+second_fail: expect fail
+selected_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+fair_pass: read_rtlil justice_fair_pass.il
+fair_pass: prep -top justice_fair_pass
+first_fail: read_rtlil justice_first_fail.il
+first_fail: prep -top justice_first_fail
+second_fail: read_rtlil justice_second_fail.il
+second_fail: prep -top justice_second_fail
+selected_pass: read_rtlil justice_selected_pass.il
+selected_pass: prep -top justice_selected_pass
+selected_fail: read_rtlil justice_selected_fail.il
+selected_fail: prep -top justice_selected_fail
+
+[files]
+justice_fair_pass.il
+justice_first_fail.il
+justice_second_fail.il
+justice_selected_pass.il
+justice_selected_fail.il
