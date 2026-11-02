@@ -891,14 +891,6 @@ static std::vector<AssertionMatch> not_vec(EvalContext& eval, const AttemptConte
 	return { !collapse_or(property_paths(eval, ctx, std::move(in), loc)) };
 }
 
-static ir::Value gated_signal(const AssertionMatch& path) {
-	assert_invariant(!path.empty);
-
-	if (path.sig.is_fully_const())
-		return path.sig.as_bool() ? path.en : ir::Value(ir::S0);
-	return path.eval.netlist.LogicAnd(path.en, path.sig);
-}
-
 // `a` being synthesized in the context `ctx`
 static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vector<AssertionMatch> a,
 										   int min, int max, OperandPaths& b) {
@@ -984,44 +976,6 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 	}
 
 	return compress_paths(repeated);
-}
-
-// A cover has no letters to extend a match by. It takes a match that ran its full course
-// with no disable from the attempt start up to the end of that match.
-static std::vector<AssertionMatch> cover_disable_iff(EvalContext& eval, const ast::Expression& condition,
-													 std::vector<AssertionMatch> inner,
-													 slang::SourceLocation loc) {
-	auto disable = AssertionMatch::Operand(eval, condition, loc);
-
-	int max_start = 0;
-	for (auto path : inner)
-		max_start = std::max(max_start, path.start);
-	check_frozen_offset(disable, max_start);
-
-	std::vector<AssertionMatch> disable_windows = { disable };
-	auto delayed_disable = disable;
-	for (int i = 1; i <= max_start; i++) {
-		delayed_disable = delayed_disable.shift(1);
-		disable_windows.push_back(disable_windows.back() || delayed_disable);
-	}
-
-	std::vector<AssertionMatch> results;
-	for (auto path : inner) {
-		auto not_disabled = !disable_windows[path.start];
-		auto success = AssertionMatch(eval, ir::S1, path.loc);
-		success.en = eval.netlist.LogicAnd(gated_signal(path), not_disabled.sig);
-		success.start = path.start;
-		results.push_back(success);
-	}
-
-	auto base = collapse_or(inner);
-	auto not_disabled_to_end = !disable_windows[max_start];
-	auto check_failure = AssertionMatch(eval, ir::S0, loc);
-	check_failure.en = eval.netlist.LogicAnd(base.en, not_disabled_to_end.sig);
-	check_failure.start = max_start;
-	results.push_back(check_failure);
-
-	return compress_paths(results);
 }
 
 // Is the expression a property proper? With `and` and `or` it's enough for one of the
@@ -2933,17 +2887,18 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
-	if (condition && !cover) {
+	if (condition) {
 		auto abort = AssertionMatch::Operand(eval, *condition, disable_loc);
 		abort.sig = eval.netlist.ReduceBool(abort.sig);
-		if (!abort.sig.is_fully_zero())
+		if (!abort.sig.is_fully_zero()) {
 			ctx.abort = &spans.emplace(abort);
+			// A cover is the dual of an assertion of the negation, its letters are the
+			// dual of T. It succeeds where the attempt was settled ahead of the disable.
+			ctx.dual = cover;
+		}
 	}
 
 	auto paths = property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, *property), expr_loc(assertion));
-	if (condition && cover)
-		paths = cover_disable_iff(eval, *condition, std::move(paths), disable_loc);
-
 	auto sig = collapse_or(paths);
 
 	// Starts out low, so no attempt gets reported before it had the time to finish
