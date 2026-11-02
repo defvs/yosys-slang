@@ -1849,6 +1849,27 @@ simple_property_signal(EvalContext& eval, const ast::AssertionExpr& expr,
 	return std::nullopt;
 }
 
+// Does `value` match `item` of a property case? They are compared by case equality,
+// not with the wildcards of `case inside` (IEEE Std 1800-2017 sections 12.5 and
+// 16.12.16). Only a constant carries an x, so it never equals a net that isn't one.
+static ir::Net case_equality(EvalContext& eval, ir::Value value, ir::Value item) {
+	assert_invariant(value.size() == item.size());
+	ir::Value value_bits, item_bits;
+	for (uint64_t i = 0; i < value.size(); i++) {
+		ir::Net left = value[i], right = item[i];
+		if (left.is_const() && right.is_const()) {
+			if (left != right)
+				return ir::S0;
+			continue;
+		}
+		if ((left.is_const() && !left.is_def()) || (right.is_const() && !right.is_def()))
+			return ir::S0;
+		value_bits.append(left);
+		item_bits.append(right);
+	}
+	return value_bits.empty() ? ir::S1 : eval.netlist.Eq(value_bits, item_bits);
+}
+
 static ir::Net add_pending_monitor(EvalContext& eval, ir::Net trigger,
 										ir::Net completion,
 										ir::Net disable,
@@ -2570,7 +2591,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			for (const auto *item_expr : item.expressions)
 				item_hit = eval.netlist.LogicOr(
 					item_hit,
-					inside_comparison(eval, control, *item_expr));
+					case_equality(eval, control, eval(*item_expr)));
 			item_hit = eval.netlist.LogicAnd(item_hit, sva_not(eval, matched));
 			PropertyResult branch = lower_property(
 				eval, *item.body,

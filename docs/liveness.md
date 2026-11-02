@@ -82,6 +82,9 @@ Vacuity and triggering follow the property structure:
 - no antecedent match means no response obligation;
 - a top-level eventual property launches on every enabled sampled clock.
 
+The items of a property `case` compare with case equality: an `x` in an item
+is no wildcard, it matches nothing but the same constant `x`.
+
 An assertion in procedural code launches an attempt on the clock ticks where
 the code around it reaches the statement, the attempt then runs to completion
 whatever that code does on later ticks (IEEE 1800-2017 16.14.6).

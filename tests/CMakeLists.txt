@@ -31,6 +31,7 @@ set(ALL_TESTS
     liveness/unbounded_sequences.ys
     liveness/regular_sequences.ys
     liveness/large_ranges.ys
+    liveness/property_conditions.ys
     sva/seqequiv.tcl
     sva/action_blocks.ys
     sva/comb_default_clocking.ys

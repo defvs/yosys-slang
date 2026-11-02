@@ -1,0 +1,25 @@
+# The items of a property case compare by case equality, an x in one is no
+# wildcard: case_x_holds holds only in that reading, case_x_fails makes sure
+# its checks are not vacuous.
+read_slang <<EOF
+module case_x_holds(input logic clk, input logic [1:0] m);
+	localparam logic [1:0] X = 2'b1x;
+	always @(posedge clk) begin
+		// No value of m is 2'b1x by case equality
+		assert property (case (m) 2'b1x: 1'b0; default: 1'b1; endcase);
+		// A constant with an x is equal to itself
+		assert property (case (X) 2'b1x: 1'b1; default: 1'b0; endcase);
+	end
+endmodule
+
+module case_x_fails(input logic clk, input logic [1:0] m);
+	always @(posedge clk)
+		assert property (case (m) 2'b1x: 1'b1; default: 1'b0; endcase);
+endmodule
+EOF
+
+select -assert-count 4 case_x_holds/t:$check
+
+async2sync
+sat -seq 6 -set-init-zero -prove-asserts -verify case_x_holds
+sat -seq 6 -set-init-zero -prove-asserts -falsify case_x_fails
