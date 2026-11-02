@@ -286,11 +286,9 @@ static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, int min, in
 	for (int offset = min; offset <= max; offset++) {
 		for (auto inner : b) {
 			if (inner.empty) {
-				// `##N empty` is `##(N-1) 1'b1`
+				// `##N empty` is `##(N-1) 1'b1`, for N = 0 there's no match
 				if (offset > 0)
 					paths.push_back(AssertionMatch(eval, ir::S1, loc).shift(offset - 1));
-				else
-					paths.push_back(inner);
 			} else {
 				check_frozen_offset(inner, offset);
 				paths.push_back(AssertionMatch(eval, ir::S1, loc).shift(offset + inner.start) && inner);
@@ -416,9 +414,10 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				const auto& sequence = expr.as<ast::SequenceConcatExpr>();
 				std::vector<AssertionMatch> own_paths;
 				for (size_t i = 0; i < sequence.elements.size(); i++) {
-					auto inner_paths = synthesize_assertion_expr(eval, *sequence.elements[i].sequence);
+					const auto& element = sequence.elements[i];
+					auto inner_paths = synthesize_assertion_expr(eval, *element.sequence);
 
-					auto delay = sequence.elements[i].delay;
+					auto delay = element.delay;
 					if (!delay.max.has_value()) {
 						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
@@ -426,10 +425,14 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					if (!check_finite_range(eval, expr, delay.min, delay.max.value()))
 						return {};
 
-					if (i == 0)
+					// slang gives a bare first element a delay of zero too, which is
+					// not the same as an explicit `##0` if the element can be empty
+					if (i != 0)
+						own_paths = seq_vec(own_paths, delay.min, delay.max.value(), inner_paths);
+					else if (element.delayRange.start().valid())
 						own_paths = seq_prefix_vec(eval, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
 					else
-						own_paths = seq_vec(own_paths, delay.min, delay.max.value(), inner_paths);
+						own_paths = compress_paths(inner_paths);
 				}
 				return own_paths;
 			}
