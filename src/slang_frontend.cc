@@ -1401,6 +1401,13 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				goto error;
 			}
 
+			// Local variables of sequences and properties have a value for each thread
+			// of an attempt, we don't model those
+			if (ast::LocalAssertionVarSymbol::isKind(symbol.kind)) {
+				netlist.add_diag(diag::AssertionUnsupported, expr.sourceRange);
+				goto error;
+			}
+
 			ast_invariant(symbol, ast::ValueSymbol::isKind(symbol.kind));
 			Variable variable1 = variable(symbol.as<ast::ValueSymbol>());
 			assert_invariant((bool) variable1);
