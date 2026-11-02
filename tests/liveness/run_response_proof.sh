@@ -37,6 +37,7 @@ cp -- "${test_dir}/composition.sby" "${work_dir}/composition.sby"
 cp -- "${test_dir}/composition_safety.sby" \
 	"${work_dir}/composition_safety.sby"
 cp -- "${test_dir}/justice.sby" "${work_dir}/justice.sby"
+cp -- "${test_dir}/operators.sby" "${work_dir}/operators.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -304,6 +305,27 @@ do
 	"
 done
 
+for top in \
+	until_progress_fail \
+	until_with_progress_fail \
+	implies_live_pass \
+	implies_live_fail \
+	if_live_pass \
+	if_live_fail \
+	case_live_pass \
+	case_live_fail
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/operators_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
 yosys -q -m "${plugin}" -p "
 	read_slang -DMUTATE_LIVENESS ${test_dir}/response_proof.sv;
 	prep -top response_proof;
@@ -346,4 +368,6 @@ yosys -q -m "${plugin}" -p "
 		-f composition_safety.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/justice" \
 		-f justice.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/operators" \
+		-f operators.sby
 )

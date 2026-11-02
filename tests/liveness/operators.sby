@@ -1,0 +1,56 @@
+[tasks]
+until_pass
+until_with_pass
+until_progress_fail
+until_with_progress_fail
+implies_pass
+implies_fail
+if_pass
+if_fail
+case_pass
+case_fail
+
+[options]
+mode live
+until_progress_fail: expect fail
+until_with_progress_fail: expect fail
+implies_fail: expect fail
+if_fail: expect fail
+case_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+until_pass: read_rtlil until_pass.il
+until_pass: prep -top until_pass
+until_with_pass: read_rtlil until_with_pass.il
+until_with_pass: prep -top until_with_pass
+until_progress_fail: read_rtlil until_progress_fail.il
+until_progress_fail: prep -top until_progress_fail
+until_with_progress_fail: read_rtlil until_with_progress_fail.il
+until_with_progress_fail: prep -top until_with_progress_fail
+implies_pass: read_rtlil implies_live_pass.il
+implies_pass: prep -top implies_live_pass
+implies_fail: read_rtlil implies_live_fail.il
+implies_fail: prep -top implies_live_fail
+if_pass: read_rtlil if_live_pass.il
+if_pass: prep -top if_live_pass
+if_fail: read_rtlil if_live_fail.il
+if_fail: prep -top if_live_fail
+case_pass: read_rtlil case_live_pass.il
+case_pass: prep -top case_live_pass
+case_fail: read_rtlil case_live_fail.il
+case_fail: prep -top case_live_fail
+
+[files]
+until_pass.il
+until_with_pass.il
+until_progress_fail.il
+until_with_progress_fail.il
+implies_live_pass.il
+implies_live_fail.il
+if_live_pass.il
+if_live_fail.il
+case_live_pass.il
+case_live_fail.il

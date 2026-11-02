@@ -10,6 +10,7 @@ fairness_fail
 suffix_overlap_pass
 suffix_pretrigger_fail
 overlapping_requests_pass
+reject_abort_pass
 
 [options]
 mode live
@@ -45,6 +46,8 @@ suffix_pretrigger_fail: read_rtlil suffix_pretrigger_fail.il
 suffix_pretrigger_fail: prep -top suffix_pretrigger_fail
 overlapping_requests_pass: read_rtlil overlapping_requests_pass.il
 overlapping_requests_pass: prep -top overlapping_requests_pass
+reject_abort_pass: read_rtlil reject_abort_pass.il
+reject_abort_pass: prep -top reject_abort_pass
 
 [files]
 disable_abort_pass.il
@@ -58,3 +61,4 @@ fairness_fail.il
 suffix_overlap_pass.il
 suffix_pretrigger_fail.il
 overlapping_requests_pass.il
+reject_abort_pass.il
