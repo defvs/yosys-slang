@@ -735,3 +735,13 @@ module followed_if_cover(input logic clk, input logic x, input logic a, input lo
 	cover property (@(posedge clk) x #-# (if (a) b));
 endmodule
 EOF
+
+design -reset
+
+# A finite property has no obligation to tell the attempts in flight by
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part, no `always` and nothing but a boolean antecedent ahead of its obligations"
+read_slang <<EOF
+module reject_finite(input logic clk, input logic r, input logic x, input logic a, input logic b);
+	assert property (@(posedge clk) x |-> reject_on (r) a ##1 b);
+endmodule
+EOF
