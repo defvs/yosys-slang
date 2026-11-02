@@ -26,6 +26,26 @@ endmodule
 module goto_delay(input logic clk, input logic a, input logic b);
 	goto_delay_test: assert property (@(posedge clk) a |-> strong(b[->1500]));
 endmodule
+
+module ranged_suffix(input logic clk, input logic a, input logic b, input logic c);
+	ranged_suffix_test: assert property (@(posedge clk) a |-> strong(##[1:$] b ##[1:2000] c));
+endmodule
+
+module late_always(input logic clk, input logic a);
+	late_always_test: assert property (@(posedge clk) always [2000:$] a);
+endmodule
+
+module late_not_eventually(input logic clk, input logic a);
+	late_not_eventually_test: assert property (@(posedge clk) not (s_eventually [2000:$] a));
+endmodule
+
+module late_not_always(input logic clk, input logic a);
+	late_not_always_test: assert property (@(posedge clk) not (always [2000:$] a));
+endmodule
+
+module late_selected(input logic clk, input logic a, input logic b);
+	late_selected_test: assert property (@(posedge clk) s_eventually [2000:$] (a ##[1:$] b));
+endmodule
 EOF
 
 select -assert-count 1 late_response/t:$check r:FLAVOR=live %i
@@ -54,6 +74,30 @@ select -assert-count 1 goto_delay/t:$check r:FLAVOR=live %i
 select -assert-count 1 goto_delay/t:$check r:FLAVOR=fair %i
 select -assert-count 2 goto_delay/t:$check
 select -assert-max 6000 goto_delay/t:$dff
+
+# The matches of a suffix discharge the attempts of their age and older, which takes
+# one OR per age rather than one per age and match
+select -assert-count 1 ranged_suffix/t:$check r:FLAVOR=live %i
+select -assert-count 1 ranged_suffix/t:$check
+select -assert-max 24000 ranged_suffix/t:$dff
+select -assert-max 40000 ranged_suffix/t:*
+
+select -assert-count 1 late_always/t:$check r:FLAVOR=assert %i
+select -assert-count 1 late_always/t:$check
+select -assert-max 6000 late_always/t:$dff
+
+select -assert-count 1 late_not_eventually/t:$check r:FLAVOR=assert %i
+select -assert-count 1 late_not_eventually/t:$check
+select -assert-max 6000 late_not_eventually/t:$dff
+
+select -assert-count 1 late_not_always/t:$check r:FLAVOR=live %i
+select -assert-count 1 late_not_always/t:$check
+select -assert-max 6000 late_not_always/t:$dff
+
+select -assert-count 1 late_selected/t:$check r:FLAVOR=live %i
+select -assert-count 1 late_selected/t:$check r:FLAVOR=fair %i
+select -assert-count 2 late_selected/t:$check
+select -assert-max 6000 late_selected/t:$dff
 
 async2sync
 formalff -clk2ff

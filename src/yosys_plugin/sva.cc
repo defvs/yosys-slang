@@ -1737,15 +1737,17 @@ static void add_response_liveness_obligation(
 	ages.push_back(trigger);
 	ages.insert(ages.end(), recent.begin(), recent.end());
 
+	// A match clears the ages from its duration up, so each age takes what clears the
+	// one below it and the matches of its own duration
 	std::vector<ir::Net> clears(maximum_duration,
 									  ir::S0);
-	for (uint64_t age = 0; age < maximum_duration; age++) {
-		for (const auto& candidate : candidates) {
-			if (candidate.duration <= age)
-				clears[age] =
-					eval.netlist.LogicOr(clears[age], candidate.match);
-		}
+	for (const auto& candidate : candidates) {
+		if (candidate.duration < maximum_duration)
+			clears[candidate.duration] =
+				eval.netlist.LogicOr(clears[candidate.duration], candidate.match);
 	}
+	for (uint64_t age = 1; age < maximum_duration; age++)
+		clears[age] = eval.netlist.LogicOr(clears[age - 1], clears[age]);
 
 	ir::Net pending = old;
 	ir::Net completion = eval.netlist.LogicAnd(old, any_match);
