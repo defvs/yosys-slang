@@ -124,6 +124,8 @@ for top in \
 	guard_assume_fail \
 	sampled_if_pass \
 	sampled_if_fail \
+	comb_default_pass \
+	comb_default_fail \
 	iff_zero_pass \
 	iff_zero_fail \
 	iff_minimum_pass \

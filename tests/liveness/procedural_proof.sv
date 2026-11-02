@@ -199,6 +199,40 @@ module sampled_if_fail ((* gclk *) input logic clk);
 	end
 endmodule
 
+module comb_default_pass ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	default clocking @(posedge clk); endclocking
+
+	wire c = age == 2;
+	wire a = age == 2;
+	wire b = age == 3;
+
+	always_comb
+		if (c)
+			assert property (s_eventually (a ##1 b));
+endmodule
+
+module comb_default_fail ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	default clocking @(posedge clk); endclocking
+
+	wire c = age == 3;
+	wire a = age == 2;
+	wire b = age == 3;
+
+	always_comb
+		if (c)
+			assert property (s_eventually (a ##1 b));
+endmodule
+
 // The clock of `always @(posedge clk iff en)` ticks only where en is high, the
 // goals don't count on the other cycles
 

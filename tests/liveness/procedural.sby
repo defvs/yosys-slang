@@ -11,6 +11,8 @@ guard_assume_pass
 guard_assume_fail
 sampled_if_pass
 sampled_if_fail
+comb_default_pass
+comb_default_fail
 iff_zero_pass
 iff_zero_fail
 iff_minimum_pass
@@ -28,6 +30,7 @@ guard_or_fail: expect fail
 guard_or_mixed_fail: expect fail
 guard_assume_fail: expect fail
 sampled_if_fail: expect fail
+comb_default_fail: expect fail
 iff_zero_fail: expect fail
 iff_minimum_fail: expect fail
 iff_response_fail: expect fail
@@ -61,6 +64,10 @@ sampled_if_pass: read_rtlil sampled_if_pass.il
 sampled_if_pass: prep -top sampled_if_pass
 sampled_if_fail: read_rtlil sampled_if_fail.il
 sampled_if_fail: prep -top sampled_if_fail
+comb_default_pass: read_rtlil comb_default_pass.il
+comb_default_pass: prep -top comb_default_pass
+comb_default_fail: read_rtlil comb_default_fail.il
+comb_default_fail: prep -top comb_default_fail
 iff_zero_pass: read_rtlil iff_zero_pass.il
 iff_zero_pass: prep -top iff_zero_pass
 iff_zero_fail: read_rtlil iff_zero_fail.il
@@ -91,6 +98,8 @@ guard_assume_pass: guard_assume_pass.il
 guard_assume_fail: guard_assume_fail.il
 sampled_if_pass: sampled_if_pass.il
 sampled_if_fail: sampled_if_fail.il
+comb_default_pass: comb_default_pass.il
+comb_default_fail: comb_default_fail.il
 iff_zero_pass: iff_zero_pass.il
 iff_zero_fail: iff_zero_fail.il
 iff_minimum_pass: iff_minimum_pass.il

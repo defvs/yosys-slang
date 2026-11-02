@@ -1409,7 +1409,7 @@ struct EventualCandidate {
 
 static void add_liveness_obligation(PropertyResult& result, EvalContext& eval,
 									ir::Net goal, ir::Net trigger,
-									ir::Net disable);
+									ir::Net disable, slang::SourceLocation loc);
 static ir::Net add_pending_monitor(
 		EvalContext& eval, ir::Net trigger,
 		ir::Net completion, ir::Net disable,
@@ -1688,7 +1688,7 @@ static void add_response_liveness_obligation(
 	// A zero-duration goal cannot have started before its trigger, so the
 	// native $live/$fair event semantics are already exact.
 	if (maximum_duration == 0) {
-		add_liveness_obligation(result, eval, any_match, trigger, disable);
+		add_liveness_obligation(result, eval, any_match, trigger, disable, loc);
 		return;
 	}
 
@@ -1803,14 +1803,12 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 
 static void add_liveness_obligation(PropertyResult& result, EvalContext& eval,
 									ir::Net goal, ir::Net trigger,
-									ir::Net disable) {
+									ir::Net disable, slang::SourceLocation loc) {
 	// A disable aborts all currently pending attempts, and prevents a new
 	// attempt from starting in the disabled cycle.
 	goal = eval.netlist.LogicOr(goal, disable);
 	trigger = eval.netlist.LogicAnd(trigger, sva_not(eval, disable));
-	ir::Net active = add_pending_monitor(
-		eval, trigger, goal, ir::S0,
-		slang::SourceLocation::NoLocation);
+	ir::Net active = add_pending_monitor(eval, trigger, goal, ir::S0, loc);
 	result.obligations.push_back(
 		{PropertyObligationKind::Liveness, goal, trigger, active});
 }
@@ -2254,7 +2252,7 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		if (!goal.has_value())
 			return {{}, false};
 		add_liveness_obligation(
-			result, eval, goal.value(), selected, disable);
+			result, eval, goal.value(), selected, disable, expr_loc(eventual));
 		return result;
 	}
 	std::optional<std::vector<EventualCandidate>> candidates;
@@ -2338,7 +2336,8 @@ static PropertyResult lower_until(EvalContext& eval,
 	must_hold = eval.netlist.LogicAnd(must_hold, sva_not(eval, disable));
 	add_safety_obligation(result, left.value(), must_hold);
 	if (strong)
-		add_liveness_obligation(result, eval, right.value(), trigger, disable);
+		add_liveness_obligation(result, eval, right.value(), trigger, disable,
+								expr_loc(until_expr));
 	return result;
 }
 
@@ -2510,7 +2509,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			if (!goal.has_value())
 				return {{}, false};
 			add_liveness_obligation(
-				result, eval, goal.value(), selected, disable);
+				result, eval, goal.value(), selected, disable, expr_loc(expr));
 			return result;
 		}
 		auto candidates =

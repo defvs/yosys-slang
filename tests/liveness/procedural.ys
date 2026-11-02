@@ -1,0 +1,90 @@
+# No clock gets inferred from always_comb or always @*, liveness monitors there
+# run on the default clocking like any other assertion
+read_slang <<EOF
+module comb_liveness(input logic clk, input logic c, input logic a, input logic b);
+	default clocking @(negedge clk); endclocking
+
+	always_comb
+		if (c)
+			comb_check: assert property (s_eventually a);
+
+	always @*
+		if (!c)
+			star_check: assert property (a |-> s_eventually b);
+endmodule
+EOF
+
+select -assert-count 2 t:$check r:FLAVOR=live %i
+select -assert-count 2 t:$check r:TRG_ENABLE=1 %i r:TRG_POLARITY=1'0 %i
+select -assert-count 2 w:clk %co:+[TRG] t:$check %i
+
+design -reset
+
+# Without a default clocking they have no clock to run on
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module comb_unclocked(input logic c, input logic a);
+	always_comb
+		if (c)
+			assert property (s_eventually a);
+endmodule
+EOF
+
+design -reset
+
+# Nor in either branch of an asynchronous reset
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module reset_process(input logic clk, input logic rst, input logic a, input logic d,
+					 output logic q);
+	always_ff @(posedge clk or posedge rst) begin
+		if (rst) begin
+			q <= 1'b0;
+		end else begin
+			assert property (s_eventually a);
+			q <= d;
+		end
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module reset_branch(input logic clk, input logic rst, input logic a, input logic d,
+					output logic q);
+	always_ff @(posedge clk or posedge rst) begin
+		if (rst) begin
+			assert property (@(posedge clk) s_eventually a);
+			q <= 1'b0;
+		end else begin
+			q <= d;
+		end
+	end
+endmodule
+EOF
+
+design -reset
+
+# Action blocks are left out for liveness assertions too, so they may only report
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module liveness_action(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	always @(posedge clk)
+		assert property (s_eventually a) else err <= 1'b1;
+endmodule
+EOF
+
+design -reset
+
+read_slang <<EOF
+module liveness_reporting(input logic clk, input logic a, input logic b);
+	always @(posedge clk)
+		assert property (a |-> s_eventually b) else $error("no b after a");
+	assert property (@(posedge clk) s_eventually a) $display("a seen");
+endmodule
+EOF
+
+select -assert-count 2 t:$check r:FLAVOR=live %i
