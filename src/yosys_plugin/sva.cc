@@ -1684,8 +1684,13 @@ suffix_eventual_candidates(EvalContext& eval,
 			eval.netlist.ReduceBool(path.sig),
 			eval.netlist.ReduceBool(path.en));
 		match = eval.netlist.LogicAnd(match, frame_ready);
-		candidates.push_back(
-			{match, uint64_t(path.start) + leading_delay});
+		// With nothing after the leading delay to match, `##n empty` is `##(n-1) `true`
+		// and `##0 empty` has no match, so the match ends a tick ahead of the delay
+		uint64_t duration = uint64_t(path.start) + leading_delay;
+		if (path.empty)
+			duration = additional_delay +
+					   std::max<uint64_t>(concat.elements[0].delay.min, 1) - 1;
+		candidates.push_back({match, duration});
 	}
 	return candidates;
 }

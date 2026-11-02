@@ -11,6 +11,7 @@ empty_eventually_pass
 empty_eventually_fail
 empty_followed_pass
 empty_followed_fail
+suffix_empty_pass
 
 [options]
 mode live
@@ -49,6 +50,8 @@ empty_followed_pass: read_rtlil empty_followed_pass.il
 empty_followed_pass: prep -top empty_followed_pass
 empty_followed_fail: read_rtlil empty_followed_fail.il
 empty_followed_fail: prep -top empty_followed_fail
+suffix_empty_pass: read_rtlil suffix_empty_pass.il
+suffix_empty_pass: prep -top suffix_empty_pass
 
 [files]
 named_strong_pass: named_strong_pass.il
@@ -63,3 +66,4 @@ empty_eventually_pass: empty_eventually_pass.il
 empty_eventually_fail: empty_eventually_fail.il
 empty_followed_pass: empty_followed_pass.il
 empty_followed_fail: empty_followed_fail.il
+suffix_empty_pass: suffix_empty_pass.il

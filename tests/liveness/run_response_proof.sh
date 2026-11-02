@@ -161,7 +161,9 @@ for top in \
 	empty_eventually_fail \
 	empty_followed_pass \
 	empty_followed_fail \
-	empty_overlapped_fail
+	empty_overlapped_fail \
+	suffix_empty_pass \
+	suffix_empty_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/sequence_proof.sv;

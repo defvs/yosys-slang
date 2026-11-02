@@ -176,3 +176,31 @@ module empty_overlapped_fail ((* gclk *) input logic clk);
 
 	assert property (@(posedge clk) request |-> (1'b0[*0:1] #-# s_eventually b));
 endmodule
+
+// `##n empty` is `##(n-1) `true`, so the empty match of `a[*0:1]` ends a tick ahead of the
+// delay, and a reject that comes after that tick comes too late
+module suffix_empty_pass ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire a = 1'b0;
+	wire reject = age == 2;
+
+	assert property (@(posedge clk) request |-> reject_on (reject) strong(##[2:$] a[*0:1]));
+endmodule
+
+module suffix_empty_fail ((* gclk *) input logic clk);
+	logic [2:0] age = 0;
+	always_ff @(posedge clk)
+		if (age != 7)
+			age <= age + 1'b1;
+
+	wire request = age == 0;
+	wire a = 1'b0;
+	wire reject = age == 1;
+
+	assert property (@(posedge clk) request |-> reject_on (reject) strong(##[2:$] a[*0:1]));
+endmodule

@@ -1,11 +1,14 @@
 [tasks]
 followed_pass
 overlapped_fail
+suffix_pass
+suffix_fail
 
 [options]
 mode prove
 depth 10
 overlapped_fail: expect fail
+suffix_fail: expect fail
 
 [engines]
 smtbmc z3
@@ -19,7 +22,17 @@ overlapped_fail: read_rtlil empty_overlapped_fail.il
 overlapped_fail: chformal -live -remove
 overlapped_fail: chformal -fair -remove
 overlapped_fail: prep -top empty_overlapped_fail
+suffix_pass: read_rtlil suffix_empty_pass.il
+suffix_pass: chformal -live -remove
+suffix_pass: chformal -fair -remove
+suffix_pass: prep -top suffix_empty_pass
+suffix_fail: read_rtlil suffix_empty_fail.il
+suffix_fail: chformal -live -remove
+suffix_fail: chformal -fair -remove
+suffix_fail: prep -top suffix_empty_fail
 
 [files]
 followed_pass: empty_followed_pass.il
 overlapped_fail: empty_overlapped_fail.il
+suffix_pass: suffix_empty_pass.il
+suffix_fail: suffix_empty_fail.il
