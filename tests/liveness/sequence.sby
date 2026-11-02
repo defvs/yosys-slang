@@ -3,11 +3,17 @@ named_strong_pass
 named_strong_fail
 named_eventually_pass
 named_eventually_fail
+zero_prefix_pass
+zero_prefix_fail
+nexttime_empty_pass
+nexttime_empty_fail
 
 [options]
 mode live
 named_strong_fail: expect fail
 named_eventually_fail: expect fail
+zero_prefix_fail: expect fail
+nexttime_empty_fail: expect fail
 
 [engines]
 aiger suprove
@@ -21,9 +27,21 @@ named_eventually_pass: read_rtlil named_eventually_pass.il
 named_eventually_pass: prep -top named_eventually_pass
 named_eventually_fail: read_rtlil named_eventually_fail.il
 named_eventually_fail: prep -top named_eventually_fail
+zero_prefix_pass: read_rtlil zero_prefix_pass.il
+zero_prefix_pass: prep -top zero_prefix_pass
+zero_prefix_fail: read_rtlil zero_prefix_fail.il
+zero_prefix_fail: prep -top zero_prefix_fail
+nexttime_empty_pass: read_rtlil nexttime_empty_pass.il
+nexttime_empty_pass: prep -top nexttime_empty_pass
+nexttime_empty_fail: read_rtlil nexttime_empty_fail.il
+nexttime_empty_fail: prep -top nexttime_empty_fail
 
 [files]
 named_strong_pass: named_strong_pass.il
 named_strong_fail: named_strong_fail.il
 named_eventually_pass: named_eventually_pass.il
 named_eventually_fail: named_eventually_fail.il
+zero_prefix_pass: zero_prefix_pass.il
+zero_prefix_fail: zero_prefix_fail.il
+nexttime_empty_pass: nexttime_empty_pass.il
+nexttime_empty_fail: nexttime_empty_fail.il

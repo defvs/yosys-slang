@@ -151,7 +151,11 @@ for top in \
 	named_strong_pass \
 	named_strong_fail \
 	named_eventually_pass \
-	named_eventually_fail
+	named_eventually_fail \
+	zero_prefix_pass \
+	zero_prefix_fail \
+	nexttime_empty_pass \
+	nexttime_empty_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/sequence_proof.sv;

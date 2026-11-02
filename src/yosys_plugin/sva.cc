@@ -285,20 +285,19 @@ private:
 		}
 	}
 
-	// `##[delay] expr`, where `##n empty` is `##(n-1) `true`
+	// `##[delay] expr`, where `##n empty` is `##(n-1) `true` and `##0 empty` has no
+	// match, so there's no empty match of the whole
 	Fragment parse_delayed(int start, const ast::SequenceRange& delay,
 						   const ast::AssertionExpr& expr) {
 		int right_start = fsm.create_node();
 		add_delay(start, delay, right_start);
 
 		Fragment right = parse(right_start, expr);
-		Fragment result {right.end, false};
 		if (right.empty) {
 			if (auto shorter = shorten(delay, 1))
 				add_delay(start, *shorter, right.end);
-			result.empty = delay.min == 0;
 		}
-		return result;
+		return {right.end, false};
 	}
 
 	// Append `##[delay] right` to `left`, which began on `start`. An empty match
@@ -461,8 +460,12 @@ public:
 				Fragment result {start, false};
 				for (size_t index = 0; index < sequence.elements.size(); index++) {
 					const auto& element = sequence.elements[index];
-					if (index == 0)
+					// slang gives a bare first element a delay of zero too, which is
+					// not the same as an explicit `##0` if the element can be empty
+					if (index == 0 && element.delayRange.start().valid())
 						result = parse_delayed(start, element.delay, *element.sequence);
+					else if (index == 0)
+						result = parse(start, *element.sequence);
 					else
 						result = concat(start, result, element.delay, [&](int node) {
 							return parse(node, *element.sequence);
@@ -505,7 +508,10 @@ public:
 							}
 							delay = unary.range->min;
 						}
-						return parse_delayed(start, {delay, delay}, unary.expr);
+						// The operand is a property, an empty match of it is no success
+						int operand_start = fsm.create_node();
+						add_delay(start, {delay, delay}, operand_start);
+						return {parse(operand_start, unary.expr).end, false};
 					}
 				default:
 					unsupported(expr);
