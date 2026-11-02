@@ -656,7 +656,8 @@ struct AssertionResult {
 static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingControl &clocking,
 									 ProcessTiming &timing);
 
-// Unwrap non-recursive property instances down to the actual top expression
+// Unwrap non-recursive property instances down to the actual top expression. A repeated
+// instance is a top expression itself, its body only makes up one of the iterations.
 static const ast::AssertionExpr &unwrap_property_instances(const ast::AssertionExpr &expr)
 {
 	if (expr.kind != ast::AssertionExprKind::Simple)
@@ -667,7 +668,7 @@ static const ast::AssertionExpr &unwrap_property_instances(const ast::AssertionE
 		return expr;
 
 	const auto &instance = simple.expr.as<ast::AssertionInstanceExpression>();
-	if (instance.isRecursiveProperty)
+	if (instance.isRecursiveProperty || simple.repetition.has_value())
 		return expr;
 
 	return unwrap_property_instances(instance.body);

@@ -30,3 +30,60 @@ endmodule
 EOF
 
 select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module repeated_clocked_sequence(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	repeated_test: assert property (s[*2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module nested_repeated_clocked_sequence(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	sequence twice;
+		s[*2];
+	endsequence
+	repeated_test: cover property (twice);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module default_clocked_repeated_sequence(input logic clk, input logic a, input logic b);
+	default clocking @(posedge clk); endclocking
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	repeated_test: assert property (s[*1:2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module procedural_repeated_sequence(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	property p;
+		s[*2];
+	endproperty
+	always @(posedge clk) begin
+		repeated_test: assert property (p);
+	end
+endmodule
+EOF
