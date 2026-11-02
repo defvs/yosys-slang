@@ -1,0 +1,20 @@
+# The label of an assertion names its progress obligation, the auxiliary fairness of
+# a selected attempt and any further obligations get names derived from it
+read_slang <<EOF
+module liveness_labels(input logic clk, input logic start, input logic a, input logic b);
+	selected: assert property (@(posedge clk) start |-> strong(a ##[1:$] b));
+	mixed: assert property (@(posedge clk) a s_until b);
+	assumed: assume property (@(posedge clk) a s_until b);
+endmodule
+EOF
+
+select -assert-count 6 liveness_labels/t:$check
+
+select -assert-count 1 liveness_labels/c:selected r:FLAVOR=live %i
+select -assert-count 1 liveness_labels/c:selected$select_fair r:FLAVOR=fair %i
+
+select -assert-count 1 liveness_labels/c:mixed r:FLAVOR=live %i
+select -assert-count 1 liveness_labels/c:mixed$obligation r:FLAVOR=assert %i
+
+select -assert-count 1 liveness_labels/c:assumed r:FLAVOR=fair %i
+select -assert-count 1 liveness_labels/c:assumed$obligation r:FLAVOR=assume %i

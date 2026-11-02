@@ -34,6 +34,7 @@ set(ALL_TESTS
     liveness/procedural.ys
     liveness/property_conditions.ys
     liveness/frozen.ys
+    liveness/labels.ys
     sva/seqequiv.tcl
     sva/action_blocks.ys
     sva/comb_default_clocking.ys

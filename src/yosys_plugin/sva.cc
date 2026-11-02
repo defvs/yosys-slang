@@ -3583,7 +3583,21 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 		return;
 	}
 
+	// The label goes to the progress obligation the property states, else to its first
+	// one, never to the fairness of a selection. The others are named after it.
 	std::string base_cell_name = check_cell_name(netlist, statement, block);
+	size_t labelled = result.obligations.size();
+	for (size_t index = 0; index < result.obligations.size(); index++) {
+		auto kind = result.obligations[index].kind;
+		if (kind == PropertyObligationKind::Liveness) {
+			labelled = index;
+			break;
+		}
+		if (kind == PropertyObligationKind::Safety && labelled == result.obligations.size())
+			labelled = index;
+	}
+	if (labelled == result.obligations.size())
+		labelled = 0;
 
 	for (size_t index = 0; index < result.obligations.size(); index++) {
 		const auto& obligation = result.obligations[index];
@@ -3610,8 +3624,12 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 			}
 		}
 
-		std::string cell_name =
-			index == 0 ? base_cell_name : netlist.backend->new_id("sva_obligation");
+		std::string cell_name = base_cell_name;
+		if (index != labelled) {
+			const char *suffix = obligation.kind == PropertyObligationKind::AuxiliaryFairness
+				? "$select_fair" : "$obligation";
+			cell_name = netlist.backend->canvas->uniquify(base_cell_name + suffix).str();
+		}
 		ir::Net a = netlist.ReduceBool(obligation.a);
 		ir::Net en = netlist.ReduceBool(obligation.en);
 
