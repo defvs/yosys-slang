@@ -13,10 +13,8 @@ UNSUPPORTED_PATTERNS = (
 
 DISABLED_REASON = {
     "prim_alert_rxtx_assert_fpv.sv": {
-        "PingEn_M": "uses throughout and goto repetition",
-        "AlertPingIgnored_A": "uses throughout and goto repetition",
-    },
-    "prim_esc_rxtx_assert_fpv.sv": {
+        "PingEn_M": "weak sequence with an unbounded match in the consequent",
+        "AlertPingIgnored_A": "weak sequence with an unbounded match in the consequent",
     },
 }
 

@@ -31,7 +31,7 @@ Unsupported or rewritten OpenTitan constructs:
 
 | Source | Disabled / rewritten | Reason |
 | --- | --- | --- |
-| `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M`, `AlertPingIgnored_A` | `throughout`, goto repetition |
+| `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M`, `AlertPingIgnored_A` | weak sequence with an unbounded match in the consequent (`throughout` a goto repetition) |
 | `tlul_assert.sv` | knownness assertions | `$isunknown` |
 | `tlul_assert.sv` | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |
 | OpenTitan enum references | rewritten to constants where needed | hierarchical enum literals caused missing-wire frontend errors (FIXME) |

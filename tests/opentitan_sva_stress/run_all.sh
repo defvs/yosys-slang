@@ -57,8 +57,8 @@ done
   echo
   echo "| Source | Item | Reason |"
   echo "| --- | --- | --- |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | throughout and goto repetition |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A | throughout and goto repetition |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | weak sequence with an unbounded match in the consequent |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A | weak sequence with an unbounded match in the consequent |"
   echo "| prim_alert_rxtx_assert_fpv.sv | init_pending receiver-state helper | hierarchical enum literals triggered missing-wire frontend error; rewritten to their numeric encoding |"
   echo "| prim_esc_rxtx_assert_fpv.sv | FSM Idle state references | hierarchical enum literals rewritten to their numeric encoding |"
   echo "| clkmgr_cg_en_sva_if.sv | scanmode enum literal | hierarchical package enum literal rewritten to numeric MuBi4True encoding |"
