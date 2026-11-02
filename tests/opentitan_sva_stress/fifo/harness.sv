@@ -9,7 +9,11 @@ module prim_fifo_sync_sva_harness (
   input logic [3:0] wdata_i,
   input logic rready_i
 );
-  initial assume(!rst_ni);
+  logic first_tick = 1'b1;
+  always_ff @(posedge clk_i) begin
+    first_tick <= 1'b0;
+    if (first_tick) assume(!rst_ni);
+  end
 
   logic wready;
   logic rvalid;
