@@ -123,7 +123,15 @@ for top in \
 	guard_assume_pass \
 	guard_assume_fail \
 	sampled_if_pass \
-	sampled_if_fail
+	sampled_if_fail \
+	iff_zero_pass \
+	iff_zero_fail \
+	iff_minimum_pass \
+	iff_minimum_fail \
+	iff_response_pass \
+	iff_response_fail \
+	iff_fair_pass \
+	iff_fair_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/procedural_proof.sv;

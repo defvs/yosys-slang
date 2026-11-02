@@ -198,3 +198,95 @@ module sampled_if_fail ((* gclk *) input logic clk);
 		assert property (if (v) s_eventually g);
 	end
 endmodule
+
+// The clock of `always @(posedge clk iff en)` ticks only where en is high, the
+// goals don't count on the other cycles
+
+module iff_zero_pass ((* gclk *) input logic clk);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = en;
+
+	always @(posedge clk iff en)
+		assert property (s_eventually g);
+endmodule
+
+module iff_zero_fail ((* gclk *) input logic clk);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = !en;
+
+	always @(posedge clk iff en)
+		assert property (s_eventually g);
+endmodule
+
+module iff_minimum_pass ((* gclk *) input logic clk);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = en;
+
+	always @(posedge clk iff en)
+		assert property (s_eventually [2:$] g);
+endmodule
+
+module iff_minimum_fail ((* gclk *) input logic clk);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = !en;
+
+	always @(posedge clk iff en)
+		assert property (s_eventually [2:$] g);
+endmodule
+
+module iff_response_pass ((* gclk *) input logic clk, input logic r);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = en;
+
+	always @(posedge clk iff en)
+		assert property (r |-> s_eventually g);
+endmodule
+
+module iff_response_fail ((* gclk *) input logic clk, input logic r);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	wire g = !en;
+
+	always @(posedge clk iff en)
+		assert property (r |-> s_eventually g);
+endmodule
+
+module iff_fair_pass ((* gclk *) input logic clk, input logic g);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	// The assumption promises g on infinitely many ticks of the process clock
+	always @(posedge clk iff en)
+		assume property (s_eventually g);
+
+	assert property (@(posedge clk) s_eventually (en && g));
+endmodule
+
+module iff_fair_fail ((* gclk *) input logic clk, input logic g);
+	logic en = 0;
+	always_ff @(posedge clk)
+		en <= !en;
+
+	always @(posedge clk iff en)
+		assume property (s_eventually g);
+
+	assert property (@(posedge clk) s_eventually (!en && g));
+endmodule

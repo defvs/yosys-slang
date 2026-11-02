@@ -89,7 +89,9 @@ is no wildcard, it matches nothing but the same constant `x`.
 
 An assertion in procedural code launches an attempt on the clock ticks where
 the code around it reaches the statement, the attempt then runs to completion
-whatever that code does on later ticks (IEEE 1800-2017 16.14.6).
+whatever that code does on later ticks (IEEE 1800-2017 16.14.6). In
+`always @(posedge clk iff en)` the clock ticks only where `en` is high: a
+justice goal is met only on such a tick, not on the cycles between.
 
 Overlapping triggers are preserved. For an eventual finite suffix of maximum
 duration `N`, the monitor keeps pending trigger ages `1..N-1` and a saturated

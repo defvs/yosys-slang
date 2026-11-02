@@ -3012,6 +3012,11 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 		ir::Net a = netlist.ReduceBool(obligation.a);
 		ir::Net en = netlist.ReduceBool(obligation.en);
 
+		// A justice goal is looked at on every cycle, not only on the ones the clock of
+		// an `iff` qualified process ticks on
+		if (obligation.kind != PropertyObligationKind::Safety)
+			a = netlist.LogicAnd(a, procedural.timing.background_enable);
+
 		auto cell = netlist.backend->canvas->addCell(std::move(cell_name), ID($check));
 		procedural.timing.extract_trigger(netlist, cell, en);
 		cell->setParam(ID::FLAVOR, flavor);
