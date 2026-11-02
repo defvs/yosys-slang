@@ -234,7 +234,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(SVARejectOnUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAVacuousCoverUnsupported,
-					  "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported");
+					  "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes");
 	engine.setSeverity(SVAVacuousCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAWeakSequenceUnsupported,
@@ -246,7 +246,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setSeverity(SVASequenceProductUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAFollowedByUnsupported,
-					  "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough");
+					  "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough");
 	engine.setSeverity(SVAFollowedByUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");

@@ -54,7 +54,7 @@ EOF
 design -reset
 
 # Where `c` is low these succeed with no check started to show it
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_if_cover(input logic clk, input logic c, input logic a, input logic b);
 	cover property (@(posedge clk) if (c) a ##1 b);
@@ -63,7 +63,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_implies_cover(input logic clk, input logic x, input logic c,
 								 input logic a);
@@ -73,7 +73,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_case_cover(input logic clk, input logic c, input logic a);
 	cover property (@(posedge clk) case (c) 1'b1: a; endcase);
@@ -83,7 +83,7 @@ EOF
 design -reset
 
 # An attempt with a match of the antecedent followed by `b` can fail on a later one
-test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent, is unsupported"
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
 read_slang <<EOF
 module unsupported_unbounded_antecedent_cover(input logic clk, input logic c,
 											  input logic a, input logic b);
@@ -323,7 +323,7 @@ design -reset
 
 # `R #-# P` needs one match of R with P from it (IEEE 1800-2017 16.12.9), while a
 # consequent started on every match of R needs P from each of them
-test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
 read_slang <<EOF
 module followed_unbounded_left(input logic clk, input logic a, input logic b, input logic c);
 	assert property (@(posedge clk) a |-> ((##[1:$] b) #-# s_eventually c));
@@ -333,7 +333,7 @@ EOF
 design -reset
 
 # That would strengthen an assumption
-test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
 read_slang <<EOF
 module followed_unbounded_assume(input logic clk, input logic a, input logic b);
 	assume property (@(posedge clk) (##[0:$] a) #-# b);
@@ -342,7 +342,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
 read_slang <<EOF
 module followed_two_ends(input logic clk, input logic a, input logic c);
 	assert property (@(posedge clk) a |-> ((1'b1 ##[0:1] 1'b1) #-# always c));
@@ -352,7 +352,7 @@ EOF
 design -reset
 
 # The empty match starts the right operand on the first tick, `b` on the next one
-test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
 read_slang <<EOF
 module followed_empty_two_ends(input logic clk, input logic b, input logic c);
 	assert property (@(posedge clk) b[*0:1] #=# s_eventually c);
@@ -361,9 +361,29 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
 read_slang <<EOF
 module followed_temporal_and(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) (##[0:1] a) #-# (b and s_eventually b));
+endmodule
+EOF
+
+design -reset
+
+# Where `x` is low the attempt succeeds with no check started
+test_slangdiag -expect "cover of a property `if`, `case` or `implies`, or of an implication with an unbounded antecedent or with `if`, `case`, `implies`, `iff` or an abort in its consequent, is unsupported, as no check would see its vacuous successes"
+read_slang <<EOF
+module unsupported_consequent_cover(input logic clk, input logic x, input logic a,
+									input logic b);
+	cover property (@(posedge clk) x |-> if (a) b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "followed-by with an unbounded left operand, or with a right operand that is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it, is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_two_ends_condition(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (1'b1 ##[0:1] 1'b1) #-# (if (a) b));
 endmodule
 EOF

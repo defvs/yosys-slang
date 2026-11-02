@@ -1400,6 +1400,12 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				return compress_paths(results);
 			}
 		case slang::ast::AssertionExprKind::StrongWeak:
+			{
+				// The sequence used as a property. A bounded one has settled every match
+				// it has once its longest path is over, where weak and strong agree.
+				const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
+				return property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, strong_weak.expr), expr_loc(expr));
+			}
 		case slang::ast::AssertionExprKind::Abort:
 		case slang::ast::AssertionExprKind::Conditional:
 		case slang::ast::AssertionExprKind::Case:
@@ -2425,6 +2431,70 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 									 ir::Net trigger, bool attempt_tick,
 									 const PropertyAborts& aborts);
 
+// Can synthesize_assertion_expr() lower all of `expr` by its paths, with nothing in it that
+// only lower_property() takes apart? Such a property gets lowered by eval_assertion(), which
+// keeps to Annex F for a disable and queues attempts as of the procedural condition around
+// the assertion. Those it can't lower either raise their errors on either route.
+static bool lowered_by_paths(const ast::AssertionExpr& expr) {
+	if (assertion_has_unbounded_sequence(expr))
+		return false;
+
+	switch (expr.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+				return true;
+			const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+			return instance.isRecursiveProperty || lowered_by_paths(instance.body);
+		}
+	case ast::AssertionExprKind::SequenceConcat:
+		for (const auto& element : expr.as<ast::SequenceConcatExpr>().elements)
+			if (!lowered_by_paths(*element.sequence))
+				return false;
+		return true;
+	case ast::AssertionExprKind::SequenceWithMatch:
+		return lowered_by_paths(expr.as<ast::SequenceWithMatchExpr>().expr);
+	case ast::AssertionExprKind::FirstMatch:
+		return lowered_by_paths(expr.as<ast::FirstMatchAssertionExpr>().seq);
+	case ast::AssertionExprKind::Unary:
+		{
+			const auto& unary = expr.as<ast::UnaryAssertionExpr>();
+			return unary.op != ast::UnaryAssertionOperator::Always &&
+				   unary.op != ast::UnaryAssertionOperator::SAlways &&
+				   lowered_by_paths(unary.expr);
+		}
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = expr.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::Implies:
+			case ast::BinaryAssertionOperator::Iff:
+			case ast::BinaryAssertionOperator::Until:
+			case ast::BinaryAssertionOperator::SUntil:
+			case ast::BinaryAssertionOperator::UntilWith:
+			case ast::BinaryAssertionOperator::SUntilWith:
+				return false;
+			default:
+				return lowered_by_paths(binary.left) && lowered_by_paths(binary.right);
+			}
+		}
+	case ast::AssertionExprKind::Clocking:
+		return lowered_by_paths(expr.as<ast::ClockingAssertionExpr>().expr);
+	case ast::AssertionExprKind::DisableIff:
+		return lowered_by_paths(expr.as<ast::DisableIffAssertionExpr>().expr);
+	case ast::AssertionExprKind::StrongWeak:
+		return lowered_by_paths(expr.as<ast::StrongWeakAssertionExpr>().expr);
+	case ast::AssertionExprKind::Abort:
+	case ast::AssertionExprKind::Conditional:
+	case ast::AssertionExprKind::Case:
+		return false;
+	case ast::AssertionExprKind::Invalid:
+		return true;
+	}
+	assert_invariant(false && "unreachable");
+}
+
 // The paths of `expr` get the letters of the aborts the way eval_assertion() does, as of
 // the trigger tick, so a failure settled ahead of a disable stands. `admits_empty` tells
 // if a sequence has an empty match, which meets no property.
@@ -3197,11 +3267,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		case ast::BinaryAssertionOperator::OverlappedImplication:
 		case ast::BinaryAssertionOperator::NonOverlappedImplication:
 			{
-				bool temporal_consequent =
-					property_requires_temporal_obligations(binary.right) ||
-					assertion_has_unbounded_sequence(binary.right);
-				if (!temporal_consequent &&
-					!assertion_has_unbounded_sequence(binary.left))
+				if (lowered_by_paths(binary))
 					break;
 				bool nonoverlapped =
 					binary.op == ast::BinaryAssertionOperator::NonOverlappedImplication;
@@ -3213,10 +3279,6 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				// A match on the trigger tick starts the consequent on the first tick
 				bool consequent_attempt_tick =
 					attempt_tick && !nonoverlapped && is_boolean_sequence(binary.left);
-				if (!temporal_consequent)
-					return lower_finite_property_from_trigger(
-						eval, binary.right, consequent_trigger, consequent_attempt_tick,
-						aborts);
 				return lower_property(eval, binary.right, consequent_trigger,
 									  consequent_attempt_tick, aborts);
 			}
@@ -3224,10 +3286,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		case ast::BinaryAssertionOperator::OverlappedFollowedBy:
 		case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
 			{
-				bool temporal =
-					property_requires_temporal_obligations(binary.right) ||
-					assertion_has_unbounded_sequence(binary.left);
-				if (!temporal)
+				if (lowered_by_paths(binary))
 					break;
 				bool nonoverlapped =
 					binary.op ==
@@ -3277,10 +3336,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 		case ast::BinaryAssertionOperator::And:
 			{
-				if (!property_requires_temporal_obligations(binary.left) &&
-					!property_requires_temporal_obligations(binary.right) &&
-					!assertion_has_unbounded_sequence(binary.left) &&
-					!assertion_has_unbounded_sequence(binary.right))
+				if (lowered_by_paths(binary))
 					break;
 				PropertyResult left =
 					lower_property(eval, binary.left, trigger, attempt_tick, aborts);
@@ -3325,11 +3381,15 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		eval, expr, trigger, attempt_tick, aborts);
 }
 
-// Does the one check lower_property() makes for a cover of the property see each of its
+// Do the checks lower_property() makes for a cover of the property see each of its
 // successes? A branch that starts nothing, as an implication with no antecedent match
 // does, leaves an attempt that succeeded with nothing to report it by. The monitor of an
 // unbounded antecedent can't tell a later match of the attempt, which may still fail it.
+// Paths keep the vacuous successes.
 static bool cover_sees_every_success(const ast::AssertionExpr& expr) {
+	if (lowered_by_paths(expr))
+		return true;
+
 	const ast::AssertionExpr& top = unwrap_property_instances(expr);
 	switch (top.kind) {
 	case ast::AssertionExprKind::Abort:
@@ -3344,90 +3404,15 @@ static bool cover_sees_every_success(const ast::AssertionExpr& expr) {
 			const auto& binary = top.as<ast::BinaryAssertionExpr>();
 			switch (binary.op) {
 			case ast::BinaryAssertionOperator::Implies:
-				return false;
 			case ast::BinaryAssertionOperator::OverlappedImplication:
 			case ast::BinaryAssertionOperator::NonOverlappedImplication:
-				return !assertion_has_unbounded_sequence(binary.left);
-			default:
-				return true;
-			}
-		}
-
-	default:
-		return true;
-	}
-}
-
-// Does lower_property() take nothing of `expr` apart, but lower all of it by its paths?
-// Such a property gets lowered by eval_assertion(), which keeps to Annex F for a disable
-// and queues attempts as of the procedural condition around the assertion.
-static bool lowered_by_paths(const ast::AssertionExpr& expr) {
-	const ast::AssertionExpr& top = unwrap_property_instances(expr);
-	switch (top.kind) {
-	case ast::AssertionExprKind::DisableIff:
-		return lowered_by_paths(top.as<ast::DisableIffAssertionExpr>().expr);
-
-	case ast::AssertionExprKind::Unary:
-		{
-			const auto& unary = top.as<ast::UnaryAssertionExpr>();
-			switch (unary.op) {
-			case ast::UnaryAssertionOperator::Eventually:
-			case ast::UnaryAssertionOperator::SEventually:
-				return unary.range.has_value() && unary.range->max.has_value();
-			case ast::UnaryAssertionOperator::Always:
-			case ast::UnaryAssertionOperator::SAlways:
 				return false;
-			case ast::UnaryAssertionOperator::Not:
-				{
-					const auto *nested = unary.expr.as_if<ast::UnaryAssertionExpr>();
-					if (!nested)
-						return true;
-					if (nested->op == ast::UnaryAssertionOperator::Always ||
-						nested->op == ast::UnaryAssertionOperator::SAlways)
-						return false;
-					return !((nested->op == ast::UnaryAssertionOperator::Eventually ||
-							  nested->op == ast::UnaryAssertionOperator::SEventually) &&
-							 (!nested->range.has_value() || !nested->range->max.has_value()));
-				}
-			default:
-				return true;
-			}
-		}
-
-	case ast::AssertionExprKind::StrongWeak:
-	case ast::AssertionExprKind::Abort:
-	case ast::AssertionExprKind::Conditional:
-	case ast::AssertionExprKind::Case:
-		return false;
-
-	case ast::AssertionExprKind::Binary:
-		{
-			const auto& binary = top.as<ast::BinaryAssertionExpr>();
-			switch (binary.op) {
-			case ast::BinaryAssertionOperator::Implies:
-			case ast::BinaryAssertionOperator::Iff:
-			case ast::BinaryAssertionOperator::Until:
-			case ast::BinaryAssertionOperator::SUntil:
-			case ast::BinaryAssertionOperator::UntilWith:
-			case ast::BinaryAssertionOperator::SUntilWith:
-				return false;
-			case ast::BinaryAssertionOperator::OverlappedImplication:
-			case ast::BinaryAssertionOperator::NonOverlappedImplication:
-				return !property_requires_temporal_obligations(binary.right) &&
-					   !assertion_has_unbounded_sequence(binary.right) &&
-					   !assertion_has_unbounded_sequence(binary.left);
 			case ast::BinaryAssertionOperator::OverlappedFollowedBy:
 			case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
-				return !property_requires_temporal_obligations(binary.right) &&
-					   !assertion_has_unbounded_sequence(binary.left);
+				return cover_sees_every_success(binary.right);
 			case ast::BinaryAssertionOperator::And:
-				return !property_requires_temporal_obligations(binary.left) &&
-					   !property_requires_temporal_obligations(binary.right) &&
-					   !assertion_has_unbounded_sequence(binary.left) &&
-					   !assertion_has_unbounded_sequence(binary.right);
-			case ast::BinaryAssertionOperator::Or:
-				return !property_requires_temporal_obligations(binary.left) &&
-					   !property_requires_temporal_obligations(binary.right);
+				return cover_sees_every_success(binary.left) &&
+					   cover_sees_every_success(binary.right);
 			default:
 				return true;
 			}
