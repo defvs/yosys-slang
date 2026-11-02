@@ -2108,6 +2108,8 @@ public:
 
 	void handle(const ast::ProceduralBlockSymbol &symbol)
 	{
+		netlist.process_scope = symbol.getParentScope();
+
 		if (symbol.isFromAssertion &&
 				symbol.procedureKind == ast::ProceduralBlockKind::Always) {
 			const ast::StatementBlockSymbol *block_symbol = nullptr;
@@ -2123,7 +2125,7 @@ public:
 				if (ast::ConcurrentAssertionStatement::isKind(body->kind)) {
 #ifndef SLANG_NO_YOSYS
 					process_freestanding_sva_property(netlist, body->as<ast::ConcurrentAssertionStatement>(),
-													  block_symbol, symbol.getParentScope());
+													  block_symbol);
 #else
 					netlist.add_diag(diag::AssertionUnsupported, body->sourceRange);
 #endif

@@ -672,6 +672,10 @@ struct NetlistContext : GraphBuilder, public DiagnosticIssuer {
 	// other specialized contexts.
 	EvalContext eval;
 
+	// Parent scope of the procedure in processing; default SVA clocking and
+	// `disable iff` declarations are looked up from here
+	const ast::Scope *process_scope = nullptr;
+
 	// Returns an ID string to use in the netlist to represent the given symbol.
 	std::string id(const ast::Symbol &sym);
 	std::string id(const ast::ValueSymbol &sym);
@@ -940,8 +944,7 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 						  ProceduralContext &procedural, const ast::AssertionExpr &expr);
 void process_freestanding_sva_property(NetlistContext &netlist,
 									   const ast::ConcurrentAssertionStatement &statement,
-						  			   const ast::StatementBlockSymbol *block,
-									   const ast::Scope *scope);
+						  			   const ast::StatementBlockSymbol *block);
 
 // slang_frontend.cc
 struct HierarchyQueue {

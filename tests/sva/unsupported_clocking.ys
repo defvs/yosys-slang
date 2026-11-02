@@ -6,3 +6,27 @@ endmodule
 EOF
 
 select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module multibit_clocking(input logic [1:0] clk, input logic a);
+	multibit_test: assert property (@(posedge clk) a);
+endmodule
+EOF
+
+select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module explicit_clock_in_guarded_process(input logic clk, input logic en, input logic a, input logic b);
+	always_ff @(posedge clk iff en) begin
+		guarded_test: assert property (@(posedge clk) a |=> b);
+	end
+endmodule
+EOF
+
+select -assert-none t:$check

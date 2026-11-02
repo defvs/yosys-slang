@@ -8,17 +8,17 @@ module repetition_edges(input clk_i, input logic x, input logic y, input logic z
 	reg z_d1;
 
 	always @(posedge clk_i) begin
-		repeat0_ref: assert(!gate || y);
-		repeat01_ref: assert(!gate || y);
+		repeat0_ref: assert(y);
+		repeat01_ref: assert(!gate || y_d1 || (x_d1 && y));
 		repeat11_ref: assert(!gate || (x_d1 && y));
 		right_empty1_ref: assert(x);
 		right_empty2_ref: assert(!gate || x_d1);
 		empty_delay0_antecedent_ref: assert(1);
-		empty_empty_ref: assert(!gate2 || z);
+		empty_empty_ref: assert(!gate || z);
 		leading_delayed_empty_ref: assert(!gate2 || z);
 		optional_delay2_ref: assert(!gate2 || (y_d1 || (x_d2 && y)));
 		leading_range_empty_ref: assert(!gate2 || (z_d1 || z));
-		empty_empty_range_ref: assert(!gate2 || (z_d1 || z));
+		empty_empty_range_ref: assert(!gate || (z_d1 || z));
 		right_empty_range_ref: assert(!gate2 || (x_d2 && (z_d1 || z)));
 		leading_delayed_empty_range_ref: assert(!gate3 || (z_d1 || z));
 
