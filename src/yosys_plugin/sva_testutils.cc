@@ -1,5 +1,5 @@
 //
-// Yosys slang frontend
+// sv-elab
 //
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
@@ -13,12 +13,12 @@ USING_YOSYS_NAMESPACE
 struct TestSlangsvaPass : Pass
 {
 	TestSlangsvaPass()
-		: Pass("test_slangsva", "helper pass used by yosys-slang SVA support testing")
+		: Pass("test_slangsva", "helper pass used by sv-elab SVA support testing")
 	{}
 
 	void help() override
 	{
-		log("Perform manipulations in support of yosys-slang SVA support testing.\n");
+		log("Perform manipulations in support of sv-elab SVA support testing.\n");
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *d) override
@@ -74,33 +74,32 @@ struct TestSlangsvaPass : Pass
 							log_id(ref));
 				}
 
+				// A cover acts on `A` being high, asserts and assumes on it being low
+				auto flavor = ref->getParam(ID::FLAVOR).decode_string();
+				bool is_cover = flavor == "cover";
+				auto acts = [&](RTLIL::Cell *cell) {
+					RTLIL::SigSpec a = cell->getPort(ID::A);
+					return m->And(NEW_ID, cell->getPort(ID::EN), is_cover ? a : m->Not(NEW_ID, a));
+				};
+
 				RTLIL::Cell *compare = m->addCell(
 						ref->name.substr(0, ref->name.size() - 4) + "_compare", ID($check));
 
+				// What we prove is the match, whichever flavor the pair is of
 				compare->parameters = ref->parameters;
-				// The comparison itself is always a cycle-by-cycle safety
-				// assertion, even when the paired cells are live/fair.
-				// Comparing only EN & !A is sufficient for safety failures,
-				// but is not sufficient for justice.  For live/fair cells,
-				// compare the goal and enable waveforms independently.
-				auto flavor = ref->getParam(ID::FLAVOR).decode_string();
 				compare->setParam(ID::FLAVOR, std::string("assert"));
 				compare->setParam(ID::PRIORITY, 0);
 				compare->setPort(ID::TRG, ref->getPort(ID::TRG));
 				compare->setPort(ID::EN, RTLIL::S1);
 				compare->setPort(ID::ARGS, {});
 				if (flavor == "live" || flavor == "fair") {
+					// Justice goes by the goal and the enable over the whole trace, rather
+					// than by the ticks the check acts on, so both have to match
 					compare->setPort(ID::A, m->And(NEW_ID,
-						m->Eqx(NEW_ID, test->getPort(ID::A),
-							   ref->getPort(ID::A)),
-						m->Eqx(NEW_ID, test->getPort(ID::EN),
-							   ref->getPort(ID::EN))));
+						m->Eqx(NEW_ID, test->getPort(ID::A), ref->getPort(ID::A)),
+						m->Eqx(NEW_ID, test->getPort(ID::EN), ref->getPort(ID::EN))));
 				} else {
-					compare->setPort(ID::A, m->Eqx(NEW_ID,
-						m->And(NEW_ID, test->getPort(ID::EN),
-							   m->Not(NEW_ID, test->getPort(ID::A))),
-						m->And(NEW_ID, ref->getPort(ID::EN),
-							   m->Not(NEW_ID, ref->getPort(ID::A)))));
+					compare->setPort(ID::A, m->Eqx(NEW_ID, acts(test), acts(ref)));
 				}
 
 				m->remove(ref);

@@ -10,30 +10,42 @@ proc module_list {} {
 	return [dict keys [dict get $stat modules]]
 }
 
-foreach fn [glob *.sv] {
-	log -header "Testset $fn"
-	log -push
-	design -reset
+# ABC leaves a history file in its working directory, so we keep it and the AIGs
+# out of the source tree
+set srcdir [pwd]
+set workdir [exec mktemp -d]
+cd $workdir
 
-	read_slang --dump-ast $fn
-	check -assert
-
-	foreach m [module_list] {
-		log -header "Testcase $m"
+try {
+	foreach path [glob -directory $srcdir *.sv] {
+		set fn [file tail $path]
+		log -header "Testset $fn"
 		log -push
-		test_slangsva
-		async2sync
-		formalff -clk2ff
-		techmap
-		aigmap
-		opt_clean
-		# Strip backslash from the start of $m
-		set m [string range $m 1 end]
-		write_aiger -zinit "$fn-$m.aig"
-		# Insist on a positive verdict so a missing solver can't pass for a proof
-		yosys exec -expect-return 0 -expect-stdout "Property proved" -- $abc_exec -c "\"read $fn-$m.aig; pdr -v\""
+		design -reset
 
+		read_slang $path
+		check -assert
+
+		foreach m [module_list] {
+			log -header "Testcase $m"
+			log -push
+			test_slangsva
+			async2sync
+			formalff -clk2ff
+			techmap
+			aigmap
+			opt_clean
+			# Strip backslash from the start of $m
+			set m [string range $m 1 end]
+			write_aiger -zinit "$fn-$m.aig"
+			# Insist on a positive verdict so a missing solver can't pass for a proof
+			yosys exec -expect-return 0 -expect-stdout "Property proved" -- $abc_exec -c "\"read $fn-$m.aig; pdr -v\""
+
+			log -pop
+		}
 		log -pop
 	}
-	log -pop
+} finally {
+	cd $srcdir
+	file delete -force $workdir
 }

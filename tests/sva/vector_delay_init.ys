@@ -5,5 +5,6 @@ endmodule
 EOF
 
 # Sampled data stays uninitialized, only the 1-bit enable is given a value
-select -assert-none a:init x:8 %i
+select -assert-none a:init s:8 %i
+select -assert-count 1 a:init s:1 %i
 check -assert

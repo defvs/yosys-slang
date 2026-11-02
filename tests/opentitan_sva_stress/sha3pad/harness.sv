@@ -1,4 +1,4 @@
-// Copyright (c) 2026 The yosys-slang contributors
+// Copyright (c) 2026 The sv-elab contributors
 // SPDX-License-Identifier: ISC
 
 module sha3pad_sva_harness

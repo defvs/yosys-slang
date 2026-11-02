@@ -1,0 +1,61 @@
+# There's no limit on the size of a range, ranges past 1024 lower like any other.
+# Each of these takes a few registers per tick of its range.
+read_slang <<EOF
+module late_response(input logic clk, input logic rst, input logic a, input logic b);
+	late_response_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> s_eventually [2000:$] b);
+endmodule
+
+module long_suffix(input logic clk, input logic rst, input logic a, input logic b, input logic c);
+	long_suffix_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> strong(##[1:$] b ##2000 c));
+endmodule
+
+module ranged_always(input logic clk, input logic a, input logic b);
+	ranged_always_test: assert property (@(posedge clk) a |-> always [0:1500] b);
+endmodule
+
+module not_always(input logic clk, input logic a);
+	not_always_test: assert property (@(posedge clk) not (always [0:1500] a));
+endmodule
+
+module unbounded_antecedent(input logic clk, input logic a, input logic b, input logic c);
+	unbounded_antecedent_test: assert property (@(posedge clk) a[*1:$] ##2000 b |-> c);
+endmodule
+
+module goto_delay(input logic clk, input logic a, input logic b);
+	goto_delay_test: assert property (@(posedge clk) a |-> strong(b[->1500]));
+endmodule
+EOF
+
+select -assert-count 1 late_response/t:$check r:FLAVOR=live %i
+select -assert-count 1 late_response/t:$check
+select -assert-max 8000 late_response/t:$dff
+
+select -assert-count 1 long_suffix/t:$check r:FLAVOR=live %i
+select -assert-count 1 long_suffix/t:$check
+select -assert-max 24000 long_suffix/t:$dff
+
+select -assert-min 1 ranged_always/t:$check r:FLAVOR=assert %i
+select -assert-none ranged_always/t:$check r:FLAVOR=live %i
+select -assert-none ranged_always/t:$check r:FLAVOR=fair %i
+select -assert-max 6000 ranged_always/t:$dff
+
+select -assert-min 1 not_always/t:$check r:FLAVOR=assert %i
+select -assert-none not_always/t:$check r:FLAVOR=live %i
+select -assert-none not_always/t:$check r:FLAVOR=fair %i
+select -assert-max 6000 not_always/t:$dff
+
+select -assert-count 1 unbounded_antecedent/t:$check r:FLAVOR=assert %i
+select -assert-count 1 unbounded_antecedent/t:$check
+select -assert-max 8000 unbounded_antecedent/t:$dff
+
+select -assert-count 1 goto_delay/t:$check r:FLAVOR=live %i
+select -assert-count 1 goto_delay/t:$check r:FLAVOR=fair %i
+select -assert-count 2 goto_delay/t:$check
+select -assert-max 6000 goto_delay/t:$dff
+
+async2sync
+formalff -clk2ff
+chformal -lower
+check -assert

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -36,19 +36,20 @@ done
   echo
   echo "This run checks:"
   echo
-  echo "- synthesis through yosys-slang and Yosys;"
+  echo "- synthesis through sv-elab and Yosys;"
+  echo "- the number of checks synthesized for each target, and of \$live and \$fair cells;"
   echo "- bounded model checking through yosys-smtbmc;"
   echo "- filtered OpenTitan SVA properties, not OpenTitan \`YOSYS\` macro mode."
   echo
-  echo "| Target | Synthesis | BMC | Log |"
-  echo "| --- | --- | --- | --- |"
+  echo "| Target | Synthesis | Checks | BMC | Log |"
+  echo "| --- | --- | --- | --- | --- |"
   for case in "${CASES[@]}"; do
     result="$BUILD_ROOT/$case/result.txt"
     if [ -f "$result" ]; then
-      IFS='|' read -r name synth bmc dir < "$result"
-      echo "| $name | $synth | $bmc | \`$dir\` |"
+      IFS='|' read -r name synth checks bmc dir < "$result"
+      echo "| $name | $synth | $checks | $bmc | \`$dir\` |"
     else
-      echo "| $case | FAIL | SKIP | missing result |"
+      echo "| $case | FAIL | SKIP | SKIP | missing result |"
     fi
   done
   echo
@@ -57,8 +58,9 @@ done
   echo "| Source | Item | Reason |"
   echo "| --- | --- | --- |"
   echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | throughout and goto repetition |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A / AlertCheck0_A | throughout/goto or consecutive repetition |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A | throughout and goto repetition |"
   echo "| prim_alert_rxtx_assert_fpv.sv | init_pending receiver-state helper | hierarchical enum literals triggered missing-wire frontend error; rewritten to their numeric encoding |"
+  echo "| prim_esc_rxtx_assert_fpv.sv | FSM Idle state references | hierarchical enum literals rewritten to their numeric encoding |"
   echo "| clkmgr_cg_en_sva_if.sv | scanmode enum literal | hierarchical package enum literal rewritten to numeric MuBi4True encoding |"
   echo "| tlul_assert.sv | knownness assertions | \$isunknown is not synthesized |"
   echo "| tlul_assert.sv | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |"

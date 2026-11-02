@@ -1,0 +1,35 @@
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_local(input logic clk, input logic a, input logic b, input logic c);
+	property p;
+		logic t;
+		@(posedge clk) (a, t = b) |=> c == t;
+	endproperty
+	local_test: assert property (p);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module sequence_local(input logic clk, input logic a, input logic b, input logic c);
+	sequence s;
+		logic t;
+		(a, t = b) ##1 c == t;
+	endsequence
+	local_test: assert property (@(posedge clk) s);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module local_argument(input logic clk, input logic a, input logic b, input logic c);
+	sequence s(local input logic x);
+		a ##1 b == x;
+	endsequence
+	local_test: assert property (@(posedge clk) s(c));
+endmodule
+EOF

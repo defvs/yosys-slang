@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 STRESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,11 +20,27 @@ prepare_source() {
   python3 "$STRESS_DIR/common/prepare_sources.py" --src "$src" --dst "$dst"
 }
 
+# Count the checks in a model written by write_smt2
+count_checks() {
+  grep -c -E '^; yosys-smt2-(assert|assume|cover) ' "$1" || true
+}
+
+# Count the $live and $fair cells, which write_smt2 leaves out
+count_liveness() {
+  grep -c -E '^ *cell \$(live|fair) ' "$1" || true
+}
+
+# Synthesize a harness and run BMC on it. A property dropped in lowering would
+# pass BMC unnoticed, so the case also fails unless the model has the expected
+# number of checks, and the netlist the number of $live and $fair cells given
+# by EXPECT_LIVENESS (none by default). BMC sees the safety checks only.
 run_case() {
   local name="$1"
   local top="$2"
   local depth="$3"
-  shift 3
+  local expected_checks="$4"
+  local expected_liveness="${EXPECT_LIVENESS:-0}"
+  shift 4
 
   local case_dir="$BUILD_ROOT/$name"
   local ys="$case_dir/$name.ys"
@@ -67,10 +83,17 @@ EOF
   if ! "$YOSYS" -m "$PLUGIN" "$ys" >"$synth_log" 2>&1; then
     synth_status=FAIL
   fi
-  if [ "$synth_status" = PASS ] && [ "${EXPECT_LIVENESS:-0}" = 1 ]; then
-    if ! grep -Eq 'cell \$(live|fair) ' "$full_il"; then
-      echo "Expected liveness/fairness cells were not generated" >>"$synth_log"
-      synth_status=FAIL
+
+  local checks_status=SKIP
+  local checks=
+  local liveness=
+  if [ "$synth_status" = PASS ]; then
+    checks=$(count_checks "$smt")
+    liveness=$(count_liveness "$full_il")
+    if [ "$checks" = "$expected_checks" ] && [ "$liveness" = "$expected_liveness" ]; then
+      checks_status=PASS
+    else
+      checks_status=FAIL
     fi
   fi
 
@@ -84,15 +107,19 @@ EOF
   fi
 
   {
-    echo "$name|$synth_status|$bmc_status|$case_dir"
+    echo "$name|$synth_status|$checks_status|$bmc_status|$case_dir"
     if [ "$synth_status" = FAIL ]; then
       grep -E 'ERROR:|Assert failed|Unsupported|internal error|Exception' "$synth_log" | head -20 || true
-    elif [ "$bmc_status" = FAIL ]; then
+    fi
+    if [ "$checks_status" = FAIL ]; then
+      echo "Expected $expected_checks checks and $expected_liveness live/fair cells, found $checks and $liveness."
+    fi
+    if [ "$bmc_status" = FAIL ]; then
       grep -E 'Assert failed|Status:|BMC failed|FAILED' "$bmc_log" || true
-    else
+    elif [ "$bmc_status" = PASS ]; then
       grep -E 'Status:|PASSED' "$bmc_log" || true
     fi
   } > "$case_dir/result.txt"
 
-  [ "$synth_status" = PASS ] && [ "$bmc_status" = PASS ]
+  [ "$synth_status" = PASS ] && [ "$checks_status" = PASS ] && [ "$bmc_status" = PASS ]
 }

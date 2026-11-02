@@ -1,0 +1,13 @@
+read_slang <<EOF
+module comb_default_clocking(input logic clk, input logic c, input logic a);
+	default clocking @(negedge clk); endclocking
+
+	always_comb
+		if (c)
+			boolean_test: assert property (a);
+endmodule
+EOF
+
+# No clock gets inferred from always_comb, so the default clocking applies
+select -assert-count 1 t:$check r:TRG_ENABLE=1 %i r:TRG_POLARITY=1'0 %i
+select -assert-count 1 w:clk %co:+[TRG] t:$check %i

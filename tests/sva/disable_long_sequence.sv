@@ -7,8 +7,10 @@ module disable_long_sequence(input clk_i, input logic rst, input logic a, input 
 	reg a_d2;
 
 	always @(posedge clk_i) begin
-		if (gate2 && !rst_d2 && !rst_d1 && !rst)
-			long_ref: assert(a_d2 && b);
+		// The ticks before the first one with `rst` are extended by letters which
+		// satisfy any boolean, so `a` low stays a failure if `rst` comes later
+		if (gate2)
+			long_ref: assert(rst_d2 || (a_d2 && (rst_d1 || rst || b)));
 
 		gate1 <= 1;
 		gate2 <= gate1;

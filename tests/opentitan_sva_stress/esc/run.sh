@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -15,7 +15,7 @@ prepare_source "$OT/hw/ip/prim/rtl/prim_esc_receiver.sv" "$FILTERED/prim_esc_rec
 prepare_source "$OT/hw/ip/prim/rtl/prim_count.sv" "$FILTERED/prim_count.sv"
 prepare_source "$OT/hw/ip/prim/rtl/prim_diff_decode.sv" "$FILTERED/prim_diff_decode.sv"
 
-EXPECT_LIVENESS=1 run_case esc prim_esc_rxtx_sva_harness "$DEPTH" \
+EXPECT_LIVENESS=3 run_case esc prim_esc_rxtx_sva_harness "$DEPTH" 13 \
   "$OT/hw/ip/prim/rtl/prim_util_pkg.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop_en.sv" \

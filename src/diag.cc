@@ -127,9 +127,7 @@ DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
 DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1090);
-DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1091);
-DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1092);
-DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1093);
+DiagCode SVAFrozenValueAfterFirstTick(DiagSubsystem::Netlist, 1091);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
@@ -142,6 +140,12 @@ DiagCode HighImpedanceUnsupported(DiagSubsystem::Netlist, 1086);
 DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
 DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
+DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
+DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
+DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
+DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1095);
+DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1096);
+DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1097);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -359,6 +363,9 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVATemporalDelayRequiresClock, "SVA temporal delay requires exactly one clock edge");
 	engine.setSeverity(SVATemporalDelayRequiresClock, DiagnosticSeverity::Error);
 
+	engine.setMessage(SVAFrozenValueAfterFirstTick, "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt");
+	engine.setSeverity(SVAFrozenValueAfterFirstTick, DiagnosticSeverity::Error);
+
 	engine.setMessage(ErrorNonconstantArgument, "failed to evaluate system function with non-constant argument");
 	engine.setSeverity(ErrorNonconstantArgument, DiagnosticSeverity::Error);
 
@@ -388,6 +395,15 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(OptionRequiresStandaloneSlang, "option '{}' unsupported; please use standalone slang instead");
 	engine.setSeverity(OptionRequiresStandaloneSlang, DiagnosticSeverity::Error);
+
+	engine.setMessage(ClockVarUnsupported, "clocking block signals unsupported");
+	engine.setSeverity(ClockVarUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(ActionBlockUnsupported, "unsupported statement in assertion action block");
+	engine.setSeverity(ActionBlockUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(FinalAssertionUnsupported, "assertion in final procedure will not be synthesized");
+	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Warning);
 	// clang-format on
 }
 }; // namespace diag

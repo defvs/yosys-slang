@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 #include <optional>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include "ir.h"
@@ -241,6 +242,15 @@ struct EvalContext {
 	// Variable reading within SVA is special depending on whether the variable
 	// is static, automatic, or is part of an expression casted to `const`
 	bool in_sva_expression = false;
+
+	// Tells if the expression last evaluated by `sva()` read an automatic variable
+	// or const cast of non-constant value, as those are frozen with the attempt
+	bool sva_read_frozen = false;
+
+	// Registers delaying a signal for SVA, by the signal, the initial value, and the
+	// clock, edge and enable of the registers
+	std::map<std::tuple<RTLIL::SigSpec, RTLIL::State, RTLIL::SigBit, bool, RTLIL::SigBit>,
+			 std::vector<ir::Value>> sva_delay_lines;
 
 	friend class EnterAutomaticScopeGuard;
 };
@@ -736,7 +746,7 @@ struct NetlistContext : GraphBuilder, public DiagnosticIssuer {
 	// this will be the top module.
 	const ast::InstanceBodySymbol *find_symbol_realm(const ast::Symbol &symbol);
 	const ast::InstanceBodySymbol &find_common_ancestor(const ast::InstanceBodySymbol &a, const ast::InstanceBodySymbol &b);
-	bool check_hier_ref(const ast::ValueSymbol &symbol, slang::SourceRange range, bool silent=false);
+	bool check_hier_ref(const ast::Symbol &symbol, slang::SourceRange range, bool silent=false);
 
 	void register_driven(const VariableBits &vbits);
 	void register_driven(const ast::Symbol &symbol);
@@ -799,6 +809,7 @@ ir::Net matches_pattern(NetlistContext &builder, const ValuePattern &pattern, ir
 ir::Value inside_comparison(EvalContext &eval, ir::Value left, const ast::Expression &expr);
 extern std::string hierpath_relative_to(const ast::Scope *relative_to, const ast::Scope *scope);
 std::string format_src(const slang::SourceManager *sm, slang::SourceRange source_range);
+void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail);
 #ifndef SLANG_NO_YOSYS
 void transfer_attrs(NetlistContext &netlist, const ast::Symbol &from, RTLIL::AttrObject *to);
 void transfer_attrs(NetlistContext &netlist, const ast::Statement &from, RTLIL::AttrObject *to);

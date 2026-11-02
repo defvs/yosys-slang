@@ -29,6 +29,9 @@ template <typename Func> void visit_netlist_variables(NetlistContext &netlist, F
 					visit_fn(symbol);
 				}
 			},
+			[&](auto &, const ast::ClockVarSymbol &) {
+				/* clocking block signals stand for the signals they sample or drive */
+			},
 			[&](auto &visitor, const ast::InstanceSymbol &symbol) {
 				if (netlist.should_dissolve(symbol))
 					visitor.visitDefault(symbol);

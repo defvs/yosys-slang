@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -8,7 +8,7 @@ CASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPTH="${DEPTH:-10}"
 source "$CASE_DIR/../common/common.sh"
 
-run_case fifo prim_fifo_sync_sva_harness "$DEPTH" \
+run_case fifo prim_fifo_sync_sva_harness "$DEPTH" 21 \
   "$OT/hw/ip/prim/rtl/prim_util_pkg.sv" \
   "$OT/hw/ip/prim_generic/rtl/prim_flop.sv" \
   "$OT/hw/ip/prim/rtl/prim_count_pkg.sv" \

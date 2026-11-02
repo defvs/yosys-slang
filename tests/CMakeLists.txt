@@ -30,8 +30,17 @@ set(ALL_TESTS
     liveness/unsupported.ys
     liveness/unbounded_sequences.ys
     liveness/regular_sequences.ys
+    liveness/large_ranges.ys
     sva/seqequiv.tcl
-    sva/range_guard.ys
+    sva/action_blocks.ys
+    sva/comb_default_clocking.ys
+    sva/final_assertions.ys
+    sva/frozen_past_first_tick.ys
+    sva/kept_hierarchy.ys
+    sva/large_ranges.ys
+    sva/local_variables.ys
+    sva/nested_disable.ys
+    sva/repeated_labels.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
     sva/vector_delay_init.ys
@@ -103,9 +112,7 @@ foreach(test_script ${ALL_TESTS})
     )
 endforeach()
 
-# Distribution packages do not consistently name the standalone ABC binary.
-# Keep the test local to the discovered executable instead of installing a
-# global yosys-abc compatibility symlink.
+# Distribution packages do not consistently name the standalone ABC binary
 find_program(YOSYS_ABC_EXECUTABLE
     NAMES yosys-abc abc
     HINTS ${YOSYS_BINDIR}

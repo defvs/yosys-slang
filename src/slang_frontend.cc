@@ -1268,15 +1268,73 @@ void handle_display([[maybe_unused]] ProceduralContext &context, [[maybe_unused]
 #endif
 }
 
+// Find a statement in an assertion action block that does more than report
+static const ast::Statement *find_nonreporting_action(const ast::Statement *stmt)
+{
+	if (!stmt)
+		return nullptr;
+
+	switch (stmt->kind) {
+	case ast::StatementKind::Empty:
+		return nullptr;
+	case ast::StatementKind::List:
+		for (auto item : stmt->as<ast::StatementList>().list) {
+			if (auto found = find_nonreporting_action(item))
+				return found;
+		}
+		return nullptr;
+	case ast::StatementKind::Block:
+		return find_nonreporting_action(&stmt->as<ast::BlockStatement>().body);
+	case ast::StatementKind::Conditional: {
+		const auto &cond = stmt->as<ast::ConditionalStatement>();
+		if (auto found = find_nonreporting_action(&cond.ifTrue))
+			return found;
+		return find_nonreporting_action(cond.ifFalse);
+	}
+	case ast::StatementKind::ExpressionStatement: {
+		const auto &expr = stmt->as<ast::ExpressionStatement>().expr;
+		if (!ast::CallExpression::isKind(expr.kind))
+			return stmt;
+		const auto &call = expr.as<ast::CallExpression>();
+		for (std::string_view task : {"$fatal", "$error", "$warning", "$info", "$display",
+				"$displayb", "$displayh", "$displayo", "$write", "$writeb", "$writeh", "$writeo",
+				"$strobe", "$strobeb", "$strobeh", "$strobeo"}) {
+			if (call.isSystemCall() && call.getSubroutineName() == task)
+				return nullptr;
+		}
+		return stmt;
+	}
+	default:
+		return stmt;
+	}
+}
+
+void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail)
+{
+	// We leave action blocks out. The check stands in for any reporting, anything else
+	// would go missing from the design.
+	for (auto action : {pass, fail}) {
+		if (auto stmt = find_nonreporting_action(action))
+			netlist.add_diag(diag::ActionBlockUnsupported, stmt->sourceRange);
+	}
+}
+
+// Is the symbol a formal argument or a local variable of a subroutine?
+static bool in_subroutine(const ast::Symbol &symbol)
+{
+	const ast::Scope *scope = symbol.getParentScope();
+	while (ast::StatementBlockSymbol::isKind(scope->asSymbol().kind))
+		scope = scope->asSymbol().getParentScope();
+	return ast::SubroutineSymbol::isKind(scope->asSymbol().kind);
+}
+
 ir::Value EvalContext::sva(ast::Expression const &expr)
 {
 	bool in_sva_expression_save = in_sva_expression;
-	bool ignore_ast_constants_save = ignore_ast_constants;
 	in_sva_expression = true;
-	ignore_ast_constants = true;
+	sva_read_frozen = false;
 	auto ret = (*this)(expr);
 	in_sva_expression = in_sva_expression_save;
-	ignore_ast_constants = ignore_ast_constants_save;
 	return ret;
 }
 
@@ -1370,12 +1428,16 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				goto error;
 			}
 
-			if (ast::ParameterSymbol::isKind(symbol.kind)) {
-				auto &valsym = symbol.as<ast::ValueSymbol>();
-				require(valsym, valsym.getInitializer());
-				auto exprconst = valsym.getInitializer()->eval(this->const_);
-				require(valsym, exprconst.isInteger());
-				return netlist.convert_svint(exprconst.integer(), valsym.location);
+			// Hierarchical references get here as slang won't evaluate them
+			if (ast::ParameterSymbol::isKind(symbol.kind) || ast::EnumValueSymbol::isKind(symbol.kind)) {
+				auto converted = netlist.convert_const(ast::ParameterSymbol::isKind(symbol.kind)
+							? symbol.as<ast::ParameterSymbol>().getValue(expr.sourceRange)
+							: symbol.as<ast::EnumValueSymbol>().getValue(expr.sourceRange),
+						expr.sourceRange.start());
+				if (!converted)
+					goto error;
+				ret = *converted;
+				break;
 			}
 
 			if (ast::ModportPortSymbol::isKind(symbol.kind) &&
@@ -1385,16 +1447,31 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				return (*this)(*modport_port.getConnectionExpr());
 			}
 
+			if (ast::ClockVarSymbol::isKind(symbol.kind)) {
+				netlist.add_diag(diag::ClockVarUnsupported, expr.sourceRange);
+				goto error;
+			}
+
+			// Local variables of sequences and properties have a value for each thread
+			// of an attempt, we don't model those
+			if (ast::LocalAssertionVarSymbol::isKind(symbol.kind)) {
+				netlist.add_diag(diag::AssertionUnsupported, expr.sourceRange);
+				goto error;
+			}
+
 			ast_invariant(symbol, ast::ValueSymbol::isKind(symbol.kind));
 			Variable variable1 = variable(symbol.as<ast::ValueSymbol>());
 			assert_invariant((bool) variable1);
-			if (procedural && (!in_sva_expression || variable1.kind != Variable::Static)) {
+			if (procedural && (!in_sva_expression || variable1.kind != Variable::Static ||
+					in_subroutine(symbol))) {
 				if (procedural->timing.kind == ProcessTiming::Initial && ast::NetSymbol::isKind(symbol.kind)) {
 					netlist.add_diag(diag::ReadingNetStateFromInitialBlockUnsupported, expr.sourceRange);
 					ret = ir::Value(ir::Sx, expr.type->getBitstreamWidth());
 					break;
 				}
 				ret = procedural->substitute_rvalue(variable1);
+				if (in_sva_expression && !ret.is_fully_const())
+					sva_read_frozen = true;
 			} else {
 				ret = netlist.convert_static(variable1);
 			}
@@ -1503,6 +1580,8 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				in_sva_expression = false;
 				ret = apply_conversion(conv, (*this)(conv.operand()));
 				in_sva_expression = in_sva_expression_save;
+				if (in_sva_expression && !ret.is_fully_const())
+					sva_read_frozen = true;
 			} else if (conv.operand().kind != ast::ExpressionKind::Streaming) {
 				ret = apply_conversion(conv, (*this)(conv.operand()));
 			} else {
@@ -2123,9 +2202,10 @@ public:
 									ast::ImmediateAssertionStatement::isKind(body->kind));
 			if (!netlist.settings.ignore_assertions.value_or(false)) {
 				if (ast::ConcurrentAssertionStatement::isKind(body->kind)) {
+					const auto &statement = body->as<ast::ConcurrentAssertionStatement>();
+					check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
 #ifndef SLANG_NO_YOSYS
-					process_freestanding_sva_property(netlist, body->as<ast::ConcurrentAssertionStatement>(),
-													  block_symbol);
+					process_freestanding_sva_property(netlist, statement, block_symbol);
 #else
 					netlist.add_diag(diag::AssertionUnsupported, body->sourceRange);
 #endif
@@ -3566,7 +3646,7 @@ const ast::InstanceBodySymbol &NetlistContext::find_common_ancestor(const ast::I
 	return *pa[i - 1];
 }
 
-bool NetlistContext::check_hier_ref(const ast::ValueSymbol &symbol, slang::SourceRange range, bool silent)
+bool NetlistContext::check_hier_ref(const ast::Symbol &symbol, slang::SourceRange range, bool silent)
 {
 	const ast::InstanceBodySymbol *symbol_realm = find_symbol_realm(symbol);
 	if (!symbol_realm) {

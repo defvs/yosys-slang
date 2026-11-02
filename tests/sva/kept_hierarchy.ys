@@ -1,0 +1,89 @@
+test_slangdiag -expect "hierarchical reference across preserved module boundary"
+read_slang --keep-hierarchy <<EOF
+module sequence_sub(input logic clk, input logic a);
+	logic w;
+	assign w = !a;
+	sequence s;
+		w ##1 a;
+	endsequence
+endmodule
+
+module instance_sequence(input logic clk, input logic a);
+	sequence_sub u(.clk, .a);
+	sequence_test: assert property (@(posedge clk) u.s);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "hierarchical reference across preserved module boundary"
+read_slang --keep-hierarchy <<EOF
+module property_sub(input logic clk, input logic a);
+	logic w;
+	assign w = !a;
+	property p;
+		@(posedge clk) a |=> w;
+	endproperty
+endmodule
+
+module instance_property(input logic clk, input logic a);
+	property_sub u(.clk, .a);
+	property_test: assert property (u.p);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "hierarchical reference across preserved module boundary"
+read_slang --keep-hierarchy <<EOF
+module procedural_sub(input logic clk, input logic a);
+	logic w;
+	assign w = !a;
+	sequence s;
+		w ##1 a;
+	endsequence
+endmodule
+
+module procedural_instance_sequence(input logic clk, input logic a);
+	procedural_sub u(.clk, .a);
+	always @(posedge clk)
+		procedural_test: assert property (u.s);
+endmodule
+EOF
+
+design -reset
+
+# Flattened, the signals of the instance are ours
+read_slang <<EOF
+module flattened_sub(input logic clk, input logic a);
+	logic w;
+	assign w = !a;
+	sequence s;
+		w ##1 a;
+	endsequence
+endmodule
+
+module flattened_instance_sequence(input logic clk, input logic a);
+	flattened_sub u(.clk, .a);
+	flattened_test: assert property (@(posedge clk) u.s);
+endmodule
+EOF
+
+select -assert-count 1 t:$check
+
+design -reset
+
+# A package has no signals of an instance to refer to
+read_slang --keep-hierarchy <<EOF
+package sequences;
+	sequence s(x, y);
+		x ##1 y;
+	endsequence
+endpackage
+
+module package_sequence(input logic clk, input logic a, input logic b);
+	package_test: assert property (@(posedge clk) sequences::s(a, b));
+endmodule
+EOF
+
+select -assert-count 1 t:$check

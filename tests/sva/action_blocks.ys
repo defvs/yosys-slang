@@ -1,0 +1,64 @@
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module procedural_fail_action(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	always @(posedge clk)
+		assert property (a) else err <= 1'b1;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module freestanding_pass_action(input logic clk, input logic a, output logic hit);
+	initial hit = 1'b0;
+	cover property (@(posedge clk) a) hit <= 1'b1;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module immediate_actions(input logic clk, input logic a, output logic q);
+	always @(posedge clk)
+		assert (a) q <= 1'b1; else q <= 1'b0;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module nested_action(input logic a, input logic b, output logic q);
+	always_comb begin
+		q = 1'b0;
+		assert (a) else begin
+			$error("a low");
+			if (b)
+				q = 1'b1;
+		end
+	end
+endmodule
+EOF
+
+design -reset
+
+# Reporting is all an action block is left to do
+read_slang <<EOF
+module reporting_actions(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		assert (a) else $error("a low");
+		assert property (b) $display("b high"); else begin
+			if (a)
+				$warning("b low");
+			else
+				$fatal(1, "a and b low");
+		end
+	end
+	assume property (@(posedge clk) a |=> b) else $info("b late");
+endmodule
+EOF
+
+select -assert-count 3 t:$check

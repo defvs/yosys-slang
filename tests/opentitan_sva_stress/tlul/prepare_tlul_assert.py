@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 import argparse
@@ -7,10 +7,10 @@ from pathlib import Path
 
 
 DISABLED_ASSERTIONS = {
-    "aDataKnown_A": "uses $isunknown, which current yosys-slang does not synthesize",
-    "aDataKnown_M": "uses $isunknown, which current yosys-slang does not synthesize",
-    "dDataKnown_A": "uses $isunknown, which current yosys-slang does not synthesize",
-    "dDataKnown_M": "uses $isunknown, which current yosys-slang does not synthesize",
+    "aDataKnown_A": "uses $isunknown, which current sv-elab does not synthesize",
+    "aDataKnown_M": "uses $isunknown, which current sv-elab does not synthesize",
+    "dDataKnown_A": "uses $isunknown, which current sv-elab does not synthesize",
+    "dDataKnown_M": "uses $isunknown, which current sv-elab does not synthesize",
 }
 
 SEQUENCE_EXPR = {
@@ -83,7 +83,7 @@ def make_stub(label, kind):
     flavor = "assumption" if kind == "M" else "assertion"
     reason = DISABLED_ASSERTIONS[label]
     return [
-        f"      // Disabled for yosys-slang SVA: {label} {flavor} {reason}.\n",
+        f"      // Disabled for sv-elab SVA: {label} {flavor} {reason}.\n",
         f"      // Original OpenTitan property is left in tests/third_party/opentitan/hw/ip/tlul/rtl/tlul_assert.sv.\n",
     ]
 
@@ -96,7 +96,7 @@ def filter_tlul_assert(src, dst, explicit_clocking=False):
         stripped = lines[index].strip()
         if stripped == "// SVA coverage //":
             out.append(lines[index])
-            out.append("  // Disabled for yosys-slang SVA: TLUL cover properties are not assertion checks,\n")
+            out.append("  // Disabled for sv-elab SVA: TLUL cover properties are not assertion checks,\n")
             out.append("  // and some coverage sequences use match-item locals and goto repetition.\n")
             index += 1
             while index < len(lines) and lines[index].strip() != "`ifdef UVM":
@@ -116,14 +116,14 @@ def filter_tlul_assert(src, dst, explicit_clocking=False):
                 index += 1
             block = "".join(lines[block_start:index])
             if "uvm_config_db" in block:
-                out.append("  // Tied off for yosys-slang formal: UVM runtime assertion control is not used.\n")
+                out.append("  // Tied off for sv-elab formal: UVM runtime assertion control is not used.\n")
                 out.append("  always_comb disable_sva = 1'b0;\n")
             else:
-                out.append("  // Disabled for yosys-slang formal: UVM imports are not used.\n")
+                out.append("  // Disabled for sv-elab formal: UVM imports are not used.\n")
             continue
 
         if stripped.startswith(("`ASSERT_KNOWN_IF(", "`ASSERT_KNOWN(")):
-            out.append("  // Disabled for yosys-slang SVA: OpenTitan knownness macro uses $isunknown.\n")
+            out.append("  // Disabled for sv-elab SVA: OpenTitan knownness macro uses $isunknown.\n")
             depth = lines[index].count("(") - lines[index].count(")")
             index += 1
             while index < len(lines) and depth > 0:
@@ -134,14 +134,14 @@ def filter_tlul_assert(src, dst, explicit_clocking=False):
         if stripped.startswith("sequence "):
             seq_name = stripped.split()[1].rstrip(";")
             if seq_name in SEQUENCE_EXPR:
-                out.append(f"  // Inlined for yosys-slang SVA: sequence {seq_name}.\n")
+                out.append(f"  // Inlined for sv-elab SVA: sequence {seq_name}.\n")
             else:
-                out.append(f"  // Disabled for yosys-slang SVA: coverage sequence {seq_name}.\n")
+                out.append(f"  // Disabled for sv-elab SVA: coverage sequence {seq_name}.\n")
             index = skip_sequence(lines, index + 1)
             continue
 
         if stripped.startswith("`TLUL_COVER(") or stripped.startswith("`TLUL_A_CHAN_CONTENT_CHANGED_WO_ACCEPTED(") or stripped.startswith("`TLUL_D_CHAN_CONTENT_CHANGED_WO_ACCEPTED("):
-            out.append("    // Disabled for yosys-slang SVA: OpenTitan TLUL coverage sequences use match-item\n")
+            out.append("    // Disabled for sv-elab SVA: OpenTitan TLUL coverage sequences use match-item\n")
             out.append("    // local variables and goto repetition, which are not needed for assertion BMC here.\n")
             index += 1
             continue

@@ -1,0 +1,23 @@
+test_slangdiag -expect "assertion in final procedure will not be synthesized"
+read_slang <<EOF
+module final_assertion(input logic a);
+	final assert (a);
+endmodule
+EOF
+
+select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "assertion in final procedure will not be synthesized"
+read_slang <<EOF
+module nested_final_assertion(input logic a, input logic b);
+	final begin
+		$display("done");
+		if (b)
+			assume (a) else $error("a low");
+	end
+endmodule
+EOF
+
+select -assert-none t:$check

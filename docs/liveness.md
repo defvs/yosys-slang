@@ -12,8 +12,8 @@ and Yosys formal cells. Finite failures become `$check` cells with
   liveness check.
 
 No unbounded operator is replaced with a selected finite depth. Bounded ranges
-are enumerated only up to the synthesis guard of 1024 samples; unbounded ranges
-use finite-state monitors.
+are lowered whatever their size, with no limit on the number of samples;
+unbounded ranges use finite-state monitors.
 
 ## Supported property forms
 

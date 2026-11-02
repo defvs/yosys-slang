@@ -580,6 +580,8 @@ public:
 		if (netlist.settings.ignore_assertions.value_or(false))
 			return;
 
+		check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
+
 		std::string flavor;
 		switch (statement.assertionKind) {
 		case ast::AssertionKind::Assert:        flavor = "assert"; break;
@@ -594,8 +596,9 @@ public:
 		if (containing_block &&
 				unwrap_statement(containing_block->tryGetStatement()) == &statement &&
 				!containing_block->name.empty()) {
-			// If we are the sole statement in a block, use the block's label
-			cell_name = netlist.id(*containing_block);
+			// If we are the sole statement in a block, use the block's label. Loops and
+			// functions can get us here more than once, a suffix tells those apart.
+			cell_name = netlist.backend->canvas->uniquify(netlist.id(*containing_block)).str();
 		} else {
 			cell_name = netlist.backend->new_id();
 		}
@@ -622,6 +625,7 @@ public:
 			if (statement.assertionKind == ast::AssertionKind::Expect) {
 				netlist.add_diag(diag::ExpectStatementUnsupported, statement.sourceRange);
 			} else {
+				check_action_blocks(netlist, statement.ifTrue, statement.ifFalse);
 #ifndef SLANG_NO_YOSYS
 				process_sva_property(statement, containing_block, context, statement.propertySpec);
 #else
@@ -674,7 +678,11 @@ public:
 			{
 				RegisterEscapeConstructGuard escape_guard(
 						context, EscapeConstructKind::FunctionBody, subroutine);
+				// What's frozen in an assertion are the actual arguments, the
+				// function's own variables get evaluated on each call
+				bool sva_read_frozen_save = eval.sva_read_frozen;
 				subroutine->getBody().visit(*this);
+				eval.sva_read_frozen = sva_read_frozen_save;
 			}
 
 			for (int i = 0; i < (int)arg_symbols.size(); i++) {

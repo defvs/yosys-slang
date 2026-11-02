@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -12,12 +12,19 @@ BUILD="$BUILD_ROOT/tlul"
 ASSUME_LEGAL_D2H="${ASSUME_LEGAL_D2H:-1}"
 ASSUME_LEGAL_D2H_IMMEDIATE="${ASSUME_LEGAL_D2H_IMMEDIATE:-0}"
 EXPLICIT_TLUL_CLOCKING="${EXPLICIT_TLUL_CLOCKING:-0}"
+# The checks enabled in tlul_assert.sv, plus four from the harness if it
+# assumes legal D2H responses. The four d2h error responses are also each
+# a $live cell, which write_smt2 leaves out.
+EXPECTED_CHECKS=8
+EXPECTED_LIVENESS=4
 SLANG_DEFINES=()
 if [ "$ASSUME_LEGAL_D2H" = 1 ]; then
   SLANG_DEFINES=(-D TLUL_ASSUME_LEGAL_D2H)
+  EXPECTED_CHECKS=12
 fi
 if [ "$ASSUME_LEGAL_D2H_IMMEDIATE" = 1 ]; then
   SLANG_DEFINES=(-D TLUL_ASSUME_LEGAL_D2H_IMMEDIATE)
+  EXPECTED_CHECKS=12
 fi
 
 TLUL_ASSERT_SRC="$OT/hw/ip/tlul/rtl/tlul_assert.sv"
@@ -66,9 +73,18 @@ synth_status=PASS
 if ! "$YOSYS" -m "$PLUGIN" "$BUILD/tlul_sva.ys" >"$SYNTH_LOG" 2>&1; then
   synth_status=FAIL
 fi
-if [ "$synth_status" = PASS ] && ! grep -Eq 'cell \$(live|fair) ' "$FULL_IL"; then
-  echo "Expected liveness/fairness cells were not generated" >>"$SYNTH_LOG"
-  synth_status=FAIL
+
+checks_status=SKIP
+checks=
+liveness=
+if [ "$synth_status" = PASS ]; then
+  checks=$(count_checks "$SMT")
+  liveness=$(count_liveness "$FULL_IL")
+  if [ "$checks" = "$EXPECTED_CHECKS" ] && [ "$liveness" = "$EXPECTED_LIVENESS" ]; then
+    checks_status=PASS
+  else
+    checks_status=FAIL
+  fi
 fi
 
 bmc_status=SKIP
@@ -81,12 +97,14 @@ if [ "$synth_status" = PASS ]; then
 fi
 
 {
-  echo "# OpenTitan TLUL SVA yosys-slang run"
+  echo "# OpenTitan TLUL SVA sv-elab run"
   echo
   echo "- OpenTitan commit: $(git -C "$OT" rev-parse HEAD)"
   echo "- Checker source: $TLUL_ASSERT_SRC"
   echo "- Filtered checker: $TLUL_ASSERT_FILTERED"
   echo "- Yosys synthesis: $synth_status"
+  echo "- Checks: ${checks:-none} of $EXPECTED_CHECKS expected"
+  echo "- Live/fair cells: ${liveness:-none} of $EXPECTED_LIVENESS expected"
   echo "- BMC depth: $DEPTH"
   echo "- BMC solver: $SOLVER"
   echo "- Assume legal D2H responses: $ASSUME_LEGAL_D2H"
@@ -98,8 +116,8 @@ fi
   echo
   echo "| Assertion | Reason |"
   echo "| --- | --- |"
-  echo '| aDataKnown_A / aDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
-  echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
+  echo '| aDataKnown_A / aDataKnown_M | use $isunknown, which current sv-elab does not synthesize |'
+  echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current sv-elab does not synthesize |'
   echo '| aKnown_A / dKnown_A / aReadyKnown_A / dReadyKnown_A | OpenTitan knownness macros expand to $isunknown |'
   echo "| TLUL cover properties | coverage-only, and some cover sequences use unsupported match-item locals / goto repetition |"
   echo
@@ -142,15 +160,19 @@ fi
 } > "$SUMMARY"
 
 {
-  echo "tlul|$synth_status|$bmc_status|$BUILD"
+  echo "tlul|$synth_status|$checks_status|$bmc_status|$BUILD"
   if [ "$synth_status" = FAIL ]; then
     grep -E 'ERROR:|Assert failed|Unsupported|internal error|Exception' "$SYNTH_LOG" | head -20 || true
-  elif [ "$bmc_status" = FAIL ]; then
+  fi
+  if [ "$checks_status" = FAIL ]; then
+    echo "Expected $EXPECTED_CHECKS checks and $EXPECTED_LIVENESS live/fair cells, found $checks and $liveness."
+  fi
+  if [ "$bmc_status" = FAIL ]; then
     grep -E 'Assert failed|Status:|BMC failed|FAILED' "$BMC_LOG" || true
-  else
+  elif [ "$bmc_status" = PASS ]; then
     grep -E 'Status:|PASSED' "$BMC_LOG" || true
   fi
 } > "$RESULT"
 
 echo "$SUMMARY"
-exit $([ "$synth_status" = PASS ] && [ "$bmc_status" = PASS ] && echo 0 || echo 1)
+exit $([ "$synth_status" = PASS ] && [ "$checks_status" = PASS ] && [ "$bmc_status" = PASS ] && echo 0 || echo 1)

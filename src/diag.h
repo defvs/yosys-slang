@@ -81,9 +81,7 @@ extern slang::DiagCode UnsupportedSVAFeature;
 extern slang::DiagCode RepetitionsUnsupported;
 extern slang::DiagCode SVAClockingRequiresEdge;
 extern slang::DiagCode SVATemporalDelayRequiresClock;
-extern slang::DiagCode SVALivenessAcceptanceUnsupported;
-extern slang::DiagCode SVAMatchItemsUnsupported;
-extern slang::DiagCode SVATemporalCoverUnsupported;
+extern slang::DiagCode SVAFrozenValueAfterFirstTick;
 extern slang::DiagCode ErrorNonconstantArgument;
 extern slang::DiagCode ReadmemFileNotFound;
 extern slang::DiagCode ReadmemInvalidAddress;
@@ -95,6 +93,12 @@ extern slang::DiagCode HierarchicalRefOutsideModulesUnsupported;
 extern slang::DiagCode HighImpedanceUnsupported;
 extern slang::DiagCode IfacePortUnsupported;
 extern slang::DiagCode OptionRequiresStandaloneSlang;
+extern slang::DiagCode ClockVarUnsupported;
+extern slang::DiagCode ActionBlockUnsupported;
+extern slang::DiagCode FinalAssertionUnsupported;
+extern slang::DiagCode SVALivenessAcceptanceUnsupported;
+extern slang::DiagCode SVAMatchItemsUnsupported;
+extern slang::DiagCode SVATemporalCoverUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag
