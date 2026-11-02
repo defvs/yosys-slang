@@ -1,6 +1,6 @@
 # OpenTitan SVA Stress
 
-This directory contains opt-in stress tests for yosys-slang SVA lowering using
+This directory contains opt-in stress tests for sv-elab SVA lowering using
 OpenTitan verification collateral. The tests use the SVA properties directly,
 with small source filters for unsupported constructs; they do not use
 OpenTitan's `YOSYS` macro mode.

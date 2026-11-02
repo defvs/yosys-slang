@@ -1,5 +1,5 @@
 //
-// Yosys slang frontend
+// sv-elab
 //
 // Copyright Martin Povišer <povik@cutebit.org>
 // Distributed under the terms of the ISC license, see LICENSE
@@ -13,12 +13,12 @@ USING_YOSYS_NAMESPACE
 struct TestSlangsvaPass : Pass
 {
 	TestSlangsvaPass()
-		: Pass("test_slangsva", "helper pass used by yosys-slang SVA support testing")
+		: Pass("test_slangsva", "helper pass used by sv-elab SVA support testing")
 	{}
 
 	void help() override
 	{
-		log("Perform manipulations in support of yosys-slang SVA support testing.\n");
+		log("Perform manipulations in support of sv-elab SVA support testing.\n");
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *d) override

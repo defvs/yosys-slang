@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -36,7 +36,7 @@ done
   echo
   echo "This run checks:"
   echo
-  echo "- synthesis through yosys-slang and Yosys;"
+  echo "- synthesis through sv-elab and Yosys;"
   echo "- the number of checks synthesized for each target;"
   echo "- bounded model checking through yosys-smtbmc;"
   echo "- filtered OpenTitan SVA properties, not OpenTitan \`YOSYS\` macro mode."

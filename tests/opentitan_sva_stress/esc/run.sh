@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail

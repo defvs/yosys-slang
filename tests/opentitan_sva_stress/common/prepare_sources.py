@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 import argparse
@@ -79,7 +79,7 @@ def macro_name(line):
 
 
 def disable_block(out, source_name, name, reason):
-    out.append(f"  // Disabled for yosys-slang SVA stress: {name}: {reason}.\n")
+    out.append(f"  // Disabled for sv-elab SVA stress: {name}: {reason}.\n")
     out.append(f"  // Original source: tests/third_party/opentitan/.../{source_name}\n")
 
 

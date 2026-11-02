@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 The yosys-slang contributors
+# Copyright (c) 2026 The sv-elab contributors
 # SPDX-License-Identifier: ISC
 
 set -euo pipefail
@@ -88,7 +88,7 @@ if [ "$synth_status" = PASS ]; then
 fi
 
 {
-  echo "# OpenTitan TLUL SVA yosys-slang run"
+  echo "# OpenTitan TLUL SVA sv-elab run"
   echo
   echo "- OpenTitan commit: $(git -C "$OT" rev-parse HEAD)"
   echo "- Checker source: $TLUL_ASSERT_SRC"
@@ -106,13 +106,13 @@ fi
   echo
   echo "| Assertion | Reason |"
   echo "| --- | --- |"
-  echo '| aDataKnown_A / aDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
-  echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current yosys-slang does not synthesize |'
+  echo '| aDataKnown_A / aDataKnown_M | use $isunknown, which current sv-elab does not synthesize |'
+  echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current sv-elab does not synthesize |'
   echo '| aKnown_A / dKnown_A / aReadyKnown_A / dReadyKnown_A | OpenTitan knownness macros expand to $isunknown |'
-  echo "| legalAOpcodeErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| sizeGTEMaskErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| sizeMatchesMaskErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
-  echo "| addrSizeAlignedErr_A | unbounded s_eventually is not synthesized by current yosys-slang |"
+  echo "| legalAOpcodeErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
+  echo "| sizeGTEMaskErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
+  echo "| sizeMatchesMaskErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
+  echo "| addrSizeAlignedErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
   echo "| TLUL cover properties | coverage-only, and some cover sequences use unsupported match-item locals / goto repetition |"
   echo
   echo "## Synthesized assertions"
