@@ -480,3 +480,220 @@ module compound_followed_cover(input logic clk, input logic r, input logic x, in
 	cover property (@(posedge clk) x #-# accept_on (r) a);
 endmodule
 EOF
+
+design -reset
+
+# A recursive property is no finite monitor
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module recursive_property(input logic clk, input logic a, input logic b);
+	property p(x);
+		x and nexttime p(x);
+	endproperty
+	assert property (@(posedge clk) p(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module recursive_liveness(input logic clk, input logic a, input logic b);
+	property p;
+		a |-> (s_eventually b) and nexttime p;
+	endproperty
+	assert property (@(posedge clk) p);
+endmodule
+EOF
+
+design -reset
+
+# The operands of `until` are Booleans
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module until_temporal_right(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a until (s_eventually b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module until_temporal_left(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (s_eventually a) s_until b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module until_sequence_left(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) (a ##1 b) until c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module until_always_left(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) a |-> (always b) until c);
+endmodule
+EOF
+
+design -reset
+
+# An eventuality on the left of `iff` or `implies`, or in `or` with a safety side, needs a Boolean
+# combination of justice goals
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module iff_temporal(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (s_eventually a) iff b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module implies_temporal(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (s_eventually a) implies b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module or_live_safety(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) (s_eventually a) or (b until c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "liveness expression needs an acceptance condition that cannot be represented by Yosys $live/$fair cells"
+read_slang <<EOF
+module or_live_boolean(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (s_eventually a) or b);
+endmodule
+EOF
+
+design -reset
+
+# A rejection fails the attempts in flight, which a monitor of `always` merges
+test_slangdiag -expect "`reject_on` is supported around a liveness property with no safety part and nothing but a boolean antecedent ahead of its obligations"
+read_slang <<EOF
+module reject_always(input logic clk, input logic r, input logic a);
+	assert property (@(posedge clk) reject_on (r) always s_eventually a);
+endmodule
+EOF
+
+design -reset
+
+# A liveness obligation runs on the one clock of the assertion
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module multiclock_liveness(input logic clk, input logic clk2, input logic a, input logic b);
+	assert property (@(posedge clk) a |=> @(posedge clk2) s_eventually b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA match items and local-variable actions are not synthesizable"
+read_slang <<EOF
+module local_variable_liveness(input logic clk, input logic a, input logic b, input logic [3:0] d);
+	sequence s;
+		logic [3:0] v;
+		(a, v = d) ##[1:$] (b && d == v);
+	endsequence
+	assert property (@(posedge clk) strong(s));
+endmodule
+EOF
+
+design -reset
+
+# A monitor merging overlapping attempts cannot tell which match of an attempt
+# came first, nor compose the matches of one attempt, inside a longer sequence
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module first_match_concat(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) strong(first_match(a ##[1:$] b) ##1 c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module product_concat(input logic clk, input logic a, input logic b, input logic c, input logic d, input logic e);
+	assert property (@(posedge clk) strong(((a ##[1:$] b) and (c ##[1:$] d)) ##1 e));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module product_repeat(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) strong(((a ##[1:$] b) intersect (c ##[1:$] d))[*2]));
+endmodule
+EOF
+
+design -reset
+
+# Liveness under `not`, `nexttime` or a bounded or unbounded eventuality
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module not_liveness_implication(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) not (a |-> s_eventually b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module not_strong_until(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) not (a s_until b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module not_strong_unbounded(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) not strong(a ##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module nexttime_liveness(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |=> s_nexttime s_eventually b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module bounded_eventually_liveness(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) s_eventually [0:3] (s_eventually b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module eventually_always(input logic clk, input logic a);
+	assert property (@(posedge clk) s_eventually always a);
+endmodule
+EOF
