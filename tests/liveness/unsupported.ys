@@ -79,3 +79,78 @@ module unsupported_selected_or(
 	assert property (@(posedge clk) (s_eventually (a[*1:$] ##1 b)) or (s_eventually c));
 endmodule
 EOF
+
+design -reset
+
+# The clock of a repeated sequence instance belongs to that sequence, also in the
+# monitors and response obligations
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module repeated_clocked_strong(input logic clk, input logic a);
+	sequence s;
+		@(posedge clk) ##[1:$] a;
+	endsequence
+	assert property (@(posedge clk) strong(s[*2]));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module repeated_clocked_eventually(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	assert property (@(posedge clk) s_eventually s[*2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module repeated_clocked_conditional(input logic clk, input logic a, input logic b, input logic c);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	assert property (@(posedge clk) if (c) s[*2]);
+endmodule
+EOF
+
+design -reset
+
+# A repeated sequence is no Boolean operand for `always`, `until` or `implies`
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module repeated_always_operand(input logic clk, input logic a);
+	sequence s;
+		a;
+	endsequence
+	assert property (@(posedge clk) always (not s[*2]));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module repeated_until_operand(input logic clk, input logic a, input logic b);
+	sequence s;
+		a;
+	endsequence
+	assert property (@(posedge clk) b until s[*2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module repeated_implies_operand(input logic clk, input logic a, input logic b);
+	sequence s;
+		a;
+	endsequence
+	assert property (@(posedge clk) s[*2] implies b);
+endmodule
+EOF

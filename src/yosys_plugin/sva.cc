@@ -552,6 +552,11 @@ public:
 			}
 
 		case ast::AssertionExprKind::Clocking:
+			// A clock of its own, as one inside a repeated sequence instance
+			eval.netlist.add_diag(diag::UnsupportedSVAFeature, expr_loc(expr));
+			valid = false;
+			return {start, false};
+
 		case ast::AssertionExprKind::StrongWeak:
 		case ast::AssertionExprKind::Abort:
 		case ast::AssertionExprKind::Conditional:
@@ -1512,8 +1517,10 @@ static bool is_suffix_eventual_sequence(const ast::AssertionExpr& expr) {
 	switch (expr.kind) {
 	case ast::AssertionExprKind::Simple:
 		{
+			// A repeated instance follows its own unbounded delay with another
 			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance ||
+				simple.repetition.has_value())
 				return false;
 			const auto& instance =
 				simple.expr.as<ast::AssertionInstanceExpression>();
@@ -1597,7 +1604,8 @@ suffix_eventual_candidates(EvalContext& eval,
 						   uint32_t additional_delay = 0) {
 	if (sequence.kind == ast::AssertionExprKind::Simple) {
 		const auto& simple = sequence.as<ast::SimpleAssertionExpr>();
-		if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+		if (simple.expr.kind != ast::ExpressionKind::AssertionInstance ||
+			simple.repetition.has_value())
 			return std::nullopt;
 		const auto& instance =
 			simple.expr.as<ast::AssertionInstanceExpression>();
@@ -1825,6 +1833,8 @@ simple_property_signal(EvalContext& eval, const ast::AssertionExpr& expr,
 	const ast::AssertionExpr *current = &expr;
 	if (current->kind == ast::AssertionExprKind::Simple) {
 		const auto& simple = current->as<ast::SimpleAssertionExpr>();
+		if (simple.repetition.has_value())
+			return std::nullopt;
 		if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
 			const auto& instance =
 				simple.expr.as<ast::AssertionInstanceExpression>();
@@ -1832,8 +1842,6 @@ simple_property_signal(EvalContext& eval, const ast::AssertionExpr& expr,
 				return std::nullopt;
 			return simple_property_signal(eval, instance.body, negate);
 		}
-		if (simple.repetition.has_value())
-			return std::nullopt;
 		ir::Net value = simple.isNullExpr
 			? ir::S0
 			: eval.netlist.ReduceBool(eval.sva(simple.expr));
@@ -2084,8 +2092,10 @@ static bool property_requires_temporal_obligations(const ast::AssertionExpr& exp
 	switch (expr.kind) {
 	case ast::AssertionExprKind::Simple:
 		{
+			// A repeated instance is a sequence
 			const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance)
+			if (simple.expr.kind != ast::ExpressionKind::AssertionInstance ||
+				simple.repetition.has_value())
 				return false;
 			const auto& instance =
 				simple.expr.as<ast::AssertionInstanceExpression>();
@@ -2351,9 +2361,12 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 							  eval.netlist.LogicOr(disable, condition));
 	}
 
+	// The body of a repeated instance is only one of the iterations, the repetition
+	// is lowered as a sequence along with it
 	if (expr.kind == ast::AssertionExprKind::Simple) {
 		const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-		if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
+		if (simple.expr.kind == ast::ExpressionKind::AssertionInstance &&
+			!simple.repetition.has_value()) {
 			const auto& instance =
 				simple.expr.as<ast::AssertionInstanceExpression>();
 			if (instance.isRecursiveProperty) {

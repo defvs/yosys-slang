@@ -1,0 +1,29 @@
+[tasks]
+named_strong_pass
+named_strong_fail
+named_eventually_pass
+named_eventually_fail
+
+[options]
+mode live
+named_strong_fail: expect fail
+named_eventually_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+named_strong_pass: read_rtlil named_strong_pass.il
+named_strong_pass: prep -top named_strong_pass
+named_strong_fail: read_rtlil named_strong_fail.il
+named_strong_fail: prep -top named_strong_fail
+named_eventually_pass: read_rtlil named_eventually_pass.il
+named_eventually_pass: prep -top named_eventually_pass
+named_eventually_fail: read_rtlil named_eventually_fail.il
+named_eventually_fail: prep -top named_eventually_fail
+
+[files]
+named_strong_pass: named_strong_pass.il
+named_strong_fail: named_strong_fail.il
+named_eventually_pass: named_eventually_pass.il
+named_eventually_fail: named_eventually_fail.il
