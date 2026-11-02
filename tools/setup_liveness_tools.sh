@@ -32,7 +32,7 @@ if [[ ! -x "${suprove}" ]]; then
 		oss-cad-suite/license
 fi
 
-smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-suprove.XXXXXXXX")
+smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/sv-elab-suprove.XXXXXXXX")
 cleanup() {
 	rm -rf -- "${smoke_dir:?}"
 }

@@ -13,7 +13,7 @@ root=$(cd -- "${test_dir}/../.." && pwd)
 suprove_driver="${root}/tools/suprove_all_justice.py"
 ot="${root}/tests/third_party/opentitan"
 prim_rtl="${ot}/hw/ip/prim/rtl"
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-ot-arbiter.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sv-elab-ot-arbiter.XXXXXXXX")
 cleanup() {
 	rm -rf -- "${work_dir:?}"
 }

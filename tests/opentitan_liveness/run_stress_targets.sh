@@ -12,7 +12,7 @@ test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "${test_dir}/../.." && pwd)
 suprove_driver="${root}/tools/suprove_all_justice.py"
 stress_dir="${root}/tests/opentitan_sva_stress"
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-ot-live.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sv-elab-ot-live.XXXXXXXX")
 cleanup() {
 	rm -rf -- "${work_dir:?}"
 }

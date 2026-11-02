@@ -10,7 +10,7 @@ plugin=$1
 suprove=$2
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 suprove_driver=$(cd -- "${test_dir}/../../tools" && pwd)/suprove_all_justice.py
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/yosys-slang-live.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sv-elab-live.XXXXXXXX")
 cleanup() {
 	rm -rf -- "${work_dir:?}"
 }
