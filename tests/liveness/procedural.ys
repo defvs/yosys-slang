@@ -88,3 +88,42 @@ endmodule
 EOF
 
 select -assert-count 2 t:$check r:FLAVOR=live %i
+
+design -reset
+
+# An automatic variable or a const cast keeps the value it had when the attempt was
+# queued, while the monitors read the condition of an abort on later ticks too
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module frozen_disable(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		assert property (disable iff (t) s_eventually b);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module frozen_accept(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		automatic logic t = a;
+		assert property (accept_on (t) s_eventually b);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "automatic variable or const cast of non-constant value used past the first tick of an assertion attempt"
+read_slang <<EOF
+module frozen_reject(input logic clk, input logic a, input logic b);
+	logic x;
+	always @(posedge clk) begin
+		x = a;
+		assert property (reject_on (const'(x)) s_eventually b);
+	end
+endmodule
+EOF

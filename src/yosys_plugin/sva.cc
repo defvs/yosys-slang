@@ -1410,6 +1410,16 @@ struct PropertyAborts {
 	}
 };
 
+// The condition of a disable iff or an abort, a sampled value like the operands. The
+// monitors read it on all the ticks of an attempt, which a value frozen when the attempt
+// was queued is valid for the first of only (see check_frozen_offset()).
+static ir::Net abort_condition(EvalContext& eval, const ast::Expression& condition) {
+	ir::Net value = eval.netlist.ReduceBool(eval.sva(condition));
+	if (eval.sva_read_frozen)
+		eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, condition.sourceRange);
+	return value;
+}
+
 struct EventualCandidate {
 	ir::Net match;
 	uint64_t duration;
@@ -2701,11 +2711,10 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 	if (expr.kind == ast::AssertionExprKind::Abort) {
 		const auto& abort = expr.as<ast::AbortAssertionExpr>();
-		// The condition of a synchronous abort is a sampled value like the operands
-		// (IEEE Std 1800-2017 section 16.12.14), that of an asynchronous one is still
-		// read as the current value
-		ir::Net condition = eval.netlist.ReduceBool(
-			abort.isSync ? eval.sva(abort.condition) : eval(abort.condition));
+		// The condition of an asynchronous abort is a sampled value as well (IEEE Std
+		// 1800-2017 section 16.12.14). We read it on the ticks of the clock only, like
+		// the condition of a disable iff.
+		ir::Net condition = abort_condition(eval, abort.condition);
 		if (abort.action == ast::AbortAssertionExpr::Accept) {
 			PropertyAborts inner = aborts;
 			inner.accept = eval.netlist.LogicOr(aborts.accept, condition);
@@ -3151,7 +3160,7 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 
 	PropertyAborts aborts;
 	if (condition) {
-		ir::Net disable = netlist.ReduceBool(procedural.eval.sva(*condition));
+		ir::Net disable = abort_condition(procedural.eval, *condition);
 		if (statement.assertionKind == ast::AssertionKind::CoverProperty)
 			aborts.cover_disable = disable;
 		else

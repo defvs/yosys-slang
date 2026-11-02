@@ -86,7 +86,11 @@ Vacuity and triggering follow the property structure:
 - a top-level eventual property launches on every enabled sampled clock.
 
 The condition of a property `if` or `case` is a sampled value, like the
-operands, and so is the condition of `sync_accept_on` and `sync_reject_on`.
+operands, and so is the condition of an abort, synchronous or not. An abort
+condition, like that of a `disable iff`, is read on the ticks of the
+assertion clock, so `accept_on` and `reject_on` act as `sync_accept_on` and
+`sync_reject_on`. That is exact for a condition that changes with the
+assertion clock, while a pulse between two of its ticks goes unseen.
 The items of a property `case` compare with case equality: an `x` in an item
 is no wildcard, it matches nothing but the same constant `x`.
 
@@ -162,6 +166,9 @@ cannot preserve the SVA meaning:
   overlapping attempts cannot tell whether one is still in flight;
 - a `disable iff` nested in a property by way of instances, which IEEE
   1800-2017 16.12 does not allow;
+- an automatic variable or a const cast in the condition of a `disable iff`
+  or an abort, whose value a monitor would read on later ticks than the one
+  the attempt was queued on;
 - multiple or incompatible assertion clocks, sampled-value clock arguments,
   and temporal monitors with no single clock edge to run on: in `always_comb`
   or `always @*` with neither a clock of the assertion's own nor a default

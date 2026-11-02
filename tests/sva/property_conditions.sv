@@ -1,8 +1,8 @@
-// The condition of a property if or case, and that of a synchronous abort, is a
-// sampled value like the other operands (IEEE Std 1800-2017 sections 16.5.1,
-// 16.12.14 and 16.12.16), a blocking assignment ahead of the assertion doesn't
-// show in it. The items of a property case compare by case equality, an x in
-// one is no wildcard.
+// The condition of a property if or case, and that of an abort, is a sampled
+// value like the other operands (IEEE Std 1800-2017 sections 16.5.1, 16.12.14
+// and 16.12.16), a blocking assignment ahead of the assertion doesn't show in it.
+// The items of a property case compare by case equality, an x in one is no
+// wildcard.
 module property_conditions(input logic clk, input logic a, input logic b,
 						   input logic [1:0] m, input logic [1:0] n);
 	logic y = 0;
@@ -19,6 +19,9 @@ module property_conditions(input logic clk, input logic a, input logic b,
 
 		sync_accept_ref: assert(a_d1 || b);
 		sync_accept_test: assert property (sync_accept_on (y) b);
+
+		accept_ref: assert(a_d1 || b);
+		accept_test: assert property (accept_on (y) b);
 
 		// No value of m is 2'b1x by case equality
 		case_x_ref: assert(1'b1);
