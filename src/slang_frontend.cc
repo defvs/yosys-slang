@@ -1271,12 +1271,9 @@ void handle_display([[maybe_unused]] ProceduralContext &context, [[maybe_unused]
 ir::Value EvalContext::sva(ast::Expression const &expr)
 {
 	bool in_sva_expression_save = in_sva_expression;
-	bool ignore_ast_constants_save = ignore_ast_constants;
 	in_sva_expression = true;
-	ignore_ast_constants = true;
 	auto ret = (*this)(expr);
 	in_sva_expression = in_sva_expression_save;
-	ignore_ast_constants = ignore_ast_constants_save;
 	return ret;
 }
 
