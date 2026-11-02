@@ -1367,12 +1367,16 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				goto error;
 			}
 
-			if (ast::ParameterSymbol::isKind(symbol.kind)) {
-				auto &valsym = symbol.as<ast::ValueSymbol>();
-				require(valsym, valsym.getInitializer());
-				auto exprconst = valsym.getInitializer()->eval(this->const_);
-				require(valsym, exprconst.isInteger());
-				return netlist.convert_svint(exprconst.integer(), valsym.location);
+			// Hierarchical references get here as slang won't evaluate them
+			if (ast::ParameterSymbol::isKind(symbol.kind) || ast::EnumValueSymbol::isKind(symbol.kind)) {
+				auto converted = netlist.convert_const(ast::ParameterSymbol::isKind(symbol.kind)
+							? symbol.as<ast::ParameterSymbol>().getValue(expr.sourceRange)
+							: symbol.as<ast::EnumValueSymbol>().getValue(expr.sourceRange),
+						expr.sourceRange.start());
+				if (!converted)
+					goto error;
+				ret = *converted;
+				break;
 			}
 
 			if (ast::ModportPortSymbol::isKind(symbol.kind) &&
