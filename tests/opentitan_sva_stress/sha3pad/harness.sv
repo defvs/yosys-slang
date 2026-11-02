@@ -11,7 +11,11 @@ module sha3pad_sva_harness
   input logic keccak_run_o,
   input lc_tx_t lc_escalate_en_i
 );
-  initial assume(!rst_ni);
+  logic first_tick = 1'b1;
+  always_ff @(posedge clk_i) begin
+    first_tick <= 1'b0;
+    if (first_tick) assume(!rst_ni);
+  end
 
   sha3pad_assert_if #(
     .EnMasking(1'b1)

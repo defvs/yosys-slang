@@ -17,7 +17,11 @@ module prim_alert_rxtx_sva_harness
   input mubi4_t init_trig_i,
   input logic ping_req_i
 );
-  initial assume(!rst_ni);
+  logic first_tick = 1'b1;
+  always_ff @(posedge clk_i) begin
+    first_tick <= 1'b0;
+    if (first_tick) assume(!rst_ni);
+  end
 
   logic alert_ack;
   logic alert_state;

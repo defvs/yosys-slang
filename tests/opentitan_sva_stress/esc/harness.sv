@@ -11,7 +11,11 @@ module prim_esc_rxtx_sva_harness (
   input logic esc_req_i,
   input logic ping_req_i
 );
-  initial assume(!rst_ni);
+  logic first_tick = 1'b1;
+  always_ff @(posedge clk_i) begin
+    first_tick <= 1'b0;
+    if (first_tick) assume(!rst_ni);
+  end
 
   logic ping_ok;
   logic integ_fail;
