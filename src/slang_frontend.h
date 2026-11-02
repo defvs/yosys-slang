@@ -246,6 +246,9 @@ struct EvalContext {
 	// or const cast of non-constant value, as those are frozen with the attempt
 	bool sva_read_frozen = false;
 
+	// What lowering the current assertion has cost in delay registers and logic cells
+	uint64_t sva_lowering_cost = 0;
+
 	friend class EnterAutomaticScopeGuard;
 };
 

@@ -29,6 +29,17 @@ namespace slang_frontend {
 
 static constexpr uint32_t SVA_ENUMERATION_LIMIT = 1024;
 
+// Ranges within the limit above still multiply when nested or put in a row, so these
+// limits go by an assertion as a whole: the first by the ticks it spans, the second by
+// the delay registers and logic cells it lowers to. Those take about 1.4 KiB each,
+// and `a ##[0:1024] b` gets through a third of the limit.
+static constexpr int SVA_LENGTH_LIMIT = 1 << 16;
+static constexpr uint64_t SVA_COST_LIMIT = 3000000;
+
+// Lowering can have a long way to go past the point we know it's in vain, so we
+// leave it altogether on hitting a limit
+struct SvaLimitExceeded {};
+
 static slang::SourceLocation expr_loc(const ast::AssertionExpr& expr) {
 	return expr.syntax ? expr.syntax->sourceRange().start() : slang::SourceLocation::NoLocation;
 }
@@ -78,6 +89,12 @@ private:
 				   bool frozen_, slang::SourceLocation loc_):
 		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
 
+	void add_cost(int cost) const {
+		eval.sva_lowering_cost += cost;
+		if (eval.sva_lowering_cost > SVA_COST_LIMIT)
+			throw SvaLimitExceeded {};
+	}
+
 public:
 	static AssertionMatch Empty(EvalContext& eval, slang::SourceLocation loc) {
 		return { eval, ir::S1, ir::S1, 0, true, false, loc };
@@ -100,6 +117,10 @@ public:
 	}
 
 	AssertionMatch shift(int time) const {
+		if (start + time > SVA_LENGTH_LIMIT)
+			throw SvaLimitExceeded {};
+		add_cost(time);
+
 		if (empty)
 			return { eval, sig, en, start + time, true, frozen, loc };
 
@@ -114,6 +135,7 @@ public:
 
 	AssertionMatch operator||(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
+		add_cost(1);
 
 		ir::Value gated = en.is_fully_const() && en.as_bool() ? sig : ir::Value(eval.netlist.LogicAnd(en, sig));
 		ir::Value other_gated = other.en.is_fully_const() && other.en.as_bool()
@@ -126,6 +148,7 @@ public:
 
 	AssertionMatch operator&&(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
+		add_cost(1);
 
 		ir::Value result_en = eval.netlist.LogicAnd(en, other.en);
 		int result_start = std::max(other.start, start);
@@ -144,6 +167,7 @@ public:
 
 	AssertionMatch operator!() const {
 		assert_invariant(!empty);
+		add_cost(1);
 
 		if (sig.is_fully_const()) return { eval, sig.as_bool() ? ir::S0 : ir::S1, en, start, false, frozen, loc };
 		return { eval, eval.netlist.LogicNot(sig), en, start, false, frozen, loc };
@@ -351,21 +375,11 @@ static std::vector<AssertionMatch> synthesize_disable_iff(EvalContext& eval, con
 		max_start = std::max(max_start, path.start);
 	check_frozen_offset(disable, max_start);
 
-	std::vector<AssertionMatch> disables;
-	disables.push_back(disable);
-	std::vector<AssertionMatch> disable_windows;
-	for (int i = 0; i <= max_start; i++) {
-		std::optional<AssertionMatch> this_disables = {};
-		for (int t = 0; t <= i; t++) {
-			while ((int)disables.size() <= t)
-				disables.push_back(disables[disables.size() - 1].shift(1));
-
-			if (this_disables.has_value())
-				this_disables = this_disables.value() || disables[t];
-			else
-				this_disables = disables[t];
-		}
-		disable_windows.push_back(this_disables.value());
+	std::vector<AssertionMatch> disable_windows = { disable };
+	auto delayed_disable = disable;
+	for (int i = 1; i <= max_start; i++) {
+		delayed_disable = delayed_disable.shift(1);
+		disable_windows.push_back(disable_windows.back() || delayed_disable);
 	}
 
 	std::vector<AssertionMatch> results;
@@ -739,6 +753,8 @@ static bool clocking_matches_process(const ProcessTiming &clocking, const Proces
 // in flight run to completion regardless (IEEE Std 1800-2017 section 16.14.6).
 static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion,
 									  ir::Net attempt) {
+	eval.sva_lowering_cost = 0;
+
 	auto paths = property_paths(eval, synthesize_assertion_expr(eval, assertion), expr_loc(assertion));
 
 	const ast::AssertionExpr &top = unwrap_property_instances(assertion);
@@ -777,7 +793,13 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 		expr = &clocking_expr->expr;
 	}
 
-	AssertionResult result = eval_assertion(procedural.eval, *expr, procedural.case_enable());
+	AssertionResult result;
+	try {
+		result = eval_assertion(procedural.eval, *expr, procedural.case_enable());
+	} catch (const SvaLimitExceeded &) {
+		netlist.add_diag(diag::AssertionUnsupported, expr_loc(*expr));
+		return;
+	}
 
 	std::string flavor;
 	switch (statement.assertionKind) {
