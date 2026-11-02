@@ -837,6 +837,11 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
 	if (condition) {
+		// IEEE Std 1800-2017 section 16.12 has a simulator test the disable condition on
+		// current values at any time during the attempt. Like the other operands, we read
+		// it sampled on the ticks of the assertion's clock, as formal tools do. A condition
+		// changing on a clock edge thus takes effect one tick later than in simulation,
+		// and a pulse between two ticks goes unseen.
 		auto abort = AssertionMatch::Operand(eval, *condition, disable_loc);
 		abort.sig = eval.netlist.ReduceBool(abort.sig);
 		if (!abort.sig.is_fully_zero()) {
