@@ -1268,6 +1268,15 @@ void handle_display([[maybe_unused]] ProceduralContext &context, [[maybe_unused]
 #endif
 }
 
+// Is the symbol a formal argument or a local variable of a subroutine?
+static bool in_subroutine(const ast::Symbol &symbol)
+{
+	const ast::Scope *scope = symbol.getParentScope();
+	while (ast::StatementBlockSymbol::isKind(scope->asSymbol().kind))
+		scope = scope->asSymbol().getParentScope();
+	return ast::SubroutineSymbol::isKind(scope->asSymbol().kind);
+}
+
 ir::Value EvalContext::sva(ast::Expression const &expr)
 {
 	bool in_sva_expression_save = in_sva_expression;
@@ -1389,7 +1398,8 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 			ast_invariant(symbol, ast::ValueSymbol::isKind(symbol.kind));
 			Variable variable1 = variable(symbol.as<ast::ValueSymbol>());
 			assert_invariant((bool) variable1);
-			if (procedural && (!in_sva_expression || variable1.kind != Variable::Static)) {
+			if (procedural && (!in_sva_expression || variable1.kind != Variable::Static ||
+					in_subroutine(symbol))) {
 				if (procedural->timing.kind == ProcessTiming::Initial && ast::NetSymbol::isKind(symbol.kind)) {
 					netlist.add_diag(diag::ReadingNetStateFromInitialBlockUnsupported, expr.sourceRange);
 					ret = ir::Value(ir::Sx, expr.type->getBitstreamWidth());
