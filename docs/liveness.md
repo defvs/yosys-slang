@@ -108,11 +108,23 @@ An unbounded minimum delay is exact. For
 `s_eventually [m:$] p`, observations before sample `m` cannot complete the
 obligation; there is no artificial maximum.
 
-`disable iff` prevents a launch in the disabled sample and clears pending
-monitor state. A pending liveness goal is accepted in the disabling sample.
-`accept_on` uses the same abort behavior. `reject_on` on a pure liveness
-property adds a safety failure if the reject condition occurs while the
-obligation is active; a reject after completion does not fail.
+Aborts follow Annex F of IEEE 1800-2017. From the sample a `disable iff` or
+`accept_on` condition holds in, the letters of the attempts in flight are T:
+they meet every Boolean, so a pending liveness goal is accepted in that
+sample, while the antecedent of an implication sees them dual and starts no
+consequent. A failure settled before the abort stands, so does one of a
+finite part of a liveness property, such as the left side of a followed-by or
+the first element of a selected regular sequence. `reject_on` on a pure
+liveness property adds a safety failure if the reject condition occurs while
+the obligation is active; a reject after completion does not fail. Of aborts
+holding in the same sample, the outermost one wins.
+
+A `cover` is the dual of an assertion of the negated property, so the letters
+of its `disable iff` are the dual of T: an attempt is a success where it was
+settled true before the disable, such as by a completed match, while one
+still in progress in the disabling sample is dropped. An `accept_on` in a
+`cover` is a success with its T letters, as in an assertion, and a disable in
+a later sample has no bearing on it.
 
 Weak until enforces its left operand only while waiting for the right operand
 and does not require the right operand to arrive. Strong until adds that
@@ -146,6 +158,8 @@ cannot preserve the SVA meaning:
   justice goal;
 - `reject_on` around a property that already mixes safety and liveness
   obligations;
+- a `disable iff` nested in a property by way of instances, which IEEE
+  1800-2017 16.12 does not allow;
 - multiple or incompatible assertion clocks, sampled-value clock arguments,
   and temporal monitors with no single clock edge to run on: in `always_comb`
   or `always @*` with neither a clock of the assertion's own nor a default

@@ -1,0 +1,27 @@
+[tasks]
+selected_settled_fail
+selected_disabled_pass
+followed_disabled_pass
+
+[options]
+mode live
+selected_settled_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+selected_settled_fail: read_rtlil selected_settled_fail.il
+selected_settled_fail: chformal -assert -remove
+selected_settled_fail: prep -top selected_settled_fail
+selected_disabled_pass: read_rtlil selected_disabled_pass.il
+selected_disabled_pass: chformal -assert -remove
+selected_disabled_pass: prep -top selected_disabled_pass
+followed_disabled_pass: read_rtlil followed_disabled_pass.il
+followed_disabled_pass: chformal -assert -remove
+followed_disabled_pass: prep -top followed_disabled_pass
+
+[files]
+selected_settled_fail: selected_settled_fail.il
+selected_disabled_pass: selected_disabled_pass.il
+followed_disabled_pass: followed_disabled_pass.il

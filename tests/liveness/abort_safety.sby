@@ -1,0 +1,64 @@
+[tasks]
+antecedent_settled_fail
+antecedent_disabled_pass
+followed_settled_fail
+followed_disabled_pass
+not_always_pass
+not_always_fail
+strong_settled_fail
+strong_disabled_pass
+
+[options]
+mode prove
+depth 10
+antecedent_settled_fail: expect fail
+followed_settled_fail: expect fail
+not_always_fail: expect fail
+strong_settled_fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+antecedent_settled_fail: read_rtlil antecedent_settled_fail.il
+antecedent_settled_fail: chformal -live -remove
+antecedent_settled_fail: chformal -fair -remove
+antecedent_settled_fail: prep -top antecedent_settled_fail
+antecedent_disabled_pass: read_rtlil antecedent_disabled_pass.il
+antecedent_disabled_pass: chformal -live -remove
+antecedent_disabled_pass: chformal -fair -remove
+antecedent_disabled_pass: prep -top antecedent_disabled_pass
+followed_settled_fail: read_rtlil followed_settled_fail.il
+followed_settled_fail: chformal -live -remove
+followed_settled_fail: chformal -fair -remove
+followed_settled_fail: prep -top followed_settled_fail
+followed_disabled_pass: read_rtlil followed_disabled_pass.il
+followed_disabled_pass: chformal -live -remove
+followed_disabled_pass: chformal -fair -remove
+followed_disabled_pass: prep -top followed_disabled_pass
+not_always_pass: read_rtlil not_always_pass.il
+not_always_pass: chformal -live -remove
+not_always_pass: chformal -fair -remove
+not_always_pass: prep -top not_always_pass
+not_always_fail: read_rtlil not_always_fail.il
+not_always_fail: chformal -live -remove
+not_always_fail: chformal -fair -remove
+not_always_fail: prep -top not_always_fail
+strong_settled_fail: read_rtlil strong_settled_fail.il
+strong_settled_fail: chformal -live -remove
+strong_settled_fail: chformal -fair -remove
+strong_settled_fail: prep -top strong_settled_fail
+strong_disabled_pass: read_rtlil strong_disabled_pass.il
+strong_disabled_pass: chformal -live -remove
+strong_disabled_pass: chformal -fair -remove
+strong_disabled_pass: prep -top strong_disabled_pass
+
+[files]
+antecedent_settled_fail: antecedent_settled_fail.il
+antecedent_disabled_pass: antecedent_disabled_pass.il
+followed_settled_fail: followed_settled_fail.il
+followed_disabled_pass: followed_disabled_pass.il
+not_always_pass: not_always_pass.il
+not_always_fail: not_always_fail.il
+strong_settled_fail: strong_settled_fail.il
+strong_disabled_pass: strong_disabled_pass.il

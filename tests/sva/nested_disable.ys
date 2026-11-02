@@ -49,3 +49,21 @@ endmodule
 EOF
 
 select -assert-count 1 t:$check
+
+design -reset
+
+# The same goes for a liveness property
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module nested_live_disable(input logic clk, input logic r, input logic a, input logic b);
+	property disabled;
+		disable iff (r) s_eventually a;
+	endproperty
+
+	property instance_of_disabled;
+		disabled;
+	endproperty
+
+	nested_test: assert property (@(posedge clk) b |-> instance_of_disabled);
+endmodule
+EOF

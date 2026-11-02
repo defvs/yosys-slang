@@ -239,6 +239,9 @@ public:
 private:
 	EvalContext& eval;
 	SvaSequenceNfa& fsm;
+	// High where the letters are T, see AttemptContext. That is for a monitor of a single
+	// attempt, the attempts other monitors merge differ in the tick their letters change.
+	ir::Net top;
 	bool valid = true;
 
 	void unsupported(const ast::AssertionExpr& expr) {
@@ -248,6 +251,11 @@ private:
 
 	ir::Net expression_bit(const ast::Expression& expr) {
 		return eval.netlist.ReduceBool(eval.sva(expr));
+	}
+
+	// A boolean as of the letter, T satisfies any of them
+	ir::Net letter(ir::Net boolean) {
+		return eval.netlist.LogicOr(boolean, top);
 	}
 
 	int tick(int node) {
@@ -381,7 +389,9 @@ private:
 			unsupported(owner);
 			return {start, false};
 		}
-		ir::Net not_condition = sva_not(eval, condition);
+		// `!b` is a boolean of its own, T satisfies it as well as `b`
+		ir::Net not_condition = letter(sva_not(eval, condition));
+		condition = letter(condition);
 
 		// `b[->n]` is `(!b[*0:$] ##1 b)[*n]`
 		Fragment result = parse_repeat(start, repetition.range, [&](int node) {
@@ -416,8 +426,8 @@ private:
 	}
 
 public:
-	SvaSequenceBuilder(EvalContext& eval_, SvaSequenceNfa& fsm_):
-		eval(eval_), fsm(fsm_) {}
+	SvaSequenceBuilder(EvalContext& eval_, SvaSequenceNfa& fsm_, ir::Net top_ = ir::S0):
+		eval(eval_), fsm(fsm_), top(top_) {}
 
 	bool good() const {
 		return valid;
@@ -448,9 +458,9 @@ public:
 					return apply_repetition(start, body, simple.repetition, expr);
 				}
 				int node = fsm.create_node();
-				fsm.create_link(start, node,
+				fsm.create_link(start, node, letter(
 					simple.isNullExpr ? ir::S0 :
-					expression_bit(simple.expr));
+					expression_bit(simple.expr)));
 				return {node, false};
 			}
 
@@ -539,7 +549,7 @@ public:
 							unsupported(expr);
 							return {start, false};
 						}
-						fsm.push_throughout(condition);
+						fsm.push_throughout(letter(condition));
 						Fragment result = parse(start, binary.right);
 						fsm.pop_throughout();
 						return result;
@@ -576,16 +586,18 @@ public:
 	}
 };
 
-// An empty match has no end tick to be accepted on; `admits_empty` reports it
+// An empty match has no end tick to be accepted on; `admits_empty` reports it. A disable
+// drops the attempts in flight, which is what the dual letter does to them, while `top`
+// gives T letters to the one attempt of a monitor that has no others.
 static std::optional<ir::Net>
 synthesize_unbounded_sequence(EvalContext& eval, const ast::AssertionExpr& sequence,
-							  ir::Net trigger, ir::Net disable,
+							  ir::Net trigger, ir::Net disable, ir::Net top,
 							  bool *admits_empty = nullptr) {
 	if (!sva_clock_ready(eval, expr_loc(sequence)))
 		return std::nullopt;
 
 	SvaSequenceNfa fsm(eval, trigger, disable);
-	SvaSequenceBuilder builder(eval, fsm);
+	SvaSequenceBuilder builder(eval, fsm, top);
 	auto match = builder.parse(fsm.create_node(fsm.start_node), sequence);
 	if (!builder.good())
 		return std::nullopt;
@@ -978,6 +990,20 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 	return compress_paths(repeated);
 }
 
+// Did the disable of a cover come first, on one of the first `length` ticks of the attempt
+// and on none after an accept inside of it? From the first of the two on, the letters
+// are the dual of T for the disable, T for the accept. Of the two on the same tick the
+// disable wins, being the outer one.
+static AssertionMatch cover_disabled_first(const AssertionMatch& disable, DisableSpans& accept,
+										   int length) {
+	check_frozen_offset(disable, length);
+
+	AssertionMatch window = disable;
+	for (int i = 1; i <= length; i++)
+		window = window.shift(1) || (disable && !accept.span(1, i));
+	return window;
+}
+
 // Is the expression a property proper? With `and` and `or` it's enough for one of the
 // operands to be, the other one is then used as a property even if it's a sequence.
 static bool is_property(const ast::AssertionExpr& expr) {
@@ -1367,6 +1393,22 @@ struct PropertyResult {
 	bool valid = true;
 };
 
+// The aborts in effect on the attempts lower_property() starts on its trigger. An abort
+// that came ahead of the trigger tick has kept the attempts from getting there, so these
+// bear on an attempt from its first tick on. A trigger leaves the aborts of its own tick
+// to the monitors it starts.
+struct PropertyAborts {
+	// From the tick it holds on, the letters are T: a disable iff or an accept_on
+	ir::Net accept = ir::S0;
+	// The disable iff of a cover, from which the letters are the dual of T instead (see
+	// eval_assertion())
+	ir::Net cover_disable = ir::S0;
+
+	ir::Net any(EvalContext& eval) const {
+		return eval.netlist.LogicOr(accept, cover_disable);
+	}
+};
+
 struct EventualCandidate {
 	ir::Net match;
 	uint64_t duration;
@@ -1521,15 +1563,17 @@ static bool is_suffix_eventual_sequence(const ast::AssertionExpr& expr) {
 	}
 }
 
+// `trigger` delayed by `cycles`, short of the attempts a disable came upon on the ticks
+// in between. That of the tick it is delayed to is up to the monitor it starts.
 static ir::Net delayed_abortable_trigger(EvalContext& eval, ir::Net trigger, uint32_t cycles,
 										 ir::Net disable, slang::SourceLocation loc) {
 	ir::Net not_disable = sva_not(eval, disable);
-	ir::Net active = eval.netlist.LogicAnd(trigger, not_disable);
+	ir::Net active = trigger;
 	for (uint32_t i = 0; i < cycles; i++) {
 		active = eval.netlist.LogicAnd(active, not_disable);
 		active = delay_sva_sample(eval, active, 1, ir::S0, loc, "sva_obligation").as_net();
 	}
-	return eval.netlist.LogicAnd(active, not_disable);
+	return active;
 }
 
 static std::optional<std::vector<EventualCandidate>>
@@ -1739,7 +1783,12 @@ static void add_response_liveness_obligation(
 		 ir::S1, pending});
 }
 
-// `admits_empty` reports an empty match of the sequence
+// The ticks to start the right side of `sequence |-> p`, or of `sequence |=> p` if
+// `nonoverlapped`. `admits_empty` reports an empty match of the sequence.
+//
+// An antecedent sees the dual letter, which no boolean is met by, so a disable keeps
+// the attempts it comes upon from matching. Where the right side starts on the tick
+// after the match, the disable of that tick is left to it, like that of any trigger.
 static std::optional<ir::Net>
 antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 					   ir::Net trigger, bool nonoverlapped,
@@ -1748,24 +1797,27 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 	bool empty = false;
 	if (assertion_has_unbounded_sequence(sequence)) {
 		auto match = synthesize_unbounded_sequence(
-			eval, sequence, trigger, disable, &empty);
+			eval, sequence, trigger, disable, ir::S0, &empty);
 		if (!match.has_value())
 			return std::nullopt;
 		result = match.value();
 	} else {
-		// The disable is up to the monitor
-		auto paths = synthesize_assertion_expr(eval, AttemptContext(), sequence);
+		AttemptContext ctx;
+		ctx.dual = true;
+		std::optional<DisableSpans> spans;
+		if (disable != ir::S0)
+			ctx.abort = &spans.emplace(AssertionMatch(eval, disable, expr_loc(sequence)));
+		auto paths = synthesize_assertion_expr(eval, ctx, sequence);
 		for (const auto& path : compress_paths(paths)) {
 			if (path.empty) {
 				empty = true;
 				continue;
 			}
-			ir::Net path_trigger = delayed_abortable_trigger(
-				eval, trigger, uint32_t(path.start), disable, path.loc);
 			ir::Net path_match = eval.netlist.LogicAnd(
 				eval.netlist.ReduceBool(path.sig),
 				eval.netlist.ReduceBool(path.en));
-			path_match = eval.netlist.LogicAnd(path_match, path_trigger);
+			path_match = eval.netlist.LogicAnd(path_match,
+				delay_sva_sample(eval, trigger, path.start, ir::S0, path.loc).as_net());
 			result = eval.netlist.LogicOr(result, path_match);
 		}
 	}
@@ -1779,7 +1831,7 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 		if (empty)
 			result = eval.netlist.LogicOr(result, trigger);
 	}
-	return eval.netlist.LogicAnd(result, sva_not(eval, disable));
+	return result;
 }
 
 static void add_liveness_obligation(PropertyResult& result, EvalContext& eval,
@@ -1919,14 +1971,15 @@ static ir::Net add_selected_trigger(
 }
 
 // High on the last tick of a non-empty match of the sequence the selected attempt
-// started. An empty match has no such tick, `admits_empty` reports it.
+// started. An empty match has no such tick, `admits_empty` reports it. The letters of
+// the attempt are T where `top` is high, see AttemptContext.
 static std::optional<ir::Net> synthesize_selected_sequence(
 		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net disable, bool& admits_empty);
+		ir::Net trigger, ir::Net top, bool& admits_empty);
 
 static std::optional<ir::Net> synthesize_selected_sequence(
 		EvalContext& eval, const ast::AssertionExpr& sequence,
-		ir::Net trigger, ir::Net disable, bool& admits_empty) {
+		ir::Net trigger, ir::Net top, bool& admits_empty) {
 	admits_empty = false;
 	if (sequence.kind == ast::AssertionExprKind::Simple) {
 		const auto& simple = sequence.as<ast::SimpleAssertionExpr>();
@@ -1936,7 +1989,7 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 				simple.expr.as<ast::AssertionInstanceExpression>();
 			if (!instance.isRecursiveProperty)
 				return synthesize_selected_sequence(
-					eval, instance.body, trigger, disable, admits_empty);
+					eval, instance.body, trigger, top, admits_empty);
 		}
 	}
 	if (sequence.kind == ast::AssertionExprKind::FirstMatch) {
@@ -1947,7 +2000,7 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 			return std::nullopt;
 		}
 		auto match = synthesize_selected_sequence(
-			eval, first.seq, trigger, disable, admits_empty);
+			eval, first.seq, trigger, top, admits_empty);
 		// An empty match comes ahead of any other, so it's the only first match
 		if (match.has_value() && admits_empty)
 			return ir::S0;
@@ -1961,9 +2014,9 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		case ast::BinaryAssertionOperator::Or:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable, left_empty);
+					eval, binary.left, trigger, top, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable, right_empty);
+					eval, binary.right, trigger, top, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
 				admits_empty = left_empty || right_empty;
@@ -1972,26 +2025,26 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		case ast::BinaryAssertionOperator::And:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable, left_empty);
+					eval, binary.left, trigger, top, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable, right_empty);
+					eval, binary.right, trigger, top, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
 				admits_empty = left_empty && right_empty;
 				ir::Net left_seen = add_sticky_observation(
-					eval, left.value(), disable, expr_loc(binary.left),
+					eval, left.value(), ir::S0, expr_loc(binary.left),
 					"sva_and_left");
 				ir::Net right_seen = add_sticky_observation(
-					eval, right.value(), disable, expr_loc(binary.right),
+					eval, right.value(), ir::S0, expr_loc(binary.right),
 					"sva_and_right");
 				return eval.netlist.LogicAnd(left_seen, right_seen);
 			}
 		case ast::BinaryAssertionOperator::Intersect:
 			{
 				auto left = synthesize_selected_sequence(
-					eval, binary.left, trigger, disable, left_empty);
+					eval, binary.left, trigger, top, left_empty);
 				auto right = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable, right_empty);
+					eval, binary.right, trigger, top, right_empty);
 				if (!left.has_value() || !right.has_value())
 					return std::nullopt;
 				admits_empty = left_empty && right_empty;
@@ -2000,17 +2053,17 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		case ast::BinaryAssertionOperator::Within:
 			{
 				ir::Net delayed_start = add_sticky_observation(
-					eval, trigger, disable, expr_loc(binary.left),
+					eval, trigger, ir::S0, expr_loc(binary.left),
 					"sva_within_start");
 				auto inner = synthesize_selected_sequence(
-					eval, binary.left, delayed_start, disable, left_empty);
+					eval, binary.left, delayed_start, top, left_empty);
 				auto outer = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable, right_empty);
+					eval, binary.right, trigger, top, right_empty);
 				if (!inner.has_value() || !outer.has_value())
 					return std::nullopt;
 				admits_empty = left_empty && right_empty;
 				ir::Net inner_seen = add_sticky_observation(
-					eval, inner.value(), disable, expr_loc(binary.left),
+					eval, inner.value(), ir::S0, expr_loc(binary.left),
 					"sva_within_seen");
 				return eval.netlist.LogicAnd(inner_seen, outer.value());
 			}
@@ -2024,17 +2077,17 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 					return std::nullopt;
 				}
 				auto body = synthesize_selected_sequence(
-					eval, binary.right, trigger, disable, admits_empty);
+					eval, binary.right, trigger, top, admits_empty);
 				if (!body.has_value())
 					return std::nullopt;
 				ir::Net active = add_sticky_observation(
-					eval, trigger, disable, expr_loc(binary.right),
+					eval, trigger, ir::S0, expr_loc(binary.right),
 					"sva_throughout_active");
 				ir::Net invalid = add_sticky_observation(
 					eval,
-					eval.netlist.LogicAnd(active,
-						sva_not(eval, condition.value())),
-					disable, expr_loc(binary.right),
+					eval.netlist.LogicAnd(active, sva_not(eval,
+						eval.netlist.LogicOr(condition.value(), top))),
+					ir::S0, expr_loc(binary.right),
 					"sva_throughout_invalid");
 				return eval.netlist.LogicAnd(
 					body.value(),
@@ -2045,28 +2098,49 @@ static std::optional<ir::Net> synthesize_selected_sequence(
 		}
 	}
 	return synthesize_unbounded_sequence(
-		eval, sequence, trigger, disable, &admits_empty);
+		eval, sequence, trigger, ir::S0, top, &admits_empty);
 }
 
 static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr& expr,
-									 ir::Net trigger = ir::S1,
-									 ir::Net disable = ir::S0);
+									 ir::Net trigger, const PropertyAborts& aborts);
 
+// The paths of `expr` get the letters of the aborts the way eval_assertion() does, as of
+// the trigger tick, so a failure settled ahead of a disable stands
 static PropertyResult lower_finite_property_from_trigger(
 		EvalContext& eval, const ast::AssertionExpr& expr,
-		ir::Net trigger, ir::Net disable) {
+		ir::Net trigger, const PropertyAborts& aborts) {
 	PropertyResult result;
-	// The disable is up to the monitor
-	AttemptContext ctx;
-	auto paths = property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, expr), expr_loc(expr));
-	auto match = collapse_or(paths);
+	slang::SourceLocation loc = expr_loc(expr);
+	ir::Net abort = aborts.any(eval);
+	DisableSpans spans(AssertionMatch(eval, abort, loc));
+	auto synthesize = [&](bool dual) {
+		AttemptContext ctx;
+		if (abort != ir::S0)
+			ctx.abort = &spans;
+		ctx.dual = dual;
+		return collapse_or(property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, expr), loc));
+	};
+	bool cover = aborts.cover_disable != ir::S0;
+	AssertionMatch match = synthesize(cover && aborts.accept == ir::S0);
+	if (cover && aborts.accept != ir::S0) {
+		// The letters depend on which of the two came first
+		AssertionMatch dual = synthesize(true);
+		assert_invariant(dual.start == match.start);
+		DisableSpans accept(AssertionMatch(eval, aborts.accept, loc));
+		ir::Net disabled = eval.netlist.ReduceBool(cover_disabled_first(
+			AssertionMatch(eval, aborts.cover_disable, loc), accept, match.start).sig);
+		match.sig = eval.netlist.Mux(eval.netlist.ReduceBool(match.sig),
+									 eval.netlist.ReduceBool(dual.sig), disabled);
+		match.en = eval.netlist.Mux(eval.netlist.ReduceBool(match.en),
+									eval.netlist.ReduceBool(dual.en), disabled);
+	}
 	auto init_escape = delay_sva_sample(
 		eval, ir::S0, match.start,
 		ir::S1, match.loc);
 	ir::Net frame_ready =
 		sva_not(eval, eval.netlist.ReduceBool(init_escape));
-	ir::Net enable = delayed_abortable_trigger(
-		eval, trigger, match.start, disable, match.loc);
+	ir::Net enable = delay_sva_sample(
+		eval, trigger, match.start, ir::S0, match.loc).as_net();
 	enable = eval.netlist.LogicAnd(enable,
 		eval.netlist.ReduceBool(match.en));
 	enable = eval.netlist.LogicAnd(enable, frame_ready);
@@ -2224,13 +2298,14 @@ justice_candidates(EvalContext& eval, const ast::AssertionExpr& expr) {
 
 static PropertyResult lower_eventual(EvalContext& eval,
 									 const ast::UnaryAssertionExpr& eventual,
-									 ir::Net trigger, ir::Net disable) {
+									 ir::Net trigger, const PropertyAborts& aborts) {
 	PropertyResult result;
 	if (eventual.range.has_value() && eventual.range->max.has_value()) {
 		return lower_finite_property_from_trigger(
-			eval, eventual, trigger, disable);
+			eval, eventual, trigger, aborts);
 	}
 
+	ir::Net disable = aborts.any(eval);
 	uint32_t minimum = eventual.range.has_value() ? eventual.range->min : 0;
 	if (assertion_has_unbounded_sequence(eventual.expr) &&
 		!is_suffix_eventual_sequence(eventual.expr)) {
@@ -2241,12 +2316,14 @@ static PropertyResult lower_eventual(EvalContext& eval,
 		selected = delayed_abortable_trigger(
 			eval, selected, minimum, disable, expr_loc(eventual));
 		ir::Net future_start = add_sticky_observation(
-			eval, selected, disable, expr_loc(eventual),
+			eval, selected, ir::S0, expr_loc(eventual),
 			"sva_eventual_start");
-		// The operand is used as a property, so an empty match of it meets nothing
+		// The operand is used as a property, so an empty match of it meets nothing.
+		// T letters would start a match of it on any tick, so the goal is left to
+		// the real ones and a disable discharges the attempt.
 		bool admits_empty;
 		auto goal = synthesize_selected_sequence(
-			eval, eventual.expr, future_start, disable, admits_empty);
+			eval, eventual.expr, future_start, ir::S0, admits_empty);
 		if (!goal.has_value())
 			return {{}, false};
 		add_liveness_obligation(
@@ -2340,14 +2417,14 @@ static PropertyResult lower_until(EvalContext& eval,
 }
 
 static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr& expr,
-									 ir::Net trigger, ir::Net disable) {
+									 ir::Net trigger, const PropertyAborts& aborts) {
+	// lower_sva_obligations() takes the one a property is allowed, at the top of it.
+	// slang only rejects the others in direct instances of a property.
 	if (expr.kind == ast::AssertionExprKind::DisableIff) {
-		const auto& disabled = expr.as<ast::DisableIffAssertionExpr>();
-		ir::Net condition =
-			eval.netlist.ReduceBool(eval.sva(disabled.condition));
-		return lower_property(eval, disabled.expr, trigger,
-							  eval.netlist.LogicOr(disable, condition));
+		eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+		return {{}, false};
 	}
+	ir::Net disable = aborts.any(eval);
 
 	// The body of a repeated instance is only one of the iterations, the repetition
 	// is lowered as a sequence along with it
@@ -2362,7 +2439,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 									  simple.expr.sourceRange);
 				return {{}, false};
 			}
-			return lower_property(eval, instance.body, trigger, disable);
+			return lower_property(eval, instance.body, trigger, aborts);
 		}
 	}
 
@@ -2370,7 +2447,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		const auto& unary = expr.as<ast::UnaryAssertionExpr>();
 		if (unary.op == ast::UnaryAssertionOperator::Eventually ||
 			unary.op == ast::UnaryAssertionOperator::SEventually)
-			return lower_eventual(eval, unary, trigger, disable);
+			return lower_eventual(eval, unary, trigger, aborts);
 		if (unary.op == ast::UnaryAssertionOperator::Always ||
 			unary.op == ast::UnaryAssertionOperator::SAlways)
 			return lower_always(eval, unary, trigger, disable);
@@ -2429,7 +2506,8 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 							eval, trigger, maximum, disable,
 							expr_loc(expr));
 					PropertyResult result;
-					add_safety_obligation(result, seen, enable);
+					add_safety_obligation(result, seen,
+						eval.netlist.LogicAnd(enable, sva_not(eval, disable)));
 					return result;
 				}
 				PropertyResult result;
@@ -2451,12 +2529,12 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				return {{}, false};
 			}
 			return lower_finite_property_from_trigger(
-				eval, strong_weak.expr, trigger, disable);
+				eval, strong_weak.expr, trigger, aborts);
 		}
 
 		if (!assertion_has_unbounded_sequence(strong_weak.expr)) {
 			return lower_finite_property_from_trigger(
-				eval, strong_weak.expr, trigger, disable);
+				eval, strong_weak.expr, trigger, aborts);
 		}
 		if (strong_weak.expr.kind == ast::AssertionExprKind::Binary) {
 			const auto& binary =
@@ -2478,7 +2556,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						expr_loc(binary.left));
 				} else {
 					left = lower_finite_property_from_trigger(
-						eval, binary.left, trigger, disable);
+						eval, binary.left, trigger, aborts);
 				}
 				if (assertion_has_unbounded_sequence(binary.right)) {
 					auto candidates =
@@ -2490,7 +2568,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						expr_loc(binary.right));
 				} else {
 					right = lower_finite_property_from_trigger(
-						eval, binary.right, trigger, disable);
+						eval, binary.right, trigger, aborts);
 				}
 				left.valid = left.valid && right.valid;
 				left.obligations.insert(left.obligations.end(),
@@ -2505,14 +2583,28 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				result, eval, trigger, disable, expr_loc(expr));
 			if (!result.valid)
 				return result;
+			// A disable leaves the selected attempt to T letters, which complete a
+			// match if the sequence has one left by then, else it fails. A monitor of
+			// the one attempt can tell its letters apart.
+			ir::Net started = add_sticky_observation(
+				eval, selected, ir::S0, expr_loc(expr), "sva_select_started");
+			ir::Net top = add_sticky_observation(
+				eval, eval.netlist.LogicAnd(started, disable), ir::S0, expr_loc(expr),
+				"sva_select_top");
 			// An empty match is no success of the sequence used as a property
 			bool admits_empty;
 			auto goal = synthesize_selected_sequence(
-				eval, strong_weak.expr, selected, disable, admits_empty);
+				eval, strong_weak.expr, selected, top, admits_empty);
 			if (!goal.has_value())
 				return {{}, false};
 			add_liveness_obligation(
-				result, eval, goal.value(), selected, disable, expr_loc(expr));
+				result, eval, goal.value(), selected, ir::S0, expr_loc(expr));
+			// The attempt is settled on the tick of the disable, though the match
+			// comes later
+			auto& obligation = result.obligations.back();
+			obligation.active = eval.netlist.LogicAnd(
+				eval.netlist.ReduceBool(obligation.active),
+				sva_not(eval, delay_sva_sample(eval, top, 1, ir::S0, expr_loc(expr)).as_net()));
 			return result;
 		}
 		auto candidates =
@@ -2532,12 +2624,14 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		// read as the current value
 		ir::Net condition = eval.netlist.ReduceBool(
 			abort.isSync ? eval.sva(abort.condition) : eval(abort.condition));
-		if (abort.action == ast::AbortAssertionExpr::Accept)
-			return lower_property(eval, abort.expr, trigger,
-								  eval.netlist.LogicOr(disable, condition));
+		if (abort.action == ast::AbortAssertionExpr::Accept) {
+			PropertyAborts inner = aborts;
+			inner.accept = eval.netlist.LogicOr(aborts.accept, condition);
+			return lower_property(eval, abort.expr, trigger, inner);
+		}
 
 		PropertyResult result =
-			lower_property(eval, abort.expr, trigger, disable);
+			lower_property(eval, abort.expr, trigger, aborts);
 		if (!result.valid)
 			return result;
 		bool has_liveness = false;
@@ -2573,11 +2667,11 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			eval.netlist.ReduceBool(eval.sva(conditional.condition));
 		PropertyResult result = lower_property(
 			eval, conditional.ifExpr,
-			eval.netlist.LogicAnd(trigger, condition), disable);
+			eval.netlist.LogicAnd(trigger, condition), aborts);
 		if (conditional.elseExpr) {
 			PropertyResult else_result = lower_property(
 				eval, *conditional.elseExpr,
-				eval.netlist.LogicAnd(trigger, sva_not(eval, condition)), disable);
+				eval.netlist.LogicAnd(trigger, sva_not(eval, condition)), aborts);
 			result.valid = result.valid && else_result.valid;
 			result.obligations.insert(result.obligations.end(),
 									  else_result.obligations.begin(),
@@ -2600,7 +2694,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 			item_hit = eval.netlist.LogicAnd(item_hit, sva_not(eval, matched));
 			PropertyResult branch = lower_property(
 				eval, *item.body,
-				eval.netlist.LogicAnd(trigger, item_hit), disable);
+				eval.netlist.LogicAnd(trigger, item_hit), aborts);
 			result.valid = result.valid && branch.valid;
 			result.obligations.insert(result.obligations.end(),
 									 branch.obligations.begin(),
@@ -2610,7 +2704,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		if (case_expr.defaultCase) {
 			PropertyResult branch = lower_property(
 				eval, *case_expr.defaultCase,
-				eval.netlist.LogicAnd(trigger, sva_not(eval, matched)), disable);
+				eval.netlist.LogicAnd(trigger, sva_not(eval, matched)), aborts);
 			result.valid = result.valid && branch.valid;
 			result.obligations.insert(result.obligations.end(),
 									 branch.obligations.begin(),
@@ -2637,7 +2731,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				ir::Net consequent_trigger = eval.netlist.LogicAnd(
 					trigger, antecedent.value());
 				return lower_property(
-					eval, binary.right, consequent_trigger, disable);
+					eval, binary.right, consequent_trigger, aborts);
 			}
 
 		case ast::BinaryAssertionOperator::Iff:
@@ -2653,10 +2747,12 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						expr_loc(expr));
 					return {{}, false};
 				}
+				// T letters meet it, a disable of a cover drops the attempt
 				PropertyResult result;
 				add_safety_obligation(
-					result, eval.netlist.Eq(left.value(), right.value()),
-					eval.netlist.LogicAnd(trigger, sva_not(eval, disable)));
+					result, eval.netlist.LogicOr(eval.netlist.Eq(left.value(), right.value()),
+												 aborts.accept),
+					eval.netlist.LogicAnd(trigger, sva_not(eval, aborts.cover_disable)));
 				return result;
 			}
 
@@ -2678,8 +2774,8 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				ir::Net consequent_trigger = antecedent.value();
 				if (!temporal_consequent)
 					return lower_finite_property_from_trigger(
-						eval, binary.right, consequent_trigger, disable);
-				return lower_property(eval, binary.right, consequent_trigger, disable);
+						eval, binary.right, consequent_trigger, aborts);
+				return lower_property(eval, binary.right, consequent_trigger, aborts);
 			}
 
 		case ast::BinaryAssertionOperator::OverlappedFollowedBy:
@@ -2717,10 +2813,10 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					// An empty match of R is none for `R #-# P`, while `R #=# P` is
 					// `(R ##1 `true) #-# P`, which it matches on the attempt's tick
 					result = lower_finite_property_from_trigger(
-						eval, binary.left, trigger, disable);
+						eval, binary.left, trigger, aborts);
 				}
 				PropertyResult consequent = lower_property(
-					eval, binary.right, antecedent.value(), disable);
+					eval, binary.right, antecedent.value(), aborts);
 				result.valid = result.valid && consequent.valid;
 				result.obligations.insert(
 					result.obligations.end(),
@@ -2743,9 +2839,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					!assertion_has_unbounded_sequence(binary.right))
 					break;
 				PropertyResult left =
-					lower_property(eval, binary.left, trigger, disable);
+					lower_property(eval, binary.left, trigger, aborts);
 				PropertyResult right =
-					lower_property(eval, binary.right, trigger, disable);
+					lower_property(eval, binary.right, trigger, aborts);
 				left.valid = left.valid && right.valid;
 				left.obligations.insert(left.obligations.end(),
 										right.obligations.begin(),
@@ -2782,7 +2878,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 	}
 
 	return lower_finite_property_from_trigger(
-		eval, expr, trigger, disable);
+		eval, expr, trigger, aborts);
 }
 
 // Does lower_property() take nothing of `expr` apart, but lower all of it by its paths?
@@ -2955,18 +3051,32 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 		return;
 	}
 
-	ir::Net disable = ir::S0;
-	if (!ast::DisableIffAssertionExpr::isKind(unwrap_property_instances(expr).kind) &&
-			netlist.process_scope) {
+	// The disable iff at the top of the property, or else the default one
+	const ast::AssertionExpr *property = &expr;
+	const ast::Expression *condition = nullptr;
+	const ast::AssertionExpr &top = unwrap_property_instances(expr);
+	if (ast::DisableIffAssertionExpr::isKind(top.kind)) {
+		const auto &disableiff = top.as<ast::DisableIffAssertionExpr>();
+		property = &disableiff.expr;
+		condition = &disableiff.condition;
+	} else if (netlist.process_scope) {
 		auto scope = netlist.process_scope;
-		if (auto condition = scope->getCompilation().getDefaultDisable(*scope))
-			disable = netlist.ReduceBool(procedural.eval.sva(*condition));
+		condition = scope->getCompilation().getDefaultDisable(*scope);
+	}
+
+	PropertyAborts aborts;
+	if (condition) {
+		ir::Net disable = netlist.ReduceBool(procedural.eval.sva(*condition));
+		if (statement.assertionKind == ast::AssertionKind::CoverProperty)
+			aborts.cover_disable = disable;
+		else
+			aborts.accept = disable;
 	}
 
 	// The monitors start an attempt where the procedural condition holds, the attempts
 	// then run to completion regardless of it
 	size_t issued = netlist.issued_diagnostics.size();
-	PropertyResult result = lower_property(procedural.eval, expr, attempt, disable);
+	PropertyResult result = lower_property(procedural.eval, *property, attempt, aborts);
 	if (!result.valid) {
 		// The property is left out of the netlist, which takes an error to say so
 		assert_invariant(netlist.issued_diagnostics.size() > issued);

@@ -30,6 +30,8 @@ cp -- "${test_dir}/reject_safety.sby" "${work_dir}/reject_safety.sby"
 cp -- "${test_dir}/procedural.sby" "${work_dir}/procedural.sby"
 cp -- "${test_dir}/sequence.sby" "${work_dir}/sequence.sby"
 cp -- "${test_dir}/sequence_safety.sby" "${work_dir}/sequence_safety.sby"
+cp -- "${test_dir}/abort.sby" "${work_dir}/abort.sby"
+cp -- "${test_dir}/abort_safety.sby" "${work_dir}/abort_safety.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -176,6 +178,29 @@ do
 	"
 done
 
+for top in \
+	selected_settled_fail \
+	selected_disabled_pass \
+	antecedent_settled_fail \
+	antecedent_disabled_pass \
+	followed_settled_fail \
+	followed_disabled_pass \
+	not_always_pass \
+	not_always_fail \
+	strong_settled_fail \
+	strong_disabled_pass
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/abort_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
 yosys -q -m "${plugin}" -p "
 	read_slang -DMUTATE_LIVENESS ${test_dir}/response_proof.sv;
 	prep -top response_proof;
@@ -207,4 +232,7 @@ yosys -q -m "${plugin}" -p "
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/sequence" \
 		-f sequence.sby
 	sby --prefix "${work_dir}/sequence_safety" -f sequence_safety.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/abort" \
+		-f abort.sby
+	sby --prefix "${work_dir}/abort_safety" -f abort_safety.sby
 )
