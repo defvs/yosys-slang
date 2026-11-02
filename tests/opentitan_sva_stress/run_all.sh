@@ -60,7 +60,7 @@ done
   echo "| prim_alert_rxtx_assert_fpv.sv | AlertReqAck_A / AlertCheck1_A / FsmLiveness*_A | unbounded strong eventuality |"
   echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A / AlertCheck0_A | throughout/goto or consecutive repetition |"
   echo "| prim_esc_rxtx_assert_fpv.sv | EscDeassert_A / FsmLiveness*_A | unbounded strong eventuality and/or consecutive repetition |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | init_pending receiver-state helper | hierarchical enum literals triggered missing-wire frontend error; helper rewritten because remaining enabled properties do not depend on it |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | init_pending receiver-state helper | hierarchical enum literals triggered missing-wire frontend error; rewritten to their numeric encoding |"
   echo "| clkmgr_cg_en_sva_if.sv | scanmode enum literal | hierarchical package enum literal rewritten to numeric MuBi4True encoding |"
   echo "| sha3pad_assert_if.sv | ProcessToRun_A / RunThenComplete_M | unbounded strong eventuality |"
   echo "| tlul_assert.sv | knownness assertions | \$isunknown is not synthesized |"
