@@ -744,6 +744,12 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				return compress_paths(results);
 			}
 		case slang::ast::AssertionExprKind::StrongWeak:
+			{
+				// The sequence used as a property. A bounded one has settled every match
+				// it has once its longest path is over, where weak and strong agree.
+				const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
+				return property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, strong_weak.expr), expr_loc(expr));
+			}
 		case slang::ast::AssertionExprKind::Abort:
 		case slang::ast::AssertionExprKind::Conditional:
 		case slang::ast::AssertionExprKind::Case:
