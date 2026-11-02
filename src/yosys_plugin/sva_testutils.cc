@@ -74,19 +74,24 @@ struct TestSlangsvaPass : Pass
 							log_id(ref));
 				}
 
+				// A cover acts on `A` being high, asserts and assumes on it being low
+				bool is_cover = ref->getParam(ID::FLAVOR).decode_string() == "cover";
+				auto acts = [&](RTLIL::Cell *cell) {
+					RTLIL::SigSpec a = cell->getPort(ID::A);
+					return m->And(NEW_ID, cell->getPort(ID::EN), is_cover ? a : m->Not(NEW_ID, a));
+				};
+
 				RTLIL::Cell *compare = m->addCell(
 						ref->name.substr(0, ref->name.size() - 4) + "_compare", ID($check));
 
+				// What we prove is the match, whichever flavor the pair is of
 				compare->parameters = ref->parameters;
+				compare->setParam(ID::FLAVOR, std::string("assert"));
 				compare->setParam(ID::PRIORITY, 0);
 				compare->setPort(ID::TRG, ref->getPort(ID::TRG));
 				compare->setPort(ID::EN, RTLIL::S1);
 				compare->setPort(ID::ARGS, {});
-				compare->setPort(ID::A, m->Eqx(NEW_ID,
-												m->And(NEW_ID, test->getPort(ID::EN),
-														m->Not(NEW_ID, test->getPort(ID::A))),
-												m->And(NEW_ID, ref->getPort(ID::EN),
-														m->Not(NEW_ID, ref->getPort(ID::A)))));
+				compare->setPort(ID::A, m->Eqx(NEW_ID, acts(test), acts(ref)));
 
 				m->remove(ref);
 				m->remove(test);
