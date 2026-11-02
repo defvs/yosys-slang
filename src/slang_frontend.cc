@@ -1396,6 +1396,11 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 				return (*this)(*modport_port.getConnectionExpr());
 			}
 
+			if (ast::ClockVarSymbol::isKind(symbol.kind)) {
+				netlist.add_diag(diag::ClockVarUnsupported, expr.sourceRange);
+				goto error;
+			}
+
 			ast_invariant(symbol, ast::ValueSymbol::isKind(symbol.kind));
 			Variable variable1 = variable(symbol.as<ast::ValueSymbol>());
 			assert_invariant((bool) variable1);

@@ -67,6 +67,12 @@ std::optional<LValue> LValue::analyze(
 					context, *symbol.as<ast::ModportPortSymbol>().getConnectionExpr(), silent);
 		}
 
+		if (symbol.kind == ast::SymbolKind::ClockVar) {
+			if (!silent)
+				context.netlist.add_diag(diag::ClockVarUnsupported, expr.sourceRange);
+			return std::nullopt;
+		}
+
 		Variable var = context.variable(symbol);
 		return LValue::variable(var);
 	}

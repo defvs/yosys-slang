@@ -140,6 +140,7 @@ DiagCode HighImpedanceUnsupported(DiagSubsystem::Netlist, 1086);
 DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
 DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
+DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -377,6 +378,9 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(OptionRequiresStandaloneSlang, "option '{}' unsupported; please use standalone slang instead");
 	engine.setSeverity(OptionRequiresStandaloneSlang, DiagnosticSeverity::Error);
+
+	engine.setMessage(ClockVarUnsupported, "clocking block signals unsupported");
+	engine.setSeverity(ClockVarUnsupported, DiagnosticSeverity::Error);
 	// clang-format on
 }
 }; // namespace diag

@@ -109,3 +109,27 @@ module sequence_event(input logic clk, input logic a, input logic b, input logic
 	always @(s) q <= d;
 endmodule
 EOF
+
+design -reset
+
+test_slangdiag -expect "clocking block signals unsupported"
+read_slang <<EOF
+module clocking_block_input(input logic clk, input logic a, input logic b);
+	default clocking cb @(posedge clk);
+		input a, b;
+	endclocking
+	input_test: assert property (cb.a |=> cb.b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "clocking block signals unsupported"
+read_slang <<EOF
+module clocking_block_output(input logic clk, input logic d, output logic q);
+	default clocking cb @(posedge clk);
+		output q;
+	endclocking
+	always @(posedge clk) cb.q <= d;
+endmodule
+EOF
