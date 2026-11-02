@@ -150,6 +150,7 @@ DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1098);
 DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1099);
 DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1100);
 DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1101);
+DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1102);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -243,6 +244,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVASequenceProductUnsupported,
 					  "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`");
 	engine.setSeverity(SVASequenceProductUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAFollowedByUnsupported,
+					  "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough");
+	engine.setSeverity(SVAFollowedByUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);

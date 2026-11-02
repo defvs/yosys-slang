@@ -1975,8 +1975,9 @@ static void add_response_liveness_obligation(
 }
 
 // The ticks to start the right side of `sequence |-> p`, or of `sequence |=> p` if
-// `nonoverlapped`. `admits_empty` reports an empty match of the sequence. `attempt_tick`
-// tells if the trigger is on the first tick of the attempts only.
+// `nonoverlapped`. `admits_empty` reports an empty match of the sequence, `one_tick`
+// whether all its matches start the right side on one and the same tick of the attempt.
+// `attempt_tick` tells if the trigger is on the first tick of the attempts only.
 //
 // An antecedent sees the dual letter, which no boolean is met by, so a disable keeps
 // the attempts it comes upon from matching. Where the right side starts on the tick
@@ -1984,10 +1985,13 @@ static void add_response_liveness_obligation(
 static std::optional<ir::Net>
 antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 					   ir::Net trigger, bool attempt_tick, bool nonoverlapped,
-					   ir::Net disable, bool *admits_empty = nullptr) {
+					   ir::Net disable, bool *admits_empty = nullptr,
+					   bool *one_tick = nullptr) {
 	ir::Net result = ir::S0;
 	bool empty = false;
+	int ticks = 0;
 	if (assertion_has_unbounded_sequence(sequence)) {
+		ticks = 2;
 		auto match = synthesize_unbounded_sequence(
 			eval, sequence, trigger, disable, ir::S0, attempt_tick, &empty);
 		if (!match.has_value())
@@ -2001,11 +2005,15 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 		if (disable != ir::S0)
 			ctx.abort = &spans.emplace(AssertionMatch(eval, disable, expr_loc(sequence)));
 		auto paths = synthesize_assertion_expr(eval, ctx, sequence);
+		// One path per length of match
 		for (const auto& path : compress_paths(paths)) {
 			if (path.empty) {
 				empty = true;
 				continue;
 			}
+			if (!(path.sig.is_fully_const() && !path.sig.as_bool()) &&
+				!(path.en.is_fully_const() && !path.en.as_bool()))
+				ticks++;
 			ir::Net path_match = eval.netlist.LogicAnd(
 				eval.netlist.ReduceBool(path.sig),
 				eval.netlist.ReduceBool(path.en));
@@ -2013,9 +2021,13 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 				delay_sva_sample(eval, trigger, path.start, ir::S0, path.loc).as_net());
 			result = eval.netlist.LogicOr(result, path_match);
 		}
+		if (empty && nonoverlapped)
+			ticks++;
 	}
 	if (admits_empty)
 		*admits_empty = empty;
+	if (one_tick)
+		*one_tick = ticks <= 1;
 	// `seq |-> p` has no tick to start `p` on after an empty match, but
 	// `seq |=> p` is `(seq ##1 `true) |-> p` where it matches on the first tick
 	if (nonoverlapped) {
@@ -3220,28 +3232,26 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 				bool nonoverlapped =
 					binary.op ==
 					ast::BinaryAssertionOperator::NonOverlappedFollowedBy;
+				// `R #-# P` is `not (R |-> not P)`, one match of R with P from it is
+				// enough (IEEE Std 1800-2017 section 16.12.9), while the consequent
+				// starts on every match. That is the same where all the matches of
+				// an attempt start it on one tick.
 				bool admits_empty = false;
-				auto antecedent = antecedent_match_event(
-					eval, binary.left, trigger, attempt_tick, nonoverlapped, disable,
-					&admits_empty);
+				bool one_tick = false;
+				std::optional<ir::Net> antecedent;
+				if (!assertion_has_unbounded_sequence(binary.left))
+					antecedent = antecedent_match_event(
+						eval, binary.left, trigger, attempt_tick, nonoverlapped, disable,
+						&admits_empty, &one_tick);
+				if (!one_tick) {
+					eval.netlist.add_diag(diag::SVAFollowedByUnsupported,
+										  expr_loc(binary.left));
+					return {{}, false};
+				}
 				if (!antecedent.has_value())
 					return {{}, false};
 				PropertyResult result;
-				if (assertion_has_unbounded_sequence(binary.left)) {
-					if (!is_suffix_eventual_sequence(binary.left)) {
-						eval.netlist.add_diag(
-							diag::SVALivenessAcceptanceUnsupported,
-							expr_loc(binary.left));
-						return {{}, false};
-					}
-					auto candidates =
-						suffix_eventual_candidates(eval, binary.left);
-					if (!candidates.has_value())
-						return {{}, false};
-					add_response_liveness_obligation(
-						result, eval, *candidates, trigger, disable,
-						expr_loc(binary.left));
-				} else if (!(nonoverlapped && admits_empty)) {
+				if (!(nonoverlapped && admits_empty)) {
 					// An empty match of R is none for `R #-# P`, while `R #=# P` is
 					// `(R ##1 `true) #-# P`, which it matches on the attempt's tick
 					result = lower_finite_property_from_trigger(

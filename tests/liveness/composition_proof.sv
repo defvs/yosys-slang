@@ -293,3 +293,36 @@ module and_finite_fail ((* gclk *) input logic clk);
 	wire c = phase == 2;
 	assert property (@(posedge clk) strong((##[0:$] c) and b[*1:2]));
 endmodule
+
+// The left side of a followed-by matches on tick 1 either way, which is where the
+// right side starts
+module followed_one_end_pass ((* gclk *) input logic clk);
+	logic [2:0] t = 0;
+	always_ff @(posedge clk)
+		if (t != 7)
+			t <= t + 1'b1;
+	wire start = t == 0;
+	wire a = 1'b0, b = 1'b1, c = t == 0, d = t == 1, e = t == 4;
+	assert property (@(posedge clk) start |-> (((a ##1 b) or (c ##1 d)) #-# s_eventually e));
+endmodule
+
+module followed_one_end_fail ((* gclk *) input logic clk);
+	logic [2:0] t = 0;
+	always_ff @(posedge clk)
+		if (t != 7)
+			t <= t + 1'b1;
+	wire start = t == 0;
+	wire a = 1'b0, b = 1'b1, c = t == 0, d = t == 1, e = 1'b0;
+	assert property (@(posedge clk) start |-> (((a ##1 b) or (c ##1 d)) #-# s_eventually e));
+endmodule
+
+// No match of the left side
+module followed_no_match_fail ((* gclk *) input logic clk);
+	logic [2:0] t = 0;
+	always_ff @(posedge clk)
+		if (t != 7)
+			t <= t + 1'b1;
+	wire start = t == 0;
+	wire a = 1'b0, b = 1'b1, c = t == 0, d = 1'b0, e = t == 4;
+	assert property (@(posedge clk) start |-> (((a ##1 b) or (c ##1 d)) #-# s_eventually e));
+endmodule

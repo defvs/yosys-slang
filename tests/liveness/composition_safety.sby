@@ -1,11 +1,14 @@
 [tasks]
 and_empty_finite_pass
 and_finite_fail
+followed_one_end_pass
+followed_no_match_fail
 
 [options]
 mode prove
 depth 10
 and_finite_fail: expect fail
+followed_no_match_fail: expect fail
 
 [engines]
 smtbmc z3
@@ -19,7 +22,17 @@ and_finite_fail: read_rtlil and_finite_fail.il
 and_finite_fail: chformal -live -remove
 and_finite_fail: chformal -fair -remove
 and_finite_fail: prep -top and_finite_fail
+followed_one_end_pass: read_rtlil followed_one_end_pass.il
+followed_one_end_pass: chformal -live -remove
+followed_one_end_pass: chformal -fair -remove
+followed_one_end_pass: prep -top followed_one_end_pass
+followed_no_match_fail: read_rtlil followed_no_match_fail.il
+followed_no_match_fail: chformal -live -remove
+followed_no_match_fail: chformal -fair -remove
+followed_no_match_fail: prep -top followed_no_match_fail
 
 [files]
 and_empty_finite_pass: and_empty_finite_pass.il
 and_finite_fail: and_finite_fail.il
+followed_one_end_pass: followed_one_end_pass.il
+followed_no_match_fail: followed_no_match_fail.il

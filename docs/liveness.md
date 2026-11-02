@@ -31,7 +31,7 @@ in the next section:
 | `strong(sequence)` | finite safety or exact unbounded sequence acceptance |
 | `weak(sequence)` | finite sequences only |
 | `a |-> property`, `a |=> property` | one consequent attempt per antecedent match |
-| `a #=# property`, `a #-# property` | left-side match plus consequent obligation |
+| `a #=# property`, `a #-# property` | left-side match plus consequent obligation, for a left side whose matches end on one tick |
 | property `and` | union of both obligation sets |
 | direct justice `or` | one response monitor over the matches of both sides |
 | simple property `implies` and `iff` | gated property or cycle-local equality |
@@ -185,6 +185,10 @@ cannot preserve the SVA meaning:
   would have to be told apart;
 - `until` operands that are themselves temporal rather than simple Boolean
   properties;
+- followed-by with an unbounded left operand or a temporal right operand
+  where the matches of the left operand can start the right one on more than
+  one tick. `R #-# P` takes one match of `R` with `P` holding from it, which
+  is no single obligation started on every match of `R`;
 - temporal `iff`, temporal left operands of property-level `implies`, and
   response-style property `or` whose acceptance cannot be represented by one
   justice goal;

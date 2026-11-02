@@ -269,7 +269,10 @@ for top in \
 	eventual_throughout_fail \
 	and_empty_finite_pass \
 	and_empty_finite_fail \
-	and_finite_fail
+	and_finite_fail \
+	followed_one_end_pass \
+	followed_one_end_fail \
+	followed_no_match_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/composition_proof.sv;

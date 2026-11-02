@@ -318,3 +318,52 @@ module product_within_inner(input logic clk, input logic a, input logic b, input
 	assert property (@(posedge clk) strong(((a ##[1:$] b) intersect (c ##[1:$] b)) within (d ##[1:$] b)));
 endmodule
 EOF
+
+design -reset
+
+# `R #-# P` needs one match of R with P from it (IEEE 1800-2017 16.12.9), while a
+# consequent started on every match of R needs P from each of them
+test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_unbounded_left(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) a |-> ((##[1:$] b) #-# s_eventually c));
+endmodule
+EOF
+
+design -reset
+
+# That would strengthen an assumption
+test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_unbounded_assume(input logic clk, input logic a, input logic b);
+	assume property (@(posedge clk) (##[0:$] a) #-# b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_two_ends(input logic clk, input logic a, input logic c);
+	assert property (@(posedge clk) a |-> ((1'b1 ##[0:1] 1'b1) #-# always c));
+endmodule
+EOF
+
+design -reset
+
+# The empty match starts the right operand on the first tick, `b` on the next one
+test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_empty_two_ends(input logic clk, input logic b, input logic c);
+	assert property (@(posedge clk) b[*0:1] #=# s_eventually c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "followed-by with an unbounded left operand or a temporal right operand is supported where the matches of the left operand all start the right one on the same tick, as one match with the right operand holding after it is enough"
+read_slang <<EOF
+module followed_temporal_and(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) (##[0:1] a) #-# (b and s_eventually b));
+endmodule
+EOF
