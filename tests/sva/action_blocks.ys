@@ -70,6 +70,9 @@ design -reset
 read_slang <<EOF
 module effect_free_actions(input logic clk, input logic a, input logic b, input logic [3:0] v);
 	int fd;
+	logic [3:0] mem [0:1];
+	assign mem[0] = v;
+	assign mem[1] = ~v;
 
 	function automatic int ones(logic [3:0] x);
 		int n = 0;
@@ -126,6 +129,13 @@ module effect_free_actions(input logic clk, input logic a, input logic b, input 
 			$stop;
 		end
 		assert property (b) $display("b high at %0t", $time); else $finish;
+		// Random numbers only change the generators, a seed of the action's own aside
+		assert (a) else begin
+			int seed;
+			seed = 1;
+			$error("%0d %0d %0d %0d", $random, $urandom, $urandom_range(3), $random(seed));
+		end
+		assert (a) else $writememh("v.hex", mem);
 	end
 
 	assert property (@(posedge clk) a) else begin
@@ -140,7 +150,7 @@ module effect_free_actions(input logic clk, input logic a, input logic b, input 
 endmodule
 EOF
 
-select -assert-count 18 t:$check
+select -assert-count 20 t:$check
 
 design -reset
 
@@ -239,6 +249,17 @@ read_slang <<EOF
 module seeded_random(input logic clk, input logic a);
 	int seed;
 	assert property (@(posedge clk) a) else $error("%0d", $random(seed));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module seeded_distribution(input logic clk, input logic a);
+	int seed;
+	always @(posedge clk)
+		assert (a) else $error("%0d", $dist_uniform(seed, 0, 3));
 endmodule
 EOF
 

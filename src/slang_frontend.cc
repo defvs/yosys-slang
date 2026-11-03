@@ -1294,10 +1294,22 @@ static bool is_reporting_task(std::string_view name)
 		"$fwrite", "$fwriteb", "$fwriteh", "$fwriteo",
 		"$fstrobe", "$fstrobeb", "$fstrobeh", "$fstrobeo",
 		"$fmonitor", "$fmonitorb", "$fmonitorh", "$fmonitoro",
-		"$fflush", "$printtimescale", "$timeformat",
+		"$fflush", "$printtimescale", "$timeformat", "$writememb", "$writememh",
 		"$dumpfile", "$dumpvars", "$dumpon", "$dumpoff", "$dumpall", "$dumplimit", "$dumpflush",
 	};
 	return tasks.count(name);
+}
+
+// System functions giving random numbers. Besides their seed argument, the state they
+// change is that of the random number generators, which we don't lower any reads of.
+static bool is_random_function(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> functions = {
+		"$random", "$urandom", "$urandom_range",
+		"$dist_uniform", "$dist_normal", "$dist_exponential", "$dist_poisson",
+		"$dist_chi_square", "$dist_t", "$dist_erlang",
+	};
+	return functions.count(name);
 }
 
 // System functions and methods that only compute a value. Some of the names are also
@@ -1530,24 +1542,37 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		top_level = false;
 		if (call.isSystemCall()) {
 			const auto &info = std::get<1>(call.subroutine);
+			auto name = info.subroutine->name;
+			auto args = call.arguments();
+			// The argument the system subroutine assigns, and if it reads it first
+			std::optional<size_t> written;
+			bool reads_written = false;
 			if (for_assertion) {
 				// Of the system subroutines we lower, only $readmem assigns a variable
-				auto args = call.arguments();
-				if ((info.subroutine->name == "$readmemb" || info.subroutine->name == "$readmemh")
-						&& args.size() >= 2) {
-					for (size_t i = 0; i < args.size(); i++) {
-						if (i == 1)
-							assign_to(*args[i], false, false);
-						else
-							args[i]->visit(*this);
-					}
-				} else {
-					visitDefault(call);
+				if ((name == "$readmemb" || name == "$readmemh") && args.size() >= 2)
+					written = 1;
+			} else if (is_random_function(name)) {
+				// The seed of $random and of the $dist functions is an inout argument
+				// (IEEE Std 1800-2017 section 20.15.2), that of $urandom an input (section
+				// 18.13.1)
+				if (name != "$urandom" && name != "$urandom_range" && !args.empty()) {
+					written = 0;
+					reads_written = true;
 				}
-			} else if (!is_reporting_task(info.subroutine->name) && !is_pure_function(info)) {
+			} else if (!is_reporting_task(name) && !is_pure_function(info)) {
 				found(call.sourceRange);
-			} else {
+				return;
+			}
+
+			if (!written) {
 				visitDefault(call);
+				return;
+			}
+			for (size_t i = 0; i < args.size(); i++) {
+				if (i == *written)
+					assign_to(*args[i], reads_written, false);
+				else
+					args[i]->visit(*this);
 			}
 			return;
 		}
