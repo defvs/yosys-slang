@@ -36,7 +36,7 @@ Unsupported or rewritten OpenTitan constructs:
 | `tlul_assert.sv` | `legalAOpcodeErr_A`, `sizeGTEMaskErr_A`, `sizeMatchesMaskErr_A`, `addrSizeAlignedErr_A` | unbounded `s_eventually` |
 | `tlul_assert.sv` | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |
 | `tlul_assert.sv` | `noOutstandingReqsAtEndOfSim_A` (`ASSERT_FINAL`) | checks the end of simulation in a final procedure, which has no counterpart in a netlist; sv-elab rejects it |
-| OpenTitan enum references | rewritten to constants where needed | hierarchical enum literals caused missing-wire frontend errors (FIXME) |
+| `prim_alert_rxtx_assert_fpv.sv` | hierarchical enum literals in the `inside` sets of `init_pending` and `AlertPingOk_A`, rewritten to their encoding | the frontend's `inside` needs integral items that slang evaluates as constants, and slang does not evaluate hierarchical references ("Feature unimplemented ... (bool) const_result", also in plain RTL and on upstream) |
 
 ## Main Suite Integration
 

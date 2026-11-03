@@ -125,6 +125,14 @@ def filter_source(src, dst):
     text = text.replace("prim_alert_rxtx_tb.", "prim_alert_rxtx_sva_harness.u_tb.")
     text = text.replace("prim_esc_rxtx_tb.", "prim_esc_rxtx_sva_harness.u_tb.")
     if source_name == "prim_alert_rxtx_assert_fpv.sv":
+        # The frontend lowers `x inside {...}` by matching x against the
+        # constant value of each integral item, and slang cannot evaluate a
+        # hierarchical reference as a constant, even one to an enum literal.
+        # Such an item stops elaboration with "Feature unimplemented ...
+        # (bool) const_result", in plain RTL too (an upstream limitation), so
+        # the two sets of hierarchical state literals are rewritten to their
+        # encoding. Hierarchical enum literals compared with == are lowered
+        # and left alone.
         text = re.sub(
             r"assign init_pending = mubi4_test_true_strict\(init_trig_i\) \|\|"
             r"\s*prim_alert_rxtx_sva_harness\.u_tb\.i_prim_alert_receiver\.state_q inside \{"
@@ -135,15 +143,8 @@ def filter_source(src, dst):
             text,
             flags=re.MULTILINE,
         )
-        text = text.replace("mubi4_test_true_strict(init_trig_i)", "(init_trig_i == 4'h6)")
-        text = text.replace(
-            "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.Idle",
-            "3'd0",
-        )
-        text = text.replace(
-            "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_receiver.Idle",
-            "3'd0",
-        )
+        # PingHsPhase1 and PingHsPhase2 occur only in the sets of AlertPingOk_A
+        # and AlertPingIgnored_A
         text = text.replace(
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase1",
             "3'd3",
@@ -152,11 +153,6 @@ def filter_source(src, dst):
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase2",
             "3'd4",
         )
-    if source_name == "clkmgr_cg_en_sva_if.sv":
-        text = text.replace("scanmode == prim_mubi_pkg::MuBi4True", "scanmode == 4'h6")
-        text = text.replace("$onehot0({ping_err_pi, ping_err_ni})", "!(ping_err_pi && ping_err_ni)")
-        text = text.replace("$onehot0({ack_err_pi, ack_err_ni})", "!(ack_err_pi && ack_err_ni)")
-        text = text.replace("$onehot0({alert_err_pi, alert_err_ni})", "!(alert_err_pi && alert_err_ni)")
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(text)
 
