@@ -530,18 +530,72 @@ static std::vector<AssertionMatch> not_vec(SvaFormulas& f, const AttemptContext&
 	return { !collapse_or(property_paths(f, ctx, std::move(in), loc, tick)) };
 }
 
+// The disjunction of the paths ending within a window of ticks, for windows of a width
+// that slide along the paths. The ticks are cut in blocks the width of the windows,
+// and the paths collected from the start and from the end of each block, so that a
+// window is the end of a block and the start of the next one. That takes three gates
+// a tick at most, however wide the windows.
+class EndWindows {
+public:
+	// `paths` going by end, with one path to a tick
+	EndWindows(std::vector<AssertionMatch> paths_, int64_t width_): paths(std::move(paths_)), width(width_) {
+		assert_invariant(!paths.empty() && width > 0);
+		for (size_t i = 0; i < paths.size(); i++) {
+			block.push_back((paths[i].start - paths[0].start) / width);
+			bool block_start = i == 0 || block[i] != block[i - 1];
+			from_block_start.push_back(block_start ? paths[i] : from_block_start.back().shift(paths[i].start - from_block_start.back().start) || paths[i]);
+		}
+		to_block_end.resize(paths.size(), paths.back());
+		for (size_t i = paths.size(); i-- > 0;) {
+			bool block_end = i == paths.size() - 1 || block[i] != block[i + 1];
+			to_block_end[i] = block_end ? paths[i] : paths[i].shift(to_block_end[i + 1].start - paths[i].start) || to_block_end[i + 1];
+		}
+	}
+
+	// Paths ending on ticks `first` to `last`, a window as wide as the blocks or one
+	// tick narrower. Within a block, such a window takes in its start or its end.
+	std::optional<AssertionMatch> get(int64_t first, int64_t last) const {
+		assert_invariant(last - first + 1 <= width && last - first + 2 >= width);
+		auto by_end = [](const AssertionMatch& path, int64_t tick) { return path.start < tick; };
+		size_t lo = std::lower_bound(paths.begin(), paths.end(), first, by_end) - paths.begin();
+		size_t hi = std::lower_bound(paths.begin(), paths.end(), last + 1, by_end) - paths.begin();
+		if (lo >= hi)
+			return {};
+		hi--;
+
+		if (block[lo] != block[hi]) {
+			assert_invariant(block[hi] == block[lo] + 1);
+			return to_block_end[lo].shift(paths[hi].start - to_block_end[lo].start) || from_block_start[hi];
+		}
+		if (lo == 0 || block[lo - 1] != block[lo])
+			return from_block_start[hi];
+		assert_invariant(hi == paths.size() - 1 || block[hi + 1] != block[hi]);
+		return to_block_end[lo];
+	}
+
+private:
+	std::vector<AssertionMatch> paths;
+	int64_t width;
+	std::vector<int64_t> block;
+	std::vector<AssertionMatch> from_block_start;
+	std::vector<AssertionMatch> to_block_end;
+};
+
 // `a` being synthesized in the context `ctx`
 static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vector<AssertionMatch> a,
 										   int64_t min, int64_t max, OperandPaths& b) {
 	std::vector<AssertionMatch> new_own_paths;
+	std::vector<AssertionMatch> ends;
 	for (auto path : a) {
-		for (int64_t offset = min; offset <= max; offset++) {
-			// `empty ##0 seq` has no match
-			if (path.empty && offset == 0)
-				continue;
+		if (!path.empty) {
+			ends.push_back(path);
+			continue;
+		}
 
-			for (auto inner : b.at(path.empty ? offset - 1 : path.start + offset)) {
-				if (path.empty && inner.empty) {
+		for (int64_t offset = std::max<int64_t>(min, 1); offset <= max; offset++) {
+			// `empty ##0 seq` has no match
+			for (auto inner : b.at(offset - 1)) {
+				if (inner.empty) {
 					// `empty ##N empty` spans N - 1 ticks
 					if (offset == 1)
 						new_own_paths.push_back(path);
@@ -549,21 +603,37 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 						new_own_paths.push_back(ctx.true_path(path.f, b.base_tick(), offset - 2, path.loc));
 					continue;
 				}
-				if (path.empty) {
-					// `empty ##N seq` is `##(N-1) seq`
-					check_frozen_offset(inner, offset - 1);
-					new_own_paths.push_back(AssertionMatch(path.f, SvaFormulas::True, path.loc).shift(offset - 1 + inner.start) && inner);
-					continue;
-				}
-				if (inner.empty) {
-					// `seq ##N empty` is `seq ##(N-1) 1'b1`
-					if (offset > 0)
-						new_own_paths.push_back(path.shift(offset - 1) && ctx.true_path(path.f, b.base_tick(), path.start + offset - 1, path.loc));
-					continue;
-				}
-				check_frozen_offset(inner, path.start + offset);
-				new_own_paths.push_back(path.shift(offset + inner.start) && inner);
+				// `empty ##N seq` is `##(N-1) seq`
+				check_frozen_offset(inner, offset - 1);
+				new_own_paths.push_back(AssertionMatch(path.f, SvaFormulas::True, path.loc).shift(offset - 1 + inner.start) && inner);
 			}
+		}
+	}
+	if (ends.empty())
+		return compress_paths(new_own_paths);
+
+	// Paths ending on the same tick lead to the same placements of `b`, and so do paths
+	// ending within the range of each other. Rather than place `b` after each path, we
+	// place it once on each tick, after any of the paths ending in the range before.
+	ends = compress_paths(ends);
+	std::reverse(ends.begin(), ends.end());
+	// The windows are the width of the range, or one tick narrower without `##0`
+	EndWindows windows(ends, max - min + 1);
+	for (int64_t tick = ends.front().start + min; tick <= ends.back().start + max; tick++) {
+		auto before = windows.get(tick - max, tick - min);
+		if (!before.has_value())
+			continue;
+
+		for (auto inner : b.at(tick)) {
+			if (inner.empty) {
+				// `seq ##N empty` is `seq ##(N-1) 1'b1`, with no match for `##0`
+				auto nonzero = windows.get(tick - max, tick - std::max<int64_t>(min, 1));
+				if (nonzero.has_value())
+					new_own_paths.push_back(nonzero->shift(tick - 1 - nonzero->start) && ctx.true_path(nonzero->f, b.base_tick(), tick - 1, nonzero->loc));
+				continue;
+			}
+			check_frozen_offset(inner, tick);
+			new_own_paths.push_back(before->shift(tick + inner.start - before->start) && inner);
 		}
 	}
 	return compress_paths(new_own_paths);
