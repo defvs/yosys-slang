@@ -161,6 +161,23 @@ public:
 		return intern(Op::Mux, sel, a, b);
 	}
 
+	// The number of gates making up `root`, counted up to `limit`
+	size_t gates(Node root, size_t limit) const {
+		std::vector<Node> stack = {root};
+		Yosys::pool<Node> seen;
+		size_t count = 0;
+		while (!stack.empty() && count <= limit) {
+			Node node = stack.back();
+			stack.pop_back();
+			if (is_const(node) || ops[node].kind == Op::Value || !seen.insert(node).second)
+				continue;
+			count++;
+			for (Node operand : {ops[node].a, ops[node].b, ops[node].c})
+				stack.push_back(operand);
+		}
+		return count;
+	}
+
 	// Logic for `root` on tick `tick` of the attempt, a tick none of the values it reads
 	// is sampled after
 	ir::Net materialize(Node root, int64_t tick, slang::SourceLocation loc) {
@@ -420,7 +437,16 @@ public:
 		if (it != by_offset.end())
 			return it->second;
 
-		std::vector<AssertionMatch> paths = synthesize(ctx, base + offset);
+		std::vector<AssertionMatch> paths;
+		if (const auto& logic = shared_logic(); !logic.empty()) {
+			// The logic of the operand placed `offset` ticks later is read that much later
+			paths = from_start;
+			for (size_t i = 0; i < paths.size(); i++)
+				if (!paths[i].empty)
+					paths[i].sig = paths[i].f.value(logic[i], base + offset + paths[i].start);
+		} else {
+			paths = synthesize(ctx, base + offset);
+		}
 		assert_invariant(paths.size() == from_start.size());
 		if (ctx.abort == nullptr)
 			return by_offset.emplace(offset, std::move(paths)).first->second;
@@ -454,6 +480,29 @@ private:
 	std::vector<AssertionMatch> from_start;
 	std::optional<std::vector<AssertionMatch>> settled_paths;
 	std::map<int64_t, std::vector<AssertionMatch>> by_offset;
+	std::optional<std::vector<ir::Net>> shared;
+
+	// Logic for each path of the operand, on the tick the path ends, if it's to be shared
+	// by the ticks the operand is placed on. Synthesized again on each tick, an operand
+	// takes its gates again each time, while its logic takes a line of registers delaying
+	// it, and that's fewer if the operand is a path of more than a few gates. An operand of
+	// many paths would take a line for each, as many registers as gates are saved.
+	const std::vector<ir::Net>& shared_logic() {
+		static constexpr size_t few_gates = 8;
+
+		if (!shared.has_value()) {
+			shared.emplace();
+			auto non_empty = std::count_if(from_start.begin(), from_start.end(),
+										   [](const AssertionMatch& path) { return !path.empty; });
+			auto path = std::find_if(from_start.begin(), from_start.end(),
+									 [](const AssertionMatch& path) { return !path.empty; });
+			if (non_empty == 1 && path->f.gates(path->sig, few_gates) > few_gates) {
+				for (auto& path : from_start)
+					shared->push_back(path.empty ? ir::S1 : path.f.materialize(path.sig, base + path.start, path.loc));
+			}
+		}
+		return *shared;
+	}
 };
 
 static std::vector<AssertionMatch> compress_paths(std::vector<AssertionMatch> paths) {
@@ -775,9 +824,12 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 						return {};
 					}
 
+					// A property holds by any of its paths, so the operand placed on each tick
+					// of the range can be the one path
 					std::vector<AssertionMatch> true_path = {{f, SvaFormulas::True, expr_loc(expr)}};
 					OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
-						return property_paths(f, at, synthesize_assertion_expr(f, at, uop.expr, tick), expr_loc(expr), tick);
+						auto paths = property_paths(f, at, synthesize_assertion_expr(f, at, uop.expr, tick), expr_loc(expr), tick);
+						return std::vector<AssertionMatch>{collapse_or(paths)};
 					});
 					return seq_vec(ctx, true_path, uop.range->min, uop.range->max.value(), operand);
 				}
