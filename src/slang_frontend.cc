@@ -1895,10 +1895,12 @@ void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 	netlist.add_diag(code, finder.effect->range);
 }
 
-// Is the symbol a formal argument or a local variable of a subroutine?
-static bool in_subroutine(const ast::Symbol &symbol)
+// Is the symbol a formal argument or a local variable of a subroutine being run? Those
+// of another one hold what its last call left there.
+static bool in_running_subroutine(EvalContext &eval, const ast::Symbol &symbol)
 {
-	return owning_subroutine(symbol) != nullptr;
+	auto subroutine = owning_subroutine(symbol);
+	return subroutine && eval.scope_nest_level.count(subroutine);
 }
 
 ir::Value EvalContext::sva(ast::Expression const &expr)
@@ -2038,7 +2040,7 @@ ir::Value EvalContext::operator()(ast::Expression const &expr)
 			Variable variable1 = variable(symbol.as<ast::ValueSymbol>());
 			assert_invariant((bool) variable1);
 			if (procedural && (!in_sva_expression || variable1.kind != Variable::Static ||
-					in_subroutine(symbol))) {
+					in_running_subroutine(*this, symbol))) {
 				if (procedural->timing.kind == ProcessTiming::Initial && ast::NetSymbol::isKind(symbol.kind)) {
 					netlist.add_diag(diag::ReadingNetStateFromInitialBlockUnsupported, expr.sourceRange);
 					ret = ir::Value(ir::Sx, expr.type->getBitstreamWidth());
