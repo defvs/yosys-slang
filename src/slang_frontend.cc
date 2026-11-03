@@ -1330,6 +1330,11 @@ static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
 // or do more than report. In a subroutine it is also a read of one of its static
 // variables before the call has assigned it, as that reads state kept from an earlier
 // call. Every path through the code counts, conditions don't get evaluated.
+//
+// That is for an action block, which we leave out, and the subroutines it calls. For an
+// expression of a concurrent assertion, and the functions it calls, only assignments and
+// kept state are looked for: we lower those functions like any other, which reports any
+// system subroutine or statement there is no lowering for.
 struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		ast::VisitFlags::Statements | ast::VisitFlags::Expressions>
 {
@@ -1352,9 +1357,10 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	};
 
 	NetlistContext &netlist;
+	bool for_assertion;
 	Calls own_calls;
 	Calls &calls;
-	// The subroutine whose body this is, null for an action block
+	// The subroutine whose body this is, null for an action block or an assertion
 	const ast::SubroutineSymbol *subroutine = nullptr;
 	// The variables declared in the action block
 	hashlib::pool<const ast::Symbol *> locals;
@@ -1365,18 +1371,19 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	const ast::Statement *current_statement = nullptr;
 	std::optional<Effect> effect;
 
-	EffectFinder(NetlistContext &netlist)
-		: netlist(netlist), calls(own_calls) {}
+	EffectFinder(NetlistContext &netlist, bool for_assertion)
+		: netlist(netlist), for_assertion(for_assertion), calls(own_calls) {}
 
-	EffectFinder(NetlistContext &netlist, Calls &calls, const ast::SubroutineSymbol &subroutine)
-		: netlist(netlist), calls(calls), subroutine(&subroutine) {}
+	EffectFinder(NetlistContext &netlist, bool for_assertion, Calls &calls,
+				 const ast::SubroutineSymbol &subroutine)
+		: netlist(netlist), for_assertion(for_assertion), calls(calls), subroutine(&subroutine) {}
 
 	void found(slang::SourceRange range, bool keeps_state = false)
 	{
 		if (effect)
 			return;
 		// What gets left out of an action block is a statement, point at that
-		if (!subroutine && current_statement)
+		if (!for_assertion && !subroutine && current_statement)
 			range = current_statement->sourceRange;
 		effect = Effect{range, keeps_state};
 	}
@@ -1523,10 +1530,25 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		top_level = false;
 		if (call.isSystemCall()) {
 			const auto &info = std::get<1>(call.subroutine);
-			if (!is_reporting_task(info.subroutine->name) && !is_pure_function(info))
+			if (for_assertion) {
+				// Of the system subroutines we lower, only $readmem assigns a variable
+				auto args = call.arguments();
+				if ((info.subroutine->name == "$readmemb" || info.subroutine->name == "$readmemh")
+						&& args.size() >= 2) {
+					for (size_t i = 0; i < args.size(); i++) {
+						if (i == 1)
+							assign_to(*args[i], false, false);
+						else
+							args[i]->visit(*this);
+					}
+				} else {
+					visitDefault(call);
+				}
+			} else if (!is_reporting_task(info.subroutine->name) && !is_pure_function(info)) {
 				found(call.sourceRange);
-			else
+			} else {
 				visitDefault(call);
+			}
 			return;
 		}
 
@@ -1571,7 +1593,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			return calls.done.at(&callee);
 
 		calls.stack.push_back(&callee);
-		EffectFinder finder(netlist, calls, callee);
+		EffectFinder finder(netlist, for_assertion, calls, callee);
 		finder.body_of_subroutine();
 		calls.stack.pop_back();
 		calls.done[&callee] = finder.effect;
@@ -1655,6 +1677,18 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		return true;
 	}
 
+	// A statement with nothing more specific to look for in it
+	void other_statement(const ast::Statement &stmt)
+	{
+		// Leaving it out of an action block would leave out what it does, assertions
+		// included. In a function of an assertion the lowering rejects what it has no
+		// lowering for, the rest is fine to look at as it is.
+		if (for_assertion)
+			stmt.visit(*this);
+		else
+			found(stmt.sourceRange);
+	}
+
 	void statement(const ast::Statement &stmt)
 	{
 		if (effect)
@@ -1673,7 +1707,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		case ast::StatementKind::Block: {
 			const auto &block = stmt.as<ast::BlockStatement>();
 			if (block.blockKind != ast::StatementBlockKind::Sequential)
-				found(stmt.sourceRange);
+				other_statement(stmt);
 			else
 				statement(block.body);
 			break;
@@ -1793,8 +1827,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			flow.unreachable = true;
 			break;
 		default:
-			// That includes assertions: one in an action block would be left out with it
-			found(stmt.sourceRange);
+			other_statement(stmt);
 			break;
 		}
 
@@ -1809,11 +1842,31 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 	for (auto action : {pass, fail}) {
 		if (!action)
 			continue;
-		EffectFinder finder(netlist);
+		EffectFinder finder(netlist, false);
 		finder.statement(*action);
 		if (finder.effect)
 			netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
 	}
+}
+
+// IEEE Std 1800-2017 section 16.6 has the functions in an assertion expression keep no
+// state and have no side effects. We lower a call by running the function's body like
+// that of any other, so an assignment to a variable of the design would become a driver
+// of it, and an assignment to a static variable of the function or a read of one before
+// the call assigns it would share state with the design's calls of the function.
+static void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
+{
+	EffectFinder finder(netlist, true);
+	finder.expression(expr);
+	if (!finder.effect)
+		return;
+
+	auto code = finder.effect->keeps_state ? diag::SVACallKeepsState : diag::SVACallSideEffect;
+	// The same function comes up again in other operands and assertions
+	for (auto &diag : netlist.issued_diagnostics)
+		if (diag.code == code && diag.location == finder.effect->range.start())
+			return;
+	netlist.add_diag(code, finder.effect->range);
 }
 
 // Is the symbol a formal argument or a local variable of a subroutine?
@@ -1824,6 +1877,8 @@ static bool in_subroutine(const ast::Symbol &symbol)
 
 ir::Value EvalContext::sva(ast::Expression const &expr)
 {
+	check_assertion_calls(netlist, expr);
+
 	bool in_sva_expression_save = in_sva_expression;
 	in_sva_expression = true;
 	sva_read_frozen = false;

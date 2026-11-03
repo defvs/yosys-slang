@@ -144,6 +144,8 @@ DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
 DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
 DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
 DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
+DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
+DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -393,6 +395,12 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(CheckerUnsupported, "checker instances are unsupported");
 	engine.setSeverity(CheckerUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallSideEffect, "function called in a concurrent assertion assigns a variable not its own");
+	engine.setSeverity(SVACallSideEffect, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion keeps state between calls");
+	engine.setSeverity(SVACallKeepsState, DiagnosticSeverity::Error);
 	// clang-format on
 }
 }; // namespace diag

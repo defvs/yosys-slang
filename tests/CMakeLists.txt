@@ -26,6 +26,7 @@ endif()
 set(ALL_TESTS
     sva/seqequiv.tcl
     sva/action_blocks.ys
+    sva/assertion_function_effects.ys
     sva/assume_early.ys
     sva/checkers.ys
     sva/comb_default_clocking.ys

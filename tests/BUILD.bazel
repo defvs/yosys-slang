@@ -18,10 +18,10 @@ _VARIOUS_TESTS = [
 
 # sva/seqequiv.tcl is CMake-only as it needs yosys-abc for its proofs
 _SVA_TESTS = [
-    "action_blocks", "checkers", "comb_default_clocking", "final_assertions",
-    "frozen_past_first_tick", "kept_hierarchy", "large_ranges", "local_variables",
-    "nested_disable", "repeated_labels", "unsupported_clocking", "unsupported_sampled_clocking",
-    "vector_delay_init",
+    "action_blocks", "assertion_function_effects", "checkers", "comb_default_clocking",
+    "final_assertions", "frozen_past_first_tick", "kept_hierarchy", "large_ranges",
+    "local_variables", "nested_disable", "repeated_labels", "unsupported_clocking",
+    "unsupported_sampled_clocking", "vector_delay_init",
 ]
 
 _UNIT_DATA = glob(["unit/*.sv"])
