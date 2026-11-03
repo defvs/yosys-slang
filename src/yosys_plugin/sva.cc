@@ -419,13 +419,26 @@ struct AttemptContext {
 class OperandPaths {
 public:
 	using Synthesize = std::function<std::vector<AssertionMatch>(const AttemptContext&, int64_t)>;
+	using SynthesizeAfter = std::function<std::optional<std::vector<AssertionMatch>>(
+			const AttemptContext&, int64_t, const std::vector<AssertionMatch>&)>;
 
-	// `base` is the tick of the attempt the offsets count from
-	OperandPaths(const AttemptContext& ctx_, int64_t base_, Synthesize synthesize_):
-		ctx(ctx_), base(base_), synthesize(std::move(synthesize_)), from_start(synthesize(ctx, base)) {}
+	// `base` is the tick of the attempt the offsets count from. With `synthesize_after`,
+	// the operand can also be synthesized after paths, see after().
+	OperandPaths(const AttemptContext& ctx_, int64_t base_, Synthesize synthesize_,
+				 SynthesizeAfter synthesize_after_ = nullptr):
+		ctx(ctx_), base(base_), synthesize(std::move(synthesize_)),
+		synthesize_after(std::move(synthesize_after_)), from_start(synthesize(ctx, base)) {}
 
 	int64_t base_tick() const {
 		return base;
+	}
+
+	// The operand placed on each tick one of `starts` ends on (counted from the base), as
+	// far as that path matched, if it can be synthesized for all these ticks at once
+	std::optional<std::vector<AssertionMatch>> after(const std::vector<AssertionMatch>& starts) {
+		if (!synthesize_after)
+			return {};
+		return synthesize_after(ctx, base, starts);
 	}
 
 	const std::vector<AssertionMatch>& at(int64_t offset) {
@@ -477,6 +490,7 @@ private:
 	AttemptContext ctx;
 	int64_t base;
 	Synthesize synthesize;
+	SynthesizeAfter synthesize_after;
 	std::vector<AssertionMatch> from_start;
 	std::optional<std::vector<AssertionMatch>> settled_paths;
 	std::map<int64_t, std::vector<AssertionMatch>> by_offset;
@@ -668,11 +682,20 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 	std::reverse(ends.begin(), ends.end());
 	// The windows are the width of the range, or one tick narrower without `##0`
 	EndWindows windows(ends, max - min + 1);
+	std::vector<AssertionMatch> starts;
 	for (int64_t tick = ends.front().start + min; tick <= ends.back().start + max; tick++) {
 		auto before = windows.get(tick - max, tick - min);
-		if (!before.has_value())
-			continue;
+		if (before.has_value())
+			starts.push_back(before->shift(tick - before->start));
+	}
 
+	if (auto after = b.after(starts); after.has_value()) {
+		new_own_paths.insert(new_own_paths.end(), after->begin(), after->end());
+		return compress_paths(new_own_paths);
+	}
+
+	for (auto& before : starts) {
+		int64_t tick = before.start;
 		for (auto inner : b.at(tick)) {
 			if (inner.empty) {
 				// `seq ##N empty` is `seq ##(N-1) 1'b1`, with no match for `##0`
@@ -682,7 +705,7 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 				continue;
 			}
 			check_frozen_offset(inner, tick);
-			new_own_paths.push_back(before->shift(tick + inner.start - before->start) && inner);
+			new_own_paths.push_back(before.shift(inner.start) && inner);
 		}
 	}
 	return compress_paths(new_own_paths);
@@ -754,6 +777,70 @@ static bool is_property(const ast::AssertionExpr& expr) {
 	return !expr.computeSequenceLength().has_value();
 }
 
+static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, const AttemptContext& ctx,
+															 const ast::AssertionExpr& expr, int64_t base);
+static const ast::AssertionExpr &unwrap_property_instances(const ast::AssertionExpr &expr);
+static OperandPaths::SynthesizeAfter concat_after(SvaFormulas& f, const ast::AssertionExpr& expr);
+
+// The concatenation `sequence` starting on `base`, or else after the paths `starts`, on
+// each tick one of them ends on (counted from `base`), as far as that path matched.
+//
+// Placed after many paths, a concatenation of ranges would be synthesized again on each
+// tick, with as many paths each time as its ranges are wide. Its elements are placed after
+// the paths instead, as if part of the sequence before, which takes as many paths as there
+// are ticks. That's the same placement: the disable from `base` on settles an element
+// the same way, whether read by the concatenation from its start or by the element, and
+// an element can't be placed past the first tick if it couldn't be before. None if the
+// first element can be empty, as an empty match from a tick has nothing in common with a
+// path ending there.
+static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas& f, const AttemptContext& ctx,
+																	const ast::SequenceConcatExpr& sequence, int64_t base,
+																	const std::vector<AssertionMatch>* starts) {
+	std::vector<AssertionMatch> own_paths;
+	for (size_t i = 0; i < sequence.elements.size(); i++) {
+		const auto& element = sequence.elements[i];
+		OperandPaths inner_paths(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+			return synthesize_assertion_expr(f, at, *element.sequence, tick);
+		}, concat_after(f, *element.sequence));
+
+		auto delay = element.delay;
+		if (!delay.max.has_value()) {
+			f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(sequence));
+			return std::vector<AssertionMatch>{};
+		}
+
+		// slang gives a bare first element a delay of zero too, which is
+		// not the same as an explicit `##0` if the element can be empty
+		bool bare = !element.delayRange.start().valid();
+		if (i != 0) {
+			own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
+		} else if (starts != nullptr) {
+			const auto& first = inner_paths.at(0);
+			if (bare && std::any_of(first.begin(), first.end(), [](const AssertionMatch& path) { return path.empty; }))
+				return {};
+			own_paths = seq_vec(ctx, *starts, delay.min, delay.max.value(), inner_paths);
+		} else if (!bare) {
+			own_paths = seq_prefix_vec(f, ctx, delay.min, delay.max.value(), inner_paths, expr_loc(sequence));
+		} else {
+			own_paths = compress_paths(inner_paths.at(0));
+		}
+	}
+	return own_paths;
+}
+
+// Synthesis of `expr` after paths, if it's a concatenation, seen through instances of
+// named sequences
+static OperandPaths::SynthesizeAfter concat_after(SvaFormulas& f, const ast::AssertionExpr& expr) {
+	const auto& unwrapped = unwrap_property_instances(expr);
+	if (unwrapped.kind != ast::AssertionExprKind::SequenceConcat)
+		return nullptr;
+
+	const auto& sequence = unwrapped.as<ast::SequenceConcatExpr>();
+	return [&f, &sequence](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts) {
+		return synthesize_concat(f, at, sequence, base, &starts);
+	};
+}
+
 // An empty result stands for a sequence with no possible match. Constructs we
 // can't lower also yield an empty result, but those have raised an error
 // diagnostic so the design won't be read in.
@@ -767,47 +854,24 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
+				const ast::AssertionInstanceExpression *instance = nullptr;
+				if (simple.expr.kind == ast::ExpressionKind::AssertionInstance)
+					instance = &simple.expr.as<ast::AssertionInstanceExpression>();
 				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) -> std::vector<AssertionMatch> {
-					if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
-						const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
-						if (instance.isRecursiveProperty) {
+					if (instance) {
+						if (instance->isRecursiveProperty) {
 							f.eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
 							return {};
 						}
-						return synthesize_assertion_expr(f, at, instance.body, tick);
+						return synthesize_assertion_expr(f, at, instance->body, tick);
 					}
 					return { at.atom(simple.isNullExpr ? AssertionMatch(f, SvaFormulas::False, expr_loc(expr))
 													   : AssertionMatch::Operand(f, simple.expr, tick, expr_loc(expr)), tick) };
-				});
+				}, instance && !instance->isRecursiveProperty ? concat_after(f, instance->body) : nullptr);
 				return apply_repetition(f, ctx, expr, simple.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::SequenceConcat:
-			{
-				const auto& sequence = expr.as<ast::SequenceConcatExpr>();
-				std::vector<AssertionMatch> own_paths;
-				for (size_t i = 0; i < sequence.elements.size(); i++) {
-					const auto& element = sequence.elements[i];
-					OperandPaths inner_paths(ctx, base, [&](const AttemptContext& at, int64_t tick) {
-						return synthesize_assertion_expr(f, at, *element.sequence, tick);
-					});
-
-					auto delay = element.delay;
-					if (!delay.max.has_value()) {
-						f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
-						return {};
-					}
-
-					// slang gives a bare first element a delay of zero too, which is
-					// not the same as an explicit `##0` if the element can be empty
-					if (i != 0)
-						own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
-					else if (element.delayRange.start().valid())
-						own_paths = seq_prefix_vec(f, ctx, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
-					else
-						own_paths = compress_paths(inner_paths.at(0));
-				}
-				return own_paths;
-			}
+			return *synthesize_concat(f, ctx, expr.as<ast::SequenceConcatExpr>(), base, nullptr);
 		case slang::ast::AssertionExprKind::Unary:
 			{
 				const auto& uop = expr.as<ast::UnaryAssertionExpr>();
@@ -1037,7 +1101,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 
 				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
 					return synthesize_assertion_expr(f, at, with_match.expr, tick);
-				});
+				}, concat_after(f, with_match.expr));
 				return apply_repetition(f, ctx, expr, with_match.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::FirstMatch:
