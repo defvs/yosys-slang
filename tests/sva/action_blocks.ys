@@ -147,10 +147,31 @@ module effect_free_actions(input logic clk, input logic a, input logic b, input 
 		4'h0: $info("v zero");
 		default: $info("v nonzero");
 	endcase
+	assert property (@(posedge clk) a) else $exit;
+	assert property (@(posedge clk) a ##1 b) else begin
+		$fdisplay(fd, "a low");
+		$fwrite(fd, "a low");
+		$fstrobe(fd, "a low");
+		$fflush(fd);
+		$monitor("%b", a);
+		$fmonitor(fd, "%b", b);
+		$monitoroff;
+		$monitoron;
+	end
+	assert property (@(posedge clk) b |-> a) else begin
+		int n;
+		string s;
+		n = 0;
+		while (n < 2)
+			n++;
+		for (int i = 0; i < n; i++)
+			s = $sformatf("%s%h", s, v);
+		$error("%s %0d %h", s, $urandom, swapped(v));
+	end
 endmodule
 EOF
 
-select -assert-count 20 t:$check
+select -assert-count 23 t:$check
 
 design -reset
 
