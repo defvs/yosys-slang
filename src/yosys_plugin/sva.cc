@@ -50,8 +50,9 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int64_t cycl
 	// A signal delayed again by any number of ticks reuses the registers made for it
 	// before, so the delays of all the paths of an assertion take one line of registers
 	auto &trigger = procedural->timing.triggers[0];
-	auto &line = eval.sva_delay_lines[{sig.raw(), init, trigger.signal.raw(), trigger.edge_polarity,
-									   procedural->timing.background_enable.raw()}];
+	auto &lines = eval.netlist.backend->sva_delay_lines;
+	auto &line = lines[{sig.raw(), init, trigger.signal.raw(), trigger.edge_polarity,
+						procedural->timing.background_enable.raw()}];
 	while ((int64_t) line.size() < cycles) {
 		ir::Value prev = line.empty() ? sig : line.back();
 		ir::Value next = eval.netlist.add_placeholder_signal(sig.size(), name_hint);

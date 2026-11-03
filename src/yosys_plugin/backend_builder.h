@@ -6,6 +6,9 @@
 //
 #pragma once
 
+#include <map>
+#include <tuple>
+#include <vector>
 #include "slang_frontend.h"
 
 namespace slang_frontend {
@@ -27,6 +30,12 @@ struct BackendGraphBuilder : BackendGraphBuilderBase
 
 	unsigned next_id = 0;
 	std::string new_id(std::string base = std::string());
+
+	// Registers delaying a signal for SVA, by the signal, the initial value, and the
+	// clock, edge and enable of the registers. Those make up all of a register's
+	// inputs, so any lowering in the module can reuse the line.
+	std::map<std::tuple<RTLIL::SigSpec, RTLIL::State, RTLIL::SigBit, bool, RTLIL::SigBit>,
+			 std::vector<ir::Value>> sva_delay_lines;
 
 	ir::Value Unop(ast::UnaryOperator op, ir::Value a, bool a_signed, uint64_t y_width) override;
 	ir::Value Biop(ast::BinaryOperator op, ir::Value a, ir::Value b, bool a_signed, bool b_signed,
