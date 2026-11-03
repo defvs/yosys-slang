@@ -48,7 +48,8 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int64_t cycl
 	}
 
 	// A signal delayed again by any number of ticks reuses the registers made for it
-	// before, so the delays of all the paths of an assertion take one line of registers
+	// before, so a value sampled by the assertions of a module takes one line of
+	// registers, however many paths read it on however many ticks (see SvaFormulas)
 	auto &trigger = procedural->timing.triggers[0];
 	auto &lines = eval.netlist.backend->sva_delay_lines;
 	auto &line = lines[{sig.raw(), init, trigger.signal.raw(), trigger.edge_polarity,
@@ -65,41 +66,221 @@ static ir::Value delay_sva_sample(EvalContext& eval, ir::Value sig, int64_t cycl
 	return line[cycles - 1];
 }
 
+// Boolean formulas over the values an attempt samples, each read by the tick of the
+// attempt it's sampled on.
+//
+// The paths of a property are kept as such formulas while the property gets lowered.
+// A path that ends later in the attempt reads the same ticks as before, so paths can be
+// combined however far apart they end, with nothing to delay in between. Once the whole
+// property is lowered, its formula becomes logic on the last tick an attempt can take,
+// with each value delayed by the ticks since it was sampled. Every value then takes one
+// line of registers whatever the number of paths reading it, and a formula shared by
+// several paths gets built once.
+class SvaFormulas {
+public:
+	using Node = int;
+	static constexpr Node False = 0;
+	static constexpr Node True = 1;
+
+	EvalContext &eval;
+
+	explicit SvaFormulas(EvalContext &eval_): eval(eval_) {
+		ops.push_back({});
+		ops.push_back({});
+	}
+
+	static bool is_const(Node node) { return node == False || node == True; }
+
+	// An operand read by the rules of IEEE Std 1800-2017 section 16.14.6, with `frozen`
+	// telling if it reads a value frozen when the attempt was queued. It's sampled the
+	// same way on any tick, so its logic is built once however often it's placed.
+	ir::Net sva(const ast::Expression &expr, bool &frozen) {
+		auto it = evaluated.find(&expr);
+		if (it == evaluated.end()) {
+			ir::Net bit = eval.netlist.ReduceBool(eval.sva(expr));
+			it = evaluated.emplace(&expr, std::make_pair(bit, eval.sva_read_frozen)).first;
+		}
+		frozen = it->second.second;
+		return it->second.first;
+	}
+
+	// The value of `bit` sampled on tick `tick` of the attempt
+	Node value(ir::Net bit, int64_t tick) {
+		if (bit.is_const())
+			return bit == ir::S1 ? True : False;
+
+		auto [it, inserted] = values.emplace(std::make_pair(bit.raw(), tick), (Node) ops.size());
+		if (inserted) {
+			Op op;
+			op.kind = Op::Value;
+			op.sig = bit;
+			op.tick = tick;
+			ops.push_back(op);
+		}
+		return it->second;
+	}
+
+	Node conj(Node a, Node b) {
+		if (a == False || b == False)
+			return False;
+		if (a == True)
+			return b;
+		if (b == True || a == b)
+			return a;
+		return intern(Op::And, std::min(a, b), std::max(a, b), False);
+	}
+
+	Node disj(Node a, Node b) {
+		if (a == True || b == True)
+			return True;
+		if (a == False)
+			return b;
+		if (b == False || a == b)
+			return a;
+		return intern(Op::Or, std::min(a, b), std::max(a, b), False);
+	}
+
+	Node neg(Node a) {
+		if (is_const(a))
+			return a == True ? False : True;
+		if (ops[a].kind == Op::Not)
+			return ops[a].a;
+		return intern(Op::Not, a, False, False);
+	}
+
+	// `b` where `sel` holds, `a` elsewhere
+	Node mux(Node sel, Node a, Node b) {
+		if (sel == False || a == b)
+			return a;
+		if (sel == True)
+			return b;
+		if (b == True)
+			return disj(a, sel);
+		if (b == False)
+			return conj(a, neg(sel));
+		return intern(Op::Mux, sel, a, b);
+	}
+
+	// Logic for `root` on tick `tick` of the attempt, a tick none of the values it reads
+	// is sampled after
+	ir::Net materialize(Node root, int64_t tick, slang::SourceLocation loc) {
+		// Formulas get deep, a delay chained over a long range is as deep as the range
+		std::vector<Node> stack = {root};
+		while (!stack.empty()) {
+			Node node = stack.back();
+			if (is_const(node) || materialized.count({node, tick})) {
+				stack.pop_back();
+				continue;
+			}
+
+			const Op &op = ops[node];
+			if (op.kind == Op::Value) {
+				assert_invariant(op.tick <= tick);
+				ir::Value delayed = delay_sva_sample(eval, op.sig, tick - op.tick, ir::Sx, loc);
+				materialized[{node, tick}] = delayed.as_net();
+				stack.pop_back();
+				continue;
+			}
+
+			bool ready = true;
+			for (Node operand : {op.a, op.b, op.c}) {
+				if (!is_const(operand) && !materialized.count({operand, tick})) {
+					stack.push_back(operand);
+					ready = false;
+				}
+			}
+			if (!ready)
+				continue;
+			stack.pop_back();
+
+			auto get = [&](Node operand) -> ir::Net {
+				if (is_const(operand))
+					return operand == True ? ir::S1 : ir::S0;
+				return materialized.at({operand, tick});
+			};
+			auto &netlist = eval.netlist;
+			ir::Net result;
+			switch (op.kind) {
+			case Op::And: result = netlist.LogicAnd(get(op.a), get(op.b)); break;
+			case Op::Or:  result = netlist.LogicOr(get(op.a), get(op.b)); break;
+			case Op::Not: result = netlist.LogicNot(get(op.a)); break;
+			case Op::Mux: result = netlist.Mux(get(op.b), get(op.c), get(op.a)).as_net(); break;
+			default: assert_invariant(false && "unreachable");
+			}
+			materialized[{node, tick}] = result;
+		}
+
+		if (is_const(root))
+			return root == True ? ir::S1 : ir::S0;
+		return materialized.at({root, tick});
+	}
+
+private:
+	struct Op {
+		enum Kind { Const, Value, And, Or, Not, Mux } kind = Const;
+		// Operands, `a` selecting between `b` and `c` for a mux
+		Node a = False, b = False, c = False;
+		ir::Net sig = ir::S0;
+		int64_t tick = 0;
+	};
+
+	std::vector<Op> ops;
+	Yosys::dict<std::pair<RTLIL::SigBit, int64_t>, Node> values;
+	Yosys::dict<std::tuple<int, Node, Node, Node>, Node> interned;
+	Yosys::dict<std::pair<Node, int64_t>, ir::Net> materialized;
+	std::map<const ast::Expression *, std::pair<ir::Net, bool>> evaluated;
+
+	Node intern(typename Op::Kind kind, Node a, Node b, Node c) {
+		auto [it, inserted] = interned.emplace(std::make_tuple((int) kind, a, b, c), (Node) ops.size());
+		if (inserted) {
+			Op op;
+			op.kind = kind;
+			op.a = a;
+			op.b = b;
+			op.c = c;
+			ops.push_back(op);
+		}
+		return it->second;
+	}
+};
+
 struct AssertionMatch {
-	EvalContext& eval;
-	ir::Value sig;
-	ir::Value en;
-	// Ticks from the attempt start. Ranges are 32-bit, so their sums take 64 bits.
+	SvaFormulas& f;
+	SvaFormulas::Node sig;
+	// Ticks from the operand start. Ranges are 32-bit, so their sums take 64 bits.
 	int64_t start;
 	bool empty;
 	// Reads a value frozen when the attempt was queued, valid for the first tick only
 	bool frozen;
 	slang::SourceLocation loc;
 
-	AssertionMatch(EvalContext& eval_, ir::Value sig_,
+	AssertionMatch(SvaFormulas& f_, SvaFormulas::Node sig_,
 				   slang::SourceLocation loc_ = slang::SourceLocation::NoLocation):
-		eval(eval_), sig(sig_), en(ir::S1), start(0), empty(false), frozen(false), loc(loc_) {}
+		f(f_), sig(sig_), start(0), empty(false), frozen(false), loc(loc_) {}
 	AssertionMatch(const AssertionMatch&) = default;
 
 private:
-	AssertionMatch(EvalContext& eval_, ir::Value sig_, ir::Value en_, int64_t start_, bool empty_,
+	AssertionMatch(SvaFormulas& f_, SvaFormulas::Node sig_, int64_t start_, bool empty_,
 				   bool frozen_, slang::SourceLocation loc_):
-		eval(eval_), sig(sig_), en(en_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
+		f(f_), sig(sig_), start(start_), empty(empty_), frozen(frozen_), loc(loc_) {}
 
 public:
-	static AssertionMatch Empty(EvalContext& eval, slang::SourceLocation loc) {
-		return { eval, ir::S1, ir::S1, 0, true, false, loc };
+	static AssertionMatch Empty(SvaFormulas& f, slang::SourceLocation loc) {
+		return { f, SvaFormulas::True, 0, true, false, loc };
 	}
 
-	static AssertionMatch Operand(EvalContext& eval, const ast::Expression& expr, slang::SourceLocation loc) {
-		AssertionMatch ret(eval, eval.sva(expr), loc);
-		ret.frozen = eval.sva_read_frozen;
+	// An operand sampled on tick `tick` of the attempt
+	static AssertionMatch Operand(SvaFormulas& f, const ast::Expression& expr, int64_t tick,
+								  slang::SourceLocation loc) {
+		bool frozen;
+		ir::Net bit = f.sva(expr, frozen);
+		AssertionMatch ret(f, f.value(bit, tick), loc);
+		ret.frozen = frozen;
 		return ret;
 	}
 
 	AssertionMatch& operator=(const AssertionMatch& other) {
 		sig = other.sig;
-		en = other.en;
 		start = other.start;
 		empty = other.empty;
 		frozen = other.frozen;
@@ -107,54 +288,25 @@ public:
 		return *this;
 	}
 
+	// The path ending `time` ticks later. It reads the same ticks of the attempt as
+	// before, so its formula stays as it is.
 	AssertionMatch shift(int64_t time) const {
-		if (empty)
-			return { eval, sig, en, start + time, true, frozen, loc };
-
-		ir::Value shifted_sig = sig;
-		ir::Value shifted_en = en;
-		if (!sig.is_fully_const())
-			shifted_sig = delay_sva_sample(eval, sig, time, ir::Sx, loc);
-		if (!en.is_fully_const())
-			shifted_en = delay_sva_sample(eval, en, time, ir::S0, loc);
-		return { eval, shifted_sig, shifted_en, start + time, false, frozen, loc };
+		return { f, sig, start + time, empty, frozen, loc };
 	}
 
 	AssertionMatch operator||(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
-
-		ir::Value gated = en.is_fully_const() && en.as_bool() ? sig : ir::Value(eval.netlist.LogicAnd(en, sig));
-		ir::Value other_gated = other.en.is_fully_const() && other.en.as_bool()
-									? other.sig
-									: ir::Value(eval.netlist.LogicAnd(other.en, other.sig));
-		ir::Value result_sig = eval.netlist.LogicOr(gated, other_gated);
-		ir::Value result_en = eval.netlist.LogicOr(en, other.en);
-		return { eval, result_sig, result_en, std::max(other.start, start), false, frozen || other.frozen, loc };
+		return { f, f.disj(sig, other.sig), std::max(other.start, start), false, frozen || other.frozen, loc };
 	}
 
 	AssertionMatch operator&&(const AssertionMatch& other) const {
 		assert_invariant(!empty && !other.empty);
-
-		ir::Value result_en = eval.netlist.LogicAnd(en, other.en);
-		int64_t result_start = std::max(other.start, start);
-		bool result_frozen = frozen || other.frozen;
-		if (sig.is_fully_const() && sig.as_bool())
-			return { eval, other.sig, result_en, result_start, false, result_frozen, loc };
-		if (sig.is_fully_const() && !sig.as_bool())
-			return { eval, ir::S0, result_en, result_start, false, result_frozen, loc };
-		if (other.sig.is_fully_const() && other.sig.as_bool())
-			return { eval, sig, result_en, result_start, false, result_frozen, loc };
-		if (other.sig.is_fully_const() && !other.sig.as_bool())
-			return { eval, ir::S0, result_en, result_start, false, result_frozen, loc };
-		return { eval, eval.netlist.LogicAnd(sig, other.sig), result_en, result_start, false,
-				 result_frozen, loc };
+		return { f, f.conj(sig, other.sig), std::max(other.start, start), false, frozen || other.frozen, loc };
 	}
 
 	AssertionMatch operator!() const {
 		assert_invariant(!empty);
-
-		if (sig.is_fully_const()) return { eval, sig.as_bool() ? ir::S0 : ir::S1, en, start, false, frozen, loc };
-		return { eval, eval.netlist.LogicNot(sig), en, start, false, frozen, loc };
+		return { f, f.neg(sig), start, false, frozen, loc };
 	}
 };
 
@@ -163,31 +315,34 @@ public:
 // the tick it's placed at, so such a path can't go past the attempt's first tick.
 static void check_frozen_offset(const AssertionMatch& path, int64_t offset) {
 	if (path.frozen && offset > 0)
-		path.eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, path.loc);
+		path.f.eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, path.loc);
 }
 
-// The disable condition of an attempt, delayed by any number of ticks
+// The disable condition of an attempt, by the ticks it's sampled on
 class DisableSpans {
 public:
-	explicit DisableSpans(const AssertionMatch& abort): delayed({abort}) {}
+	DisableSpans(const AssertionMatch& abort_, ir::Net condition_): abort(abort_), condition(condition_) {}
 
-	// Has the condition been true on any of the ticks from `first` to `last` ago?
-	AssertionMatch span(int64_t first, int64_t last) {
-		check_frozen_offset(delayed[0], last);
+	// Has the condition been true on any of the ticks from `first` to `last` ticks before
+	// tick `tick` of the attempt?
+	AssertionMatch span(int64_t tick, int64_t first, int64_t last) {
+		check_frozen_offset(abort, last);
 
-		while ((int64_t) delayed.size() <= last)
-			delayed.push_back(delayed.back().shift(1));
-		auto& from_first = spans[first];
-		if (from_first.empty())
-			from_first.push_back(delayed[first]);
-		while ((int64_t) from_first.size() <= last - first)
-			from_first.push_back(from_first.back() || delayed[first + from_first.size()]);
-		return AssertionMatch(delayed[0].eval, from_first[last - first].sig, delayed[0].loc);
+		// Spans reach back to the start of an operand, so they're kept by the tick they
+		// begin on and grow from there
+		int64_t begin = tick - last;
+		auto& from_begin = spans[begin];
+		while ((int64_t) from_begin.size() <= last - first) {
+			auto now = abort.f.value(condition, begin + (int64_t) from_begin.size());
+			from_begin.push_back(from_begin.empty() ? now : abort.f.disj(from_begin.back(), now));
+		}
+		return AssertionMatch(abort.f, from_begin[last - first], abort.loc);
 	}
 
 private:
-	std::vector<AssertionMatch> delayed;
-	std::map<int64_t, std::vector<AssertionMatch>> spans;
+	AssertionMatch abort;
+	ir::Net condition;
+	std::map<int64_t, std::vector<SvaFormulas::Node>> spans;
 };
 
 // How a disable bears on what's being synthesized.
@@ -214,75 +369,87 @@ struct AttemptContext {
 		return { abort, settled, !dual };
 	}
 
-	// A boolean on the first tick of the operand
-	AssertionMatch atom(const AssertionMatch& boolean) const {
+	// A boolean on the first tick of the operand, tick `tick` of the attempt
+	AssertionMatch atom(const AssertionMatch& boolean, int64_t tick) const {
 		if (settled)
-			return AssertionMatch(boolean.eval, dual ? ir::S0 : ir::S1, boolean.loc);
+			return AssertionMatch(boolean.f, dual ? SvaFormulas::False : SvaFormulas::True, boolean.loc);
 
 		// A constant can have the value of the letter to begin with
-		if (abort == nullptr || (boolean.sig.is_fully_const() && boolean.sig.as_bool() != dual))
+		if (abort == nullptr || (SvaFormulas::is_const(boolean.sig) && (boolean.sig == SvaFormulas::True) != dual))
 			return boolean;
 
-		auto now = abort->span(0, 0);
+		auto now = abort->span(tick, 0, 0);
 		return dual ? boolean && !now : boolean || now;
 	}
 
-	// A path of the 1'b1s of a delay, `length` ticks long. Only the last one counts, as
-	// the next boolean in a path sees the disable over the ticks before it as well.
-	AssertionMatch true_path(EvalContext& eval, int64_t length, slang::SourceLocation loc) const {
-		AssertionMatch path = AssertionMatch(eval, ir::S1, loc).shift(length);
+	// A path of the 1'b1s of a delay, `length` ticks long from tick `tick` of the attempt.
+	// Only the last one counts, as the next boolean in a path sees the disable over the
+	// ticks before it as well.
+	AssertionMatch true_path(SvaFormulas& f, int64_t tick, int64_t length, slang::SourceLocation loc) const {
+		AssertionMatch path = AssertionMatch(f, SvaFormulas::True, loc).shift(length);
 		if (!dual || (abort == nullptr && !settled))
 			return path;
 		if (settled)
-			return path && AssertionMatch(eval, ir::S0, loc);
-		return path && !abort->span(0, length);
+			return path && AssertionMatch(f, SvaFormulas::False, loc);
+		return path && !abort->span(tick + length, 0, length);
 	}
 };
 
 // Paths of an operand by the tick it starts on, counted from the start of the operand
 // whose part it is. If the disable came ahead of that tick, the operand gets settled to
 // the letter. Otherwise it's as if the operand started off the attempt, so we synthesize
-// those two cases once each and pick per tick.
+// it on that tick, settle it once, and pick per tick.
 class OperandPaths {
 public:
-	using Synthesize = std::function<std::vector<AssertionMatch>(const AttemptContext&)>;
+	using Synthesize = std::function<std::vector<AssertionMatch>(const AttemptContext&, int64_t)>;
 
-	OperandPaths(const AttemptContext& ctx_, Synthesize synthesize_):
-		ctx(ctx_), synthesize(std::move(synthesize_)), from_start(synthesize(ctx)) {}
+	// `base` is the tick of the attempt the offsets count from
+	OperandPaths(const AttemptContext& ctx_, int64_t base_, Synthesize synthesize_):
+		ctx(ctx_), base(base_), synthesize(std::move(synthesize_)), from_start(synthesize(ctx, base)) {}
+
+	int64_t base_tick() const {
+		return base;
+	}
 
 	const std::vector<AssertionMatch>& at(int64_t offset) {
-		if (offset == 0 || ctx.abort == nullptr || ctx.settled)
+		// A settled operand reads nothing of the attempt, it's the same on any tick
+		if (offset == 0 || ctx.settled)
 			return from_start;
 
 		auto it = by_offset.find(offset);
 		if (it != by_offset.end())
 			return it->second;
 
+		std::vector<AssertionMatch> paths = synthesize(ctx, base + offset);
+		assert_invariant(paths.size() == from_start.size());
+		if (ctx.abort == nullptr)
+			return by_offset.emplace(offset, std::move(paths)).first->second;
+
 		if (!settled_paths.has_value()) {
 			AttemptContext settled_ctx = ctx;
 			settled_ctx.settled = true;
-			settled_paths = synthesize(settled_ctx);
+			settled_paths = synthesize(settled_ctx, base);
 			assert_invariant(settled_paths->size() == from_start.size());
 		}
 
-		std::vector<AssertionMatch> paths = from_start;
 		for (size_t i = 0; i < paths.size(); i++) {
 			AssertionMatch& path = paths[i];
 			const AssertionMatch& other = (*settled_paths)[i];
 			assert_invariant(path.empty == other.empty && path.start == other.start);
 			if (path.empty || path.sig == other.sig)
 				continue;
+			assert_invariant(SvaFormulas::is_const(other.sig));
 
 			// Reads the disable from before the operand start, on the tick the path ends
-			auto before = ctx.abort->span(path.start + 1, path.start + offset);
-			auto& netlist = path.eval.netlist;
-			path.sig = netlist.Mux(netlist.ReduceBool(path.sig), netlist.ReduceBool(other.sig), before.sig.as_net());
+			auto before = ctx.abort->span(base + offset + path.start, path.start + 1, path.start + offset);
+			path.sig = path.f.mux(before.sig, path.sig, other.sig);
 		}
 		return by_offset.emplace(offset, std::move(paths)).first->second;
 	}
 
 private:
 	AttemptContext ctx;
+	int64_t base;
 	Synthesize synthesize;
 	std::vector<AssertionMatch> from_start;
 	std::optional<std::vector<AssertionMatch>> settled_paths;
@@ -347,19 +514,20 @@ static AssertionMatch collapse_or(std::vector<AssertionMatch> paths) {
 
 // Paths of a sequence used as a property. An empty match is no success, and with no
 // other match to go by the property fails on every attempt.
-static std::vector<AssertionMatch> property_paths(EvalContext& eval, const AttemptContext& ctx,
+static std::vector<AssertionMatch> property_paths(SvaFormulas& f, const AttemptContext& ctx,
 												  std::vector<AssertionMatch> paths,
-												  slang::SourceLocation loc) {
+												  slang::SourceLocation loc, int64_t tick) {
 	std::erase_if(paths, [](const AssertionMatch& path) { return path.empty; });
 	if (paths.empty())
-		paths.push_back(ctx.atom(AssertionMatch(eval, ir::S0, loc)));
+		paths.push_back(ctx.atom(AssertionMatch(f, SvaFormulas::False, loc), tick));
 	return paths;
 }
 
-// Negation of paths synthesized in the context `ctx`
-static std::vector<AssertionMatch> not_vec(EvalContext& eval, const AttemptContext& ctx,
-										   std::vector<AssertionMatch> in, slang::SourceLocation loc) {
-	return { !collapse_or(property_paths(eval, ctx, std::move(in), loc)) };
+// Negation of paths synthesized in the context `ctx`, starting on tick `tick` of the attempt
+static std::vector<AssertionMatch> not_vec(SvaFormulas& f, const AttemptContext& ctx,
+										   std::vector<AssertionMatch> in, slang::SourceLocation loc,
+										   int64_t tick) {
+	return { !collapse_or(property_paths(f, ctx, std::move(in), loc, tick)) };
 }
 
 // `a` being synthesized in the context `ctx`
@@ -378,19 +546,19 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 					if (offset == 1)
 						new_own_paths.push_back(path);
 					else
-						new_own_paths.push_back(ctx.true_path(path.eval, offset - 2, path.loc));
+						new_own_paths.push_back(ctx.true_path(path.f, b.base_tick(), offset - 2, path.loc));
 					continue;
 				}
 				if (path.empty) {
 					// `empty ##N seq` is `##(N-1) seq`
 					check_frozen_offset(inner, offset - 1);
-					new_own_paths.push_back(AssertionMatch(path.eval, ir::S1, path.loc).shift(offset - 1 + inner.start) && inner);
+					new_own_paths.push_back(AssertionMatch(path.f, SvaFormulas::True, path.loc).shift(offset - 1 + inner.start) && inner);
 					continue;
 				}
 				if (inner.empty) {
 					// `seq ##N empty` is `seq ##(N-1) 1'b1`
 					if (offset > 0)
-						new_own_paths.push_back(path.shift(offset - 1) && ctx.true_path(path.eval, path.start + offset - 1, path.loc));
+						new_own_paths.push_back(path.shift(offset - 1) && ctx.true_path(path.f, b.base_tick(), path.start + offset - 1, path.loc));
 					continue;
 				}
 				check_frozen_offset(inner, path.start + offset);
@@ -401,7 +569,7 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 	return compress_paths(new_own_paths);
 }
 
-static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, const AttemptContext& ctx, int64_t min, int64_t max,
+static std::vector<AssertionMatch> seq_prefix_vec(SvaFormulas& f, const AttemptContext& ctx, int64_t min, int64_t max,
 												  OperandPaths& b, slang::SourceLocation loc) {
 	std::vector<AssertionMatch> paths;
 	for (int64_t offset = min; offset <= max; offset++) {
@@ -409,17 +577,17 @@ static std::vector<AssertionMatch> seq_prefix_vec(EvalContext& eval, const Attem
 			if (inner.empty) {
 				// `##N empty` is `##(N-1) 1'b1`, for N = 0 there's no match
 				if (offset > 0)
-					paths.push_back(ctx.true_path(eval, offset - 1, loc));
+					paths.push_back(ctx.true_path(f, b.base_tick(), offset - 1, loc));
 			} else {
 				check_frozen_offset(inner, offset);
-				paths.push_back(AssertionMatch(eval, ir::S1, loc).shift(offset + inner.start) && inner);
+				paths.push_back(AssertionMatch(f, SvaFormulas::True, loc).shift(offset + inner.start) && inner);
 			}
 		}
 	}
 	return compress_paths(paths);
 }
 
-static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const AttemptContext& ctx,
+static std::vector<AssertionMatch> apply_repetition(SvaFormulas& f, const AttemptContext& ctx,
 													const ast::AssertionExpr& expr,
 													std::optional<ast::SequenceRepetition> repetition,
 													OperandPaths& operand) {
@@ -427,13 +595,13 @@ static std::vector<AssertionMatch> apply_repetition(EvalContext& eval, const Att
 		return operand.at(0);
 
 	if (repetition->kind != ast::SequenceRepetition::Consecutive || !repetition->range.max.has_value()) {
-		eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+		f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 		return {};
 	}
 
 	std::vector<AssertionMatch> repeated;
 	if (repetition->range.min == 0)
-		repeated.push_back(AssertionMatch::Empty(eval, expr_loc(expr)));
+		repeated.push_back(AssertionMatch::Empty(f, expr_loc(expr)));
 
 	// Each count of repetitions is the count before followed by one more
 	std::vector<AssertionMatch> count_paths;
@@ -470,27 +638,29 @@ static bool is_property(const ast::AssertionExpr& expr) {
 // An empty result stands for a sequence with no possible match. Constructs we
 // can't lower also yield an empty result, but those have raised an error
 // diagnostic so the design won't be read in.
-static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, const AttemptContext& ctx,
-															 const ast::AssertionExpr& expr) {
+//
+// `base` is the tick of the attempt the expression starts on.
+static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, const AttemptContext& ctx,
+															 const ast::AssertionExpr& expr, int64_t base) {
 	switch (expr.kind) {
 		case slang::ast::AssertionExprKind::Invalid:
 			assert_invariant(false && "unreachable");
 		case slang::ast::AssertionExprKind::Simple:
 			{
 				const auto& simple = expr.as<ast::SimpleAssertionExpr>();
-				OperandPaths operand(ctx, [&](const AttemptContext& at) -> std::vector<AssertionMatch> {
+				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) -> std::vector<AssertionMatch> {
 					if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
 						const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
 						if (instance.isRecursiveProperty) {
-							eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
+							f.eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
 							return {};
 						}
-						return synthesize_assertion_expr(eval, at, instance.body);
+						return synthesize_assertion_expr(f, at, instance.body, tick);
 					}
-					return { at.atom(simple.isNullExpr ? AssertionMatch(eval, ir::S0, expr_loc(expr))
-													   : AssertionMatch::Operand(eval, simple.expr, expr_loc(expr))) };
+					return { at.atom(simple.isNullExpr ? AssertionMatch(f, SvaFormulas::False, expr_loc(expr))
+													   : AssertionMatch::Operand(f, simple.expr, tick, expr_loc(expr)), tick) };
 				});
-				return apply_repetition(eval, ctx, expr, simple.repetition, operand);
+				return apply_repetition(f, ctx, expr, simple.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::SequenceConcat:
 			{
@@ -498,13 +668,13 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				std::vector<AssertionMatch> own_paths;
 				for (size_t i = 0; i < sequence.elements.size(); i++) {
 					const auto& element = sequence.elements[i];
-					OperandPaths inner_paths(ctx, [&](const AttemptContext& at) {
-						return synthesize_assertion_expr(eval, at, *element.sequence);
+					OperandPaths inner_paths(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+						return synthesize_assertion_expr(f, at, *element.sequence, tick);
 					});
 
 					auto delay = element.delay;
 					if (!delay.max.has_value()) {
-						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+						f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
 					}
 
@@ -513,7 +683,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					if (i != 0)
 						own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
 					else if (element.delayRange.start().valid())
-						own_paths = seq_prefix_vec(eval, ctx, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
+						own_paths = seq_prefix_vec(f, ctx, delay.min, delay.max.value(), inner_paths, expr_loc(expr));
 					else
 						own_paths = compress_paths(inner_paths.at(0));
 				}
@@ -524,19 +694,20 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				const auto& uop = expr.as<ast::UnaryAssertionExpr>();
 				switch (uop.op) {
 				case slang::ast::UnaryAssertionOperator::Not:
-					return not_vec(eval, ctx.negated(), synthesize_assertion_expr(eval, ctx.negated(), uop.expr), expr_loc(expr));
+					return not_vec(f, ctx.negated(), synthesize_assertion_expr(f, ctx.negated(), uop.expr, base), expr_loc(expr),
+								   base);
 
 				case slang::ast::UnaryAssertionOperator::Eventually:
 				case slang::ast::UnaryAssertionOperator::SEventually:
 				{
 					if (!uop.range.has_value() || !uop.range->max.has_value()) {
-						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+						f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
 					}
 
-					std::vector<AssertionMatch> true_path = {{eval, ir::S1, expr_loc(expr)}};
-					OperandPaths operand(ctx, [&](const AttemptContext& at) {
-						return property_paths(eval, at, synthesize_assertion_expr(eval, at, uop.expr), expr_loc(expr));
+					std::vector<AssertionMatch> true_path = {{f, SvaFormulas::True, expr_loc(expr)}};
+					OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+						return property_paths(f, at, synthesize_assertion_expr(f, at, uop.expr, tick), expr_loc(expr), tick);
 					});
 					return seq_vec(ctx, true_path, uop.range->min, uop.range->max.value(), operand);
 				}
@@ -547,22 +718,22 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					uint32_t delay = 1;
 					if (uop.range.has_value()) {
 						if (!uop.range->max.has_value() || uop.range->min != uop.range->max.value()) {
-							eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+							f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 							return {};
 						}
 						delay = uop.range->min;
 					}
 
-					std::vector<AssertionMatch> true_path = {{eval, ir::S1, expr_loc(expr)}};
-					OperandPaths operand(ctx, [&](const AttemptContext& at) {
-						return property_paths(eval, at, synthesize_assertion_expr(eval, at, uop.expr), expr_loc(expr));
+					std::vector<AssertionMatch> true_path = {{f, SvaFormulas::True, expr_loc(expr)}};
+					OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+						return property_paths(f, at, synthesize_assertion_expr(f, at, uop.expr, tick), expr_loc(expr), tick);
 					});
 					return seq_vec(ctx, true_path, delay, delay, operand);
 				}
 
 				case slang::ast::UnaryAssertionOperator::Always:
 				case slang::ast::UnaryAssertionOperator::SAlways:
-					eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+					f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 					return {};
 				}
 				assert_invariant(false && "unreachable");
@@ -575,13 +746,13 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 								   biop.op == ast::BinaryAssertionOperator::NonOverlappedImplication;
 				auto left_ctx = implication ? ctx.negated() : ctx;
 
-				OperandPaths left_at(left_ctx, [&](const AttemptContext& at) {
-					return synthesize_assertion_expr(eval, at, biop.left);
+				OperandPaths left_at(left_ctx, base, [&](const AttemptContext& at, int64_t tick) {
+					return synthesize_assertion_expr(f, at, biop.left, tick);
 				});
 				// `R |-> P` is `not (R ##0 not P)`, and `R |=> P` the same with a `##1`
-				OperandPaths right_at(ctx, [&](const AttemptContext& at) {
-					auto paths = synthesize_assertion_expr(eval, at, biop.right);
-					return implication ? not_vec(eval, at, std::move(paths), expr_loc(expr)) : paths;
+				OperandPaths right_at(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+					auto paths = synthesize_assertion_expr(f, at, biop.right, tick);
+					return implication ? not_vec(f, at, std::move(paths), expr_loc(expr), tick) : paths;
 				});
 				auto left = left_at.at(0);
 				auto right = right_at.at(0);
@@ -594,8 +765,8 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 					The end time is the end time of either te1 or te2, whichever matches last.
 					*/
 					if (is_property(biop)) {
-						left = property_paths(eval, ctx, std::move(left), expr_loc(expr));
-						right = property_paths(eval, ctx, std::move(right), expr_loc(expr));
+						left = property_paths(f, ctx, std::move(left), expr_loc(expr), base);
+						right = property_paths(f, ctx, std::move(right), expr_loc(expr), base);
 					}
 
 					std::vector<AssertionMatch> results;
@@ -629,7 +800,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 
 					auto condition = collapse_or(left);
 					if (condition.start != 0) {
-						eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+						f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 						return {};
 					}
 
@@ -670,7 +841,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				case ast::BinaryAssertionOperator::NonOverlappedImplication:
 				{
 					int delay = biop.op == ast::BinaryAssertionOperator::NonOverlappedImplication ? 1 : 0;
-					return not_vec(eval, left_ctx, seq_vec(left_ctx, left, delay, delay, right_at), expr_loc(expr));
+					return not_vec(f, left_ctx, seq_vec(left_ctx, left, delay, delay, right_at), expr_loc(expr), base);
 				}
 
 				case ast::BinaryAssertionOperator::Within:
@@ -682,44 +853,44 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				case ast::BinaryAssertionOperator::Implies:
 				case ast::BinaryAssertionOperator::OverlappedFollowedBy:
 				case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
-					eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+					f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 					return {};
 				}
 				assert_invariant(false && "unreachable");
 			}
 		case slang::ast::AssertionExprKind::Clocking:
 			{
-				eval.netlist.add_diag(diag::UnsupportedSVAFeature, expr_loc(expr));
+				f.eval.netlist.add_diag(diag::UnsupportedSVAFeature, expr_loc(expr));
 				return {};
 			}
 		case slang::ast::AssertionExprKind::DisableIff:
 			// eval_assertion() handles the one a property is allowed, at the top of it.
 			// slang only rejects the others in direct instances of a property.
-			eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+			f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 			return {};
 
 		case slang::ast::AssertionExprKind::SequenceWithMatch:
 			{
 				const auto& with_match = expr.as<ast::SequenceWithMatchExpr>();
 				if (!with_match.matchItems.empty()) {
-					eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+					f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 					return {};
 				}
 
-				OperandPaths operand(ctx, [&](const AttemptContext& at) {
-					return synthesize_assertion_expr(eval, at, with_match.expr);
+				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
+					return synthesize_assertion_expr(f, at, with_match.expr, tick);
 				});
-				return apply_repetition(eval, ctx, expr, with_match.repetition, operand);
+				return apply_repetition(f, ctx, expr, with_match.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::FirstMatch:
 			{
 				const auto& first_match = expr.as<ast::FirstMatchAssertionExpr>();
 				if (!first_match.matchItems.empty()) {
-					eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+					f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 					return {};
 				}
 
-				auto paths = compress_paths(synthesize_assertion_expr(eval, ctx, first_match.seq));
+				auto paths = compress_paths(synthesize_assertion_expr(f, ctx, first_match.seq, base));
 				std::vector<AssertionMatch> results;
 
 				// compress_paths() keeps any empty match as the last path
@@ -749,12 +920,12 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(EvalContext& eval, 
 				// The sequence used as a property. A bounded one has settled every match
 				// it has once its longest path is over, where weak and strong agree.
 				const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
-				return property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, strong_weak.expr), expr_loc(expr));
+				return property_paths(f, ctx, synthesize_assertion_expr(f, ctx, strong_weak.expr, base), expr_loc(expr), base);
 			}
 		case slang::ast::AssertionExprKind::Abort:
 		case slang::ast::AssertionExprKind::Conditional:
 		case slang::ast::AssertionExprKind::Case:
-			eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
+			f.eval.netlist.add_diag(diag::AssertionUnsupported, expr_loc(expr));
 			return {};
 	}
 	assert_invariant(false && "unreachable");
@@ -835,6 +1006,7 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 		condition = scope->getCompilation().getDefaultDisable(*scope);
 	}
 
+	SvaFormulas f(eval);
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
 	if (condition) {
@@ -843,22 +1015,23 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 		// it sampled on the ticks of the assertion's clock, as formal tools do. A condition
 		// changing on a clock edge thus takes effect one tick later than in simulation,
 		// and a pulse between two ticks goes unseen.
-		auto abort = AssertionMatch::Operand(eval, *condition, disable_loc);
-		abort.sig = eval.netlist.ReduceBool(abort.sig);
-		if (!abort.sig.is_fully_zero()) {
-			ctx.abort = &spans.emplace(abort);
+		auto abort = AssertionMatch::Operand(f, *condition, 0, disable_loc);
+		bool frozen;
+		ir::Net sampled = f.sva(*condition, frozen);
+		if (sampled != ir::S0) {
+			ctx.abort = &spans.emplace(abort, sampled);
 			// A cover is the dual of an assertion of the negation, its letters are the
 			// dual of T. It succeeds where the attempt was settled ahead of the disable.
 			ctx.dual = cover;
 		}
 	}
 
-	auto paths = property_paths(eval, ctx, synthesize_assertion_expr(eval, ctx, *property), expr_loc(assertion));
+	auto paths = property_paths(f, ctx, synthesize_assertion_expr(f, ctx, *property, 0), expr_loc(assertion), 0);
 	auto sig = collapse_or(paths);
 
 	// Starts out low, so no attempt gets reported before it had the time to finish
 	auto attempted = delay_sva_sample(eval, attempt, sig.start, ir::S0, sig.loc);
-	return { sig.sig, eval.netlist.LogicAnd(attempted, sig.en) };
+	return { f.materialize(sig.sig, sig.start, sig.loc), attempted };
 }
 
 // The body of a sequence or property names signals of the instance it's declared in.
