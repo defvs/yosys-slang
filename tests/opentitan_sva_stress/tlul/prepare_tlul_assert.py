@@ -130,6 +130,20 @@ def filter_tlul_assert(src, dst, explicit_clocking=False):
                 index += 1
             continue
 
+        # ASSERT_FINAL puts an immediate assertion in a final procedure, which
+        # checks the state once simulation has ended. A netlist has no end of
+        # simulation, so sv-elab rejects assertions in final procedures; the
+        # macro is empty in OpenTitan's own formal mode (FPV_ON) for the same
+        # reason.
+        if stripped.startswith("`ASSERT_FINAL("):
+            out.append("    // Disabled for sv-elab SVA: ASSERT_FINAL checks the end of simulation.\n")
+            depth = lines[index].count("(") - lines[index].count(")")
+            index += 1
+            while index < len(lines) and depth > 0:
+                depth += lines[index].count("(") - lines[index].count(")")
+                index += 1
+            continue
+
         if stripped.startswith("sequence "):
             seq_name = stripped.split()[1].rstrip(";")
             if seq_name in SEQUENCE_EXPR:

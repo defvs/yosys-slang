@@ -67,6 +67,7 @@ done
   echo "| tlul_assert.sv | knownness assertions | \$isunknown is not synthesized |"
   echo "| tlul_assert.sv | legalAOpcodeErr_A / sizeGTEMaskErr_A / sizeMatchesMaskErr_A / addrSizeAlignedErr_A | unbounded s_eventually |"
   echo "| tlul_assert.sv | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |"
+  echo "| tlul_assert.sv | noOutstandingReqsAtEndOfSim_A | ASSERT_FINAL checks the end of simulation, which has no counterpart in a netlist |"
   echo
   echo "## Result snippets"
   echo

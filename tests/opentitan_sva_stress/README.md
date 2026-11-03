@@ -35,6 +35,7 @@ Unsupported or rewritten OpenTitan constructs:
 | `tlul_assert.sv` | knownness assertions | `$isunknown` |
 | `tlul_assert.sv` | `legalAOpcodeErr_A`, `sizeGTEMaskErr_A`, `sizeMatchesMaskErr_A`, `addrSizeAlignedErr_A` | unbounded `s_eventually` |
 | `tlul_assert.sv` | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |
+| `tlul_assert.sv` | `noOutstandingReqsAtEndOfSim_A` (`ASSERT_FINAL`) | checks the end of simulation in a final procedure, which has no counterpart in a netlist; sv-elab rejects it |
 | OpenTitan enum references | rewritten to constants where needed | hierarchical enum literals caused missing-wire frontend errors (FIXME) |
 
 ## Main Suite Integration

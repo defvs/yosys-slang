@@ -99,6 +99,7 @@ extern slang::DiagCode FinalAssertionUnsupported;
 extern slang::DiagCode CheckerUnsupported;
 extern slang::DiagCode SVACallSideEffect;
 extern slang::DiagCode SVACallKeepsState;
+extern slang::DiagCode NoteAssertionInFunction;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

@@ -114,6 +114,7 @@ fi
   echo "| sizeMatchesMaskErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
   echo "| addrSizeAlignedErr_A | unbounded s_eventually is not synthesized by current sv-elab |"
   echo "| TLUL cover properties | coverage-only, and some cover sequences use unsupported match-item locals / goto repetition |"
+  echo "| noOutstandingReqsAtEndOfSim_A | ASSERT_FINAL checks the end of simulation, which has no counterpart in a netlist |"
   echo
   echo "## Synthesized assertions"
   echo

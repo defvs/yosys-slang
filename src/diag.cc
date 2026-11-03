@@ -146,6 +146,7 @@ DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
 DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
 DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
 DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
+DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -390,8 +391,10 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(ActionBlockUnsupported, "unsupported statement in assertion action block");
 	engine.setSeverity(ActionBlockUnsupported, DiagnosticSeverity::Error);
 
-	engine.setMessage(FinalAssertionUnsupported, "assertion in final procedure will not be synthesized");
-	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Warning);
+	engine.setMessage(FinalAssertionUnsupported, "assertions in final procedures are unsupported");
+	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Error);
+	engine.setMessage(NoteAssertionInFunction, "called function runs this assertion");
+	engine.setSeverity(NoteAssertionInFunction, DiagnosticSeverity::Note);
 
 	engine.setMessage(CheckerUnsupported, "checker instances are unsupported");
 	engine.setSeverity(CheckerUnsupported, DiagnosticSeverity::Error);
