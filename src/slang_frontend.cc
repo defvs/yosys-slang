@@ -3650,6 +3650,17 @@ public:
 
 	void handle(const ast::PropertySymbol &) {}
 
+	// Like a sequence or property declaration, a checker declaration does nothing
+	// until it is instantiated
+	void handle(const ast::CheckerSymbol &) {}
+
+	// Not even with assertions ignored can an instance be left out: a checker can have
+	// output ports and logic of its own (IEEE Std 1800-2017 section 17.2)
+	void handle(const ast::CheckerInstanceSymbol &sym)
+	{
+		netlist.add_diag(diag::CheckerUnsupported, sym.location);
+	}
+
 	void handle(const ast::Symbol &sym)
 	{
 		unimplemented(sym);

@@ -1129,6 +1129,9 @@ public:
 		netlist.add_diag(diag::WaitStatementUnsupported, stmt.sourceRange);
 	}
 
+	// The checker instances are symbols in the scope around, those get the error
+	void handle(const ast::ProceduralCheckerStatement &) {}
+
 	void handle(const ast::Statement &stmt)
 	{
 		netlist.add_diag(diag::LangFeatureUnsupported, stmt.sourceRange.start());

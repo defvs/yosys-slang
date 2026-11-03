@@ -1,0 +1,74 @@
+# A checker declaration does nothing until it is instantiated
+read_slang <<EOF
+checker unit_checker(logic x, event e);
+	assert property (@e x);
+endchecker
+
+module checker_declarations(input logic clk, input logic a, input logic b);
+	checker local_checker(logic x, event e);
+		assert property (@e x);
+	endchecker
+
+	if (1) begin : gen
+		checker generated_checker(logic x, event e);
+			assert property (@e x);
+		endchecker
+	end
+
+	assert property (@(posedge clk) a |=> b);
+endmodule
+EOF
+
+select -assert-count 1 t:$check
+
+design -reset
+
+read_slang --ignore-assertions <<EOF
+module ignored_checker_declaration(input logic a);
+	checker local_checker(logic x, event e);
+		assert property (@e x);
+	endchecker
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "checker instances are unsupported"
+read_slang <<EOF
+checker held(logic x, logic y, event e);
+	assert property (@e x |=> y);
+endchecker
+
+module checker_instance(input logic clk, input logic a, input logic b);
+	held u(a, b, posedge clk);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "checker instances are unsupported"
+read_slang <<EOF
+checker held(logic x, logic y, event e);
+	assert property (@e x |=> y);
+endchecker
+
+module procedural_checker_instance(input logic clk, input logic a, input logic b);
+	always @(posedge clk)
+		held u(a, b, posedge clk);
+endmodule
+EOF
+
+design -reset
+
+# Ignoring assertions can't leave out an instance: the checker can drive the design
+# through an output port
+test_slangdiag -expect "checker instances are unsupported"
+read_slang --ignore-assertions <<EOF
+checker forward(input logic x, output logic y);
+	assign y = x;
+endchecker
+
+module checker_output(input logic a, output logic o);
+	forward u(a, o);
+endmodule
+EOF
