@@ -1268,64 +1268,558 @@ void handle_display([[maybe_unused]] ProceduralContext &context, [[maybe_unused]
 #endif
 }
 
-// Find a statement in an assertion action block that does more than report
-static const ast::Statement *find_nonreporting_action(const ast::Statement *stmt)
+// The subroutine the symbol is a formal argument or a local variable of, if any
+static const ast::SubroutineSymbol *owning_subroutine(const ast::Symbol &symbol)
 {
-	if (!stmt)
+	const ast::Scope *scope = symbol.getParentScope();
+	while (scope && ast::StatementBlockSymbol::isKind(scope->asSymbol().kind))
+		scope = scope->asSymbol().getParentScope();
+	if (!scope || !ast::SubroutineSymbol::isKind(scope->asSymbol().kind))
 		return nullptr;
-
-	switch (stmt->kind) {
-	case ast::StatementKind::Empty:
-		return nullptr;
-	case ast::StatementKind::List:
-		for (auto item : stmt->as<ast::StatementList>().list) {
-			if (auto found = find_nonreporting_action(item))
-				return found;
-		}
-		return nullptr;
-	case ast::StatementKind::Block:
-		return find_nonreporting_action(&stmt->as<ast::BlockStatement>().body);
-	case ast::StatementKind::Conditional: {
-		const auto &cond = stmt->as<ast::ConditionalStatement>();
-		if (auto found = find_nonreporting_action(&cond.ifTrue))
-			return found;
-		return find_nonreporting_action(cond.ifFalse);
-	}
-	case ast::StatementKind::ExpressionStatement: {
-		const auto &expr = stmt->as<ast::ExpressionStatement>().expr;
-		if (!ast::CallExpression::isKind(expr.kind))
-			return stmt;
-		const auto &call = expr.as<ast::CallExpression>();
-		for (std::string_view task : {"$fatal", "$error", "$warning", "$info", "$display",
-				"$displayb", "$displayh", "$displayo", "$write", "$writeb", "$writeh", "$writeo",
-				"$strobe", "$strobeb", "$strobeh", "$strobeo"}) {
-			if (call.isSystemCall() && call.getSubroutineName() == task)
-				return nullptr;
-		}
-		return stmt;
-	}
-	default:
-		return stmt;
-	}
+	return &scope->asSymbol().as<ast::SubroutineSymbol>();
 }
+
+// System tasks that only report or end the simulation, nothing in the design sees what
+// they do. $fatal is a report and a $finish (IEEE Std 1800-2017 section 20.10), $exit
+// a $finish too (section 20.2).
+static bool is_reporting_task(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> tasks = {
+		"$fatal", "$error", "$warning", "$info", "$finish", "$stop", "$exit",
+		"$display", "$displayb", "$displayh", "$displayo",
+		"$write", "$writeb", "$writeh", "$writeo",
+		"$strobe", "$strobeb", "$strobeh", "$strobeo",
+		"$monitor", "$monitorb", "$monitorh", "$monitoro", "$monitoron", "$monitoroff",
+		"$fdisplay", "$fdisplayb", "$fdisplayh", "$fdisplayo",
+		"$fwrite", "$fwriteb", "$fwriteh", "$fwriteo",
+		"$fstrobe", "$fstrobeb", "$fstrobeh", "$fstrobeo",
+		"$fmonitor", "$fmonitorb", "$fmonitorh", "$fmonitoro",
+		"$fflush", "$printtimescale", "$timeformat",
+		"$dumpfile", "$dumpvars", "$dumpon", "$dumpoff", "$dumpall", "$dumplimit", "$dumpflush",
+	};
+	return tasks.count(name);
+}
+
+// System functions and methods that only compute a value. Some of the names are also
+// those of associative array methods writing their index argument, slang marks those
+// as having output arguments.
+static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
+{
+	static const std::unordered_set<std::string_view> functions = {
+		"$signed", "$unsigned", "$itor", "$rtoi", "$bitstoreal", "$realtobits",
+		"$bitstoshortreal", "$shortrealtobits",
+		"$bits", "$typename", "$isunbounded", "$left", "$right", "$low", "$high",
+		"$increment", "$size", "$dimensions", "$unpacked_dimensions",
+		"$clog2", "$ln", "$log10", "$exp", "$sqrt", "$pow", "$floor", "$ceil",
+		"$sin", "$cos", "$tan", "$asin", "$acos", "$atan", "$atan2", "$hypot",
+		"$sinh", "$cosh", "$tanh", "$asinh", "$acosh", "$atanh",
+		"$countbits", "$countones", "$onehot", "$onehot0", "$isunknown",
+		"$time", "$stime", "$realtime", "$sformatf", "$psprintf", "$test$plusargs",
+		"$sampled", "$rose", "$fell", "$stable", "$changed", "$past",
+		"len", "getc", "toupper", "tolower", "compare", "icompare", "substr",
+		"atoi", "atohex", "atooct", "atobin", "atoreal",
+		"name", "first", "last", "next", "prev", "num", "size", "exists",
+		"sum", "product", "and", "or", "xor", "min", "max", "unique", "unique_index",
+		"find", "find_index", "find_first", "find_first_index", "find_last", "find_last_index",
+	};
+	return !info.subroutine->hasOutputArgs && functions.count(info.subroutine->name);
+}
+
+// Finds the first thing a piece of code does that can be seen from outside of it: an
+// assignment to a variable that isn't its own, or a call of something that can make one
+// or do more than report. In a subroutine it is also a read of one of its static
+// variables before the call has assigned it, as that reads state kept from an earlier
+// call. Every path through the code counts, conditions don't get evaluated.
+struct EffectFinder : public ast::ASTVisitor<EffectFinder,
+		ast::VisitFlags::Statements | ast::VisitFlags::Expressions>
+{
+	struct Effect {
+		slang::SourceRange range;
+		bool keeps_state;
+	};
+
+	// The subroutines being looked into, and what was found in those done
+	struct Calls {
+		std::vector<const ast::SubroutineSymbol *> stack;
+		hashlib::dict<const ast::SubroutineSymbol *, std::optional<Effect>> done;
+	};
+
+	// The static variables of the subroutine which every path so far has assigned,
+	// unless no path gets here
+	struct Flow {
+		hashlib::pool<const ast::Symbol *> assigned;
+		bool unreachable = false;
+	};
+
+	NetlistContext &netlist;
+	Calls own_calls;
+	Calls &calls;
+	// The subroutine whose body this is, null for an action block
+	const ast::SubroutineSymbol *subroutine = nullptr;
+	// The variables declared in the action block
+	hashlib::pool<const ast::Symbol *> locals;
+	Flow flow;
+	int loop_depth = 0;
+	// The expression is all of an expression statement, so it runs whenever it's reached
+	bool top_level = false;
+	const ast::Statement *current_statement = nullptr;
+	std::optional<Effect> effect;
+
+	EffectFinder(NetlistContext &netlist)
+		: netlist(netlist), calls(own_calls) {}
+
+	EffectFinder(NetlistContext &netlist, Calls &calls, const ast::SubroutineSymbol &subroutine)
+		: netlist(netlist), calls(calls), subroutine(&subroutine) {}
+
+	void found(slang::SourceRange range, bool keeps_state = false)
+	{
+		if (effect)
+			return;
+		// What gets left out of an action block is a statement, point at that
+		if (!subroutine && current_statement)
+			range = current_statement->sourceRange;
+		effect = Effect{range, keeps_state};
+	}
+
+	static Flow meet(const Flow &a, const Flow &b)
+	{
+		if (a.unreachable)
+			return b;
+		if (b.unreachable)
+			return a;
+		Flow ret;
+		for (auto symbol : a.assigned)
+			if (b.assigned.count(symbol))
+				ret.assigned.insert(symbol);
+		return ret;
+	}
+
+	void body_of_subroutine()
+	{
+		// The call assigns the arguments passed in before it runs the body
+		for (auto arg : subroutine->getArguments())
+			if (arg->direction != ast::ArgumentDirection::Out)
+				flow.assigned.insert(arg);
+		statement(subroutine->getBody());
+		leave(slang::SourceRange(subroutine->location,
+								 subroutine->location + subroutine->name.size()), false);
+	}
+
+	// Leaving the subroutine reads its output arguments, and its return value unless a
+	// return statement is giving it
+	void leave(slang::SourceRange range, bool value_given)
+	{
+		for (auto arg : subroutine->getArguments())
+			if (arg->direction == ast::ArgumentDirection::Out)
+				read(*arg, range);
+		if (subroutine->returnValVar && !value_given)
+			read(*subroutine->returnValVar, range);
+	}
+
+	void read(const ast::Symbol &symbol, slang::SourceRange range)
+	{
+		if (!subroutine || flow.unreachable || !ast::VariableSymbol::isKind(symbol.kind))
+			return;
+		if (symbol.as<ast::VariableSymbol>().lifetime == ast::VariableLifetime::Static &&
+				owning_subroutine(symbol) == subroutine && !flow.assigned.count(&symbol))
+			found(range, true);
+	}
+
+	bool is_own(const ast::Symbol &symbol)
+	{
+		return subroutine ? owning_subroutine(symbol) == subroutine : locals.count(&symbol);
+	}
+
+	// An assignment to `expr`, which also reads it if `reads` is set. With `whole` set
+	// it assigns all of a variable named by `expr` on each path reaching it.
+	void assign_to(const ast::Expression &expr, bool reads, bool whole)
+	{
+		switch (expr.kind) {
+		case ast::ExpressionKind::NamedValue:
+		case ast::ExpressionKind::HierarchicalValue: {
+			const auto &symbol = expr.as<ast::ValueExpressionBase>().symbol;
+			if (reads)
+				read(symbol, expr.sourceRange);
+			if (!is_own(symbol))
+				found(expr.sourceRange);
+			else if (whole && !flow.unreachable)
+				flow.assigned.insert(&symbol);
+			break;
+		}
+		case ast::ExpressionKind::ElementSelect: {
+			const auto &select = expr.as<ast::ElementSelectExpression>();
+			assign_to(select.value(), reads, false);
+			select.selector().visit(*this);
+			break;
+		}
+		case ast::ExpressionKind::RangeSelect: {
+			const auto &select = expr.as<ast::RangeSelectExpression>();
+			assign_to(select.value(), reads, false);
+			select.left().visit(*this);
+			select.right().visit(*this);
+			break;
+		}
+		case ast::ExpressionKind::MemberAccess:
+			assign_to(expr.as<ast::MemberAccessExpression>().value(), reads, false);
+			break;
+		case ast::ExpressionKind::Concatenation:
+			for (auto operand : expr.as<ast::ConcatenationExpression>().operands())
+				assign_to(*operand, reads, whole);
+			break;
+		case ast::ExpressionKind::Streaming:
+			for (auto &stream : expr.as<ast::StreamingConcatenationExpression>().streams()) {
+				assign_to(*stream.operand, reads, false);
+				if (stream.withExpr)
+					stream.withExpr->visit(*this);
+			}
+			break;
+		case ast::ExpressionKind::SimpleAssignmentPattern:
+			// Each element is an assignment of its own
+			for (auto element : expr.as<ast::SimpleAssignmentPatternExpression>().elements())
+				element->visit(*this);
+			break;
+		case ast::ExpressionKind::Conversion:
+			assign_to(expr.as<ast::ConversionExpression>().operand(), reads, whole);
+			break;
+		default:
+			found(expr.sourceRange);
+			break;
+		}
+	}
+
+	void handle(const ast::NamedValueExpression &expr) { read(expr.symbol, expr.sourceRange); }
+	void handle(const ast::HierarchicalValueExpression &expr) { read(expr.symbol, expr.sourceRange); }
+
+	void handle(const ast::AssignmentExpression &assign)
+	{
+		bool whole = top_level;
+		top_level = false;
+		// A compound assignment reads the left-hand side, the right-hand side only
+		// stands in for it
+		if (assign.isCompound())
+			assign_to(assign.left(), true, false);
+		assign.right().visit(*this);
+		assign_to(assign.left(), false, whole);
+	}
+
+	void handle(const ast::UnaryExpression &unop)
+	{
+		top_level = false;
+		switch (unop.op) {
+		case ast::UnaryOperator::Preincrement:
+		case ast::UnaryOperator::Predecrement:
+		case ast::UnaryOperator::Postincrement:
+		case ast::UnaryOperator::Postdecrement:
+			assign_to(unop.operand(), true, false);
+			break;
+		default:
+			visitDefault(unop);
+			break;
+		}
+	}
+
+	void handle(const ast::CallExpression &call)
+	{
+		top_level = false;
+		if (call.isSystemCall()) {
+			const auto &info = std::get<1>(call.subroutine);
+			if (!is_reporting_task(info.subroutine->name) && !is_pure_function(info))
+				found(call.sourceRange);
+			else
+				visitDefault(call);
+			return;
+		}
+
+		const auto &callee = *std::get<0>(call.subroutine);
+		if (callee.subroutineKind == ast::SubroutineKind::Task) {
+			// Tasks can wait, which no assertion can
+			found(call.sourceRange);
+			return;
+		}
+
+		if (call.thisClass())
+			call.thisClass()->visit(*this);
+		auto formals = callee.getArguments();
+		auto args = call.arguments();
+		for (size_t i = 0; i < args.size(); i++) {
+			auto direction = i < formals.size() ? formals[i]->direction : ast::ArgumentDirection::In;
+			if (direction == ast::ArgumentDirection::Out || direction == ast::ArgumentDirection::InOut) {
+				// Passed as an assignment, made as the call returns
+				if (ast::AssignmentExpression::isKind(args[i]->kind))
+					assign_to(args[i]->as<ast::AssignmentExpression>().left(),
+							  direction == ast::ArgumentDirection::InOut, false);
+				else
+					assign_to(*args[i], direction == ast::ArgumentDirection::InOut, false);
+			} else if (direction == ast::ArgumentDirection::Ref &&
+					!formals[i]->flags.has(ast::VariableFlags::Const)) {
+				assign_to(*args[i], true, false);
+			} else {
+				args[i]->visit(*this);
+			}
+		}
+
+		if (auto callee_effect = effect_of(callee))
+			found(callee_effect->range, callee_effect->keeps_state);
+	}
+
+	std::optional<Effect> effect_of(const ast::SubroutineSymbol &callee)
+	{
+		// A recursive call has its effects found in the call already being looked into
+		if (std::find(calls.stack.begin(), calls.stack.end(), &callee) != calls.stack.end())
+			return {};
+		if (calls.done.count(&callee))
+			return calls.done.at(&callee);
+
+		calls.stack.push_back(&callee);
+		EffectFinder finder(netlist, calls, callee);
+		finder.body_of_subroutine();
+		calls.stack.pop_back();
+		calls.done[&callee] = finder.effect;
+		return finder.effect;
+	}
+
+	void expression(const ast::Expression &expr, bool whole_statement = false)
+	{
+		if (effect)
+			return;
+		top_level = whole_statement && ast::AssignmentExpression::isKind(expr.kind);
+		expr.visit(*this);
+		top_level = false;
+	}
+
+	// A loop body may run any number of times, including none
+	void loop_body(const ast::Statement &body)
+	{
+		Flow before = flow;
+		loop_depth++;
+		statement(body);
+		loop_depth--;
+		flow = before;
+	}
+
+	// Does a case statement match each two-state value of its expression?
+	bool covers_all_values(const ast::CaseStatement &stmt)
+	{
+		if (stmt.defaultCase)
+			return true;
+		if (stmt.condition == ast::CaseStatementCondition::Inside)
+			return false;
+
+		// The items and the expression come converted to a common type, the values to
+		// cover are those of the expression before that
+		const ast::Expression *expr = &stmt.expr;
+		while (ast::ConversionExpression::isKind(expr->kind) &&
+				expr->as<ast::ConversionExpression>().isImplicit())
+			expr = &expr->as<ast::ConversionExpression>().operand();
+		if (!expr->type->isIntegral() || !stmt.expr.type->isIntegral() ||
+				expr->type->getBitWidth() > 16)
+			return false;
+
+		auto width = expr->type->getBitWidth();
+		auto common_width = stmt.expr.type->getBitWidth();
+		if (common_width < width)
+			return false;
+		std::vector<slang::SVInt> values;
+		for (auto &item : stmt.items)
+			for (auto item_expr : item.expressions) {
+				auto value = item_expr->eval(netlist.eval.const_);
+				if (value.isInteger())
+					values.push_back(value.integer());
+			}
+
+		for (uint64_t i = 0; i < (uint64_t{1} << width); i++) {
+			slang::SVInt value(width, i, expr->type->isSigned());
+			if (common_width > width)
+				value = value.extend(common_width, expr->type->isSigned());
+			bool matched = false;
+			for (auto &item : values) {
+				if (item.getBitWidth() != common_width)
+					continue;
+				switch (stmt.condition) {
+				case ast::CaseStatementCondition::WildcardXOrZ:
+					matched = caseXWildcardEqual(value, item);
+					break;
+				case ast::CaseStatementCondition::WildcardJustZ:
+					matched = caseZWildcardEqual(value, item);
+					break;
+				default:
+					matched = exactlyEqual(value, item);
+					break;
+				}
+				if (matched)
+					break;
+			}
+			if (!matched)
+				return false;
+		}
+		return true;
+	}
+
+	void statement(const ast::Statement &stmt)
+	{
+		if (effect)
+			return;
+
+		const ast::Statement *statement_save = current_statement;
+		current_statement = &stmt;
+
+		switch (stmt.kind) {
+		case ast::StatementKind::Empty:
+			break;
+		case ast::StatementKind::List:
+			for (auto item : stmt.as<ast::StatementList>().list)
+				statement(*item);
+			break;
+		case ast::StatementKind::Block: {
+			const auto &block = stmt.as<ast::BlockStatement>();
+			if (block.blockKind != ast::StatementBlockKind::Sequential)
+				found(stmt.sourceRange);
+			else
+				statement(block.body);
+			break;
+		}
+		case ast::StatementKind::VariableDeclaration: {
+			const auto &symbol = stmt.as<ast::VariableDeclStatement>().symbol;
+			locals.insert(&symbol);
+			// A static variable of a subroutine gets its initial value once, before
+			// any call
+			if (auto init = symbol.getInitializer();
+					init && (!subroutine || symbol.lifetime == ast::VariableLifetime::Automatic))
+				expression(*init);
+			break;
+		}
+		case ast::StatementKind::ExpressionStatement:
+			expression(stmt.as<ast::ExpressionStatement>().expr, true);
+			break;
+		case ast::StatementKind::Conditional: {
+			const auto &cond = stmt.as<ast::ConditionalStatement>();
+			for (auto &condition : cond.conditions) {
+				expression(*condition.expr);
+				if (condition.pattern)
+					condition.pattern->visit(*this);
+			}
+			Flow before = flow;
+			statement(cond.ifTrue);
+			Flow after_true = flow;
+			flow = before;
+			if (cond.ifFalse)
+				statement(*cond.ifFalse);
+			flow = meet(after_true, flow);
+			break;
+		}
+		case ast::StatementKind::Case: {
+			const auto &case_stmt = stmt.as<ast::CaseStatement>();
+			expression(case_stmt.expr);
+			for (auto &item : case_stmt.items)
+				for (auto item_expr : item.expressions)
+					expression(*item_expr);
+			Flow before = flow;
+			std::optional<Flow> after;
+			auto arm = [&](const ast::Statement &arm_stmt) {
+				flow = before;
+				statement(arm_stmt);
+				after = after ? meet(*after, flow) : flow;
+			};
+			for (auto &item : case_stmt.items)
+				arm(*item.stmt);
+			if (case_stmt.defaultCase)
+				arm(*case_stmt.defaultCase);
+			if (!after || (subroutine && !covers_all_values(case_stmt)))
+				after = after ? meet(*after, before) : before;
+			flow = *after;
+			break;
+		}
+		case ast::StatementKind::ForLoop: {
+			const auto &loop = stmt.as<ast::ForLoopStatement>();
+			for (auto var : loop.loopVars) {
+				locals.insert(var);
+				if (auto init = var->getInitializer())
+					expression(*init);
+			}
+			for (auto init : loop.initializers)
+				expression(*init, true);
+			if (loop.stopExpr)
+				expression(*loop.stopExpr);
+			loop_body(loop.body);
+			Flow before = flow;
+			for (auto step : loop.steps)
+				expression(*step);
+			flow = before;
+			break;
+		}
+		case ast::StatementKind::RepeatLoop:
+			expression(stmt.as<ast::RepeatLoopStatement>().count);
+			loop_body(stmt.as<ast::RepeatLoopStatement>().body);
+			break;
+		case ast::StatementKind::WhileLoop:
+			expression(stmt.as<ast::WhileLoopStatement>().cond);
+			loop_body(stmt.as<ast::WhileLoopStatement>().body);
+			break;
+		case ast::StatementKind::DoWhileLoop:
+			loop_body(stmt.as<ast::DoWhileLoopStatement>().body);
+			expression(stmt.as<ast::DoWhileLoopStatement>().cond);
+			break;
+		case ast::StatementKind::ForeachLoop: {
+			const auto &loop = stmt.as<ast::ForeachLoopStatement>();
+			expression(loop.arrayRef);
+			for (auto &dim : loop.loopDims)
+				if (dim.loopVar)
+					locals.insert(dim.loopVar);
+			loop_body(loop.body);
+			break;
+		}
+		case ast::StatementKind::ForeverLoop:
+			loop_body(stmt.as<ast::ForeverLoopStatement>().body);
+			break;
+		case ast::StatementKind::Return: {
+			// Out of an action block it would leave the subroutine around the assertion
+			if (!subroutine) {
+				found(stmt.sourceRange);
+				break;
+			}
+			const auto &ret = stmt.as<ast::ReturnStatement>();
+			if (ret.expr)
+				expression(*ret.expr);
+			if (!flow.unreachable)
+				leave(stmt.sourceRange, ret.expr != nullptr);
+			flow.unreachable = true;
+			break;
+		}
+		case ast::StatementKind::Break:
+		case ast::StatementKind::Continue:
+			// Out of an action block it would leave a loop around the assertion
+			if (!subroutine && !loop_depth)
+				found(stmt.sourceRange);
+			flow.unreachable = true;
+			break;
+		default:
+			// That includes assertions: one in an action block would be left out with it
+			found(stmt.sourceRange);
+			break;
+		}
+
+		current_statement = statement_save;
+	}
+};
 
 void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail)
 {
 	// We leave action blocks out. The check stands in for any reporting, anything else
-	// would go missing from the design.
+	// the design or another assertion could see would go missing.
 	for (auto action : {pass, fail}) {
-		if (auto stmt = find_nonreporting_action(action))
-			netlist.add_diag(diag::ActionBlockUnsupported, stmt->sourceRange);
+		if (!action)
+			continue;
+		EffectFinder finder(netlist);
+		finder.statement(*action);
+		if (finder.effect)
+			netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
 	}
 }
 
 // Is the symbol a formal argument or a local variable of a subroutine?
 static bool in_subroutine(const ast::Symbol &symbol)
 {
-	const ast::Scope *scope = symbol.getParentScope();
-	while (ast::StatementBlockSymbol::isKind(scope->asSymbol().kind))
-		scope = scope->asSymbol().getParentScope();
-	return ast::SubroutineSymbol::isKind(scope->asSymbol().kind);
+	return owning_subroutine(symbol) != nullptr;
 }
 
 ir::Value EvalContext::sva(ast::Expression const &expr)

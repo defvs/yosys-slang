@@ -62,3 +62,251 @@ endmodule
 EOF
 
 select -assert-count 3 t:$check
+
+design -reset
+
+# Ending the simulation, writing to files or monitoring is nothing the design can see
+# either, and an action may use control flow and variables of its own for its reports
+read_slang <<EOF
+module effect_free_actions(input logic clk, input logic a, input logic b, input logic [3:0] v);
+	int fd;
+
+	function automatic int ones(logic [3:0] x);
+		int n = 0;
+		for (int i = 0; i < 4; i++)
+			n += x[i];
+		return n;
+	endfunction
+
+	function logic [3:0] swapped(logic [3:0] x);
+		logic [3:0] y;
+		y = {x[1:0], x[3:2]};
+		return y;
+	endfunction
+
+	always @(posedge clk) begin
+		assert (a) else $finish;
+		assert (a) else $stop(0);
+		assert (a) else $exit;
+		assert (a) $finish(1); else $fatal(1, "a low");
+		assert (a) else $fdisplay(32'h8000_0002, "a low");
+		assert (a) else begin
+			$fwrite(fd, "a low");
+			$fstrobe(fd, "a low");
+			$fflush(fd);
+		end
+		assert (a) else begin
+			$monitor("%b", a);
+			$monitoroff;
+			$monitoron;
+			$fmonitor(fd, "%b", b);
+		end
+		assert (a) else begin
+			string s;
+			s = $sformatf("a=%b v=%h", a, v);
+			$error(s);
+		end
+		assert (a) else case (b)
+			1'b0: $error("b low");
+			default: $warning("b high");
+		endcase
+		assert (a) else for (int i = 0; i < 2; i++) $error("%0d", i);
+		assert (a) else repeat (2) $info("again");
+		assert (a) else foreach (v[i]) $display("%b", v[i]);
+		assert (a) else begin
+			int n;
+			n = 0;
+			while (n < 2)
+				n++;
+			do n--; while (n > 0);
+			$error("%0d %0d %h", n, ones(v), swapped(v));
+		end
+		assert property (b) else begin
+			$error("b low");
+			$stop;
+		end
+		assert property (b) $display("b high at %0t", $time); else $finish;
+	end
+
+	assert property (@(posedge clk) a) else begin
+		$error("a low");
+		$stop;
+	end
+	cover property (@(posedge clk) a ##1 b) $display("hit, %0d ones", ones(v));
+	assume property (@(posedge clk) a |=> b) else case (v)
+		4'h0: $info("v zero");
+		default: $info("v nonzero");
+	endcase
+endmodule
+EOF
+
+select -assert-count 18 t:$check
+
+design -reset
+
+# The arguments of a report can have effects too
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module argument_side_effect(input logic clk, input logic a, output logic [7:0] cnt);
+	initial cnt = 8'd0;
+	always @(posedge clk)
+		assert (a) else $error("%0d", cnt++);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module loop_module_variable(input logic clk, input logic a, output int i);
+	always @(posedge clk)
+		assert property (a) else for (i = 0; i < 2; i++) $error("a low");
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_call(input logic clk, input logic a);
+	task report(input string msg);
+		$error(msg);
+	endtask
+	assert property (@(posedge clk) a) else report("a low");
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module impure_function(input logic clk, input logic a, output logic [7:0] fails);
+	initial fails = 8'd0;
+	function automatic logic [7:0] count_fail();
+		fails = fails + 8'd1;
+		return fails;
+	endfunction
+	always @(posedge clk)
+		assert (a) else $error("%0d failures", count_fail());
+endmodule
+EOF
+
+design -reset
+
+# The call of a function which keeps state changes what the next call returns
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module stateful_function(input logic clk, input logic a, output logic y);
+	function logic toggle();
+		static logic state = 1'b0;
+		state = !state;
+		return state;
+	endfunction
+	always @(posedge clk) begin
+		y <= toggle();
+		assert (a) else $display("%b", toggle());
+	end
+endmodule
+EOF
+
+design -reset
+
+# System tasks and functions writing their arguments, or a state other than the
+# simulation's output
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module string_output(input logic clk, input logic a);
+	string msg;
+	always @(posedge clk)
+		assert (a) else $sformat(msg, "a low");
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module output_argument(input logic clk, input logic a, output int n);
+	always @(posedge clk)
+		assert (a) else void'($value$plusargs("n=%d", n));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module seeded_random(input logic clk, input logic a);
+	int seed;
+	assert property (@(posedge clk) a) else $error("%0d", $random(seed));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module memory_load(input logic clk, input logic a);
+	logic [7:0] mem [0:3];
+	always @(posedge clk)
+		assert (a) else $readmemh("table.hex", mem);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module file_close(input logic clk, input logic a);
+	int fd;
+	always @(posedge clk)
+		assert (a) else $fclose(fd);
+endmodule
+EOF
+
+design -reset
+
+# Turning assertions off is seen by the others
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module assertion_control(input logic clk, input logic a, input logic b);
+	always @(posedge clk) begin
+		assert (a) else $assertoff;
+		assert (b);
+	end
+endmodule
+EOF
+
+design -reset
+
+# An assertion in an action block would be left out along with it
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module nested_assertion(input logic clk, input logic a, input logic b);
+	always @(posedge clk)
+		assert (a) else assert (b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module event_trigger(input logic clk, input logic a);
+	event failed;
+	always @(posedge clk)
+		assert (a) else -> failed;
+endmodule
+EOF
+
+design -reset
+
+# A break out of the loop around the assertion changes what the loop does
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module escaping_break(input logic [3:0] v);
+	always_comb
+		for (int i = 0; i < 4; i++)
+			assert (v[i]) else break;
+endmodule
+EOF
