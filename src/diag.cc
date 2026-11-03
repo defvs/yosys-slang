@@ -399,7 +399,7 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(SVACallSideEffect, "function called in a concurrent assertion assigns a variable not its own");
 	engine.setSeverity(SVACallSideEffect, DiagnosticSeverity::Error);
 
-	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion keeps state between calls");
+	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion may read state left by an earlier call");
 	engine.setSeverity(SVACallKeepsState, DiagnosticSeverity::Error);
 	// clang-format on
 }

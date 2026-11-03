@@ -804,6 +804,7 @@ ir::Value inside_comparison(EvalContext &eval, ir::Value left, const ast::Expres
 extern std::string hierpath_relative_to(const ast::Scope *relative_to, const ast::Scope *scope);
 std::string format_src(const slang::SourceManager *sm, slang::SourceRange source_range);
 void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail);
+void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr);
 #ifndef SLANG_NO_YOSYS
 void transfer_attrs(NetlistContext &netlist, const ast::Symbol &from, RTLIL::AttrObject *to);
 void transfer_attrs(NetlistContext &netlist, const ast::Statement &from, RTLIL::AttrObject *to);

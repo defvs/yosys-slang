@@ -1876,10 +1876,11 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 
 // IEEE Std 1800-2017 section 16.6 has the functions in an assertion expression keep no
 // state and have no side effects. We lower a call by running the function's body like
-// that of any other, so an assignment to a variable of the design would become a driver
-// of it, and an assignment to a static variable of the function or a read of one before
-// the call assigns it would share state with the design's calls of the function.
-static void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
+// that of any other, so an assignment to a variable of the design would drive it from
+// the process around the assertion, or go missing outside of one, and a read of a static
+// variable of the function before the call assigns it would see what the design's calls
+// of the function left there.
+void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 {
 	EffectFinder finder(netlist, true);
 	finder.expression(expr);

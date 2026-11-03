@@ -1840,6 +1840,9 @@ static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingC
 
 	case ast::EdgeKind::PosEdge:
 	case ast::EdgeKind::NegEdge: {
+		// Unlike the operands, the clock isn't read through EvalContext::sva(), which
+		// checks the functions called in them
+		check_assertion_calls(netlist, signal_event.expr);
 		ir::Value signal = netlist.eval(signal_event.expr);
 		if (signal.size() != 1) {
 			netlist.add_diag(diag::UnsupportedSVAFeature, signal_event.sourceRange);
