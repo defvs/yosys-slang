@@ -769,19 +769,51 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 						right = property_paths(f, ctx, std::move(right), expr_loc(expr), base);
 					}
 
+					// An empty match puts no constraint on the other operand
 					std::vector<AssertionMatch> results;
-					for (auto a : left) {
-						for (auto b : right) {
-							// An empty match puts no constraint on the other operand
-							if (a.empty)
-								results.push_back(b);
-							else if (b.empty)
-								results.push_back(a);
-							else if (a.start >= b.start)
-								results.push_back(b.shift(a.start - b.start) && a);
-							else
-								results.push_back(a.shift(b.start - a.start) && b);
-						}
+					std::vector<AssertionMatch> left_ends, right_ends;
+					for (auto& a : left) {
+						if (a.empty)
+							results.insert(results.end(), right.begin(), right.end());
+						else
+							left_ends.push_back(a);
+					}
+					for (auto& b : right) {
+						if (b.empty)
+							results.insert(results.end(), left_ends.begin(), left_ends.end());
+						else
+							right_ends.push_back(b);
+					}
+
+					// Two matches together end with the later one. The pairs ending on a
+					// tick are thus a match of one operand ending there with a match of the
+					// other ending there or before, and collecting the matches of each operand
+					// as the ticks go by pairs them all with a few gates a tick.
+					left_ends = compress_paths(left_ends);
+					right_ends = compress_paths(right_ends);
+					std::optional<AssertionMatch> left_so_far, right_so_far;
+					auto collect = [](std::optional<AssertionMatch>& so_far, const AssertionMatch& path) {
+						so_far = so_far.has_value() ? so_far->shift(path.start - so_far->start) || path : path;
+					};
+					// compress_paths() leaves the paths going by end, latest first
+					auto l = left_ends.rbegin(), r = right_ends.rbegin();
+					while (l != left_ends.rend() || r != right_ends.rend()) {
+						int64_t end = std::min(l != left_ends.rend() ? l->start : INT64_MAX,
+											   r != right_ends.rend() ? r->start : INT64_MAX);
+						bool left_here = l != left_ends.rend() && l->start == end;
+						bool right_here = r != right_ends.rend() && r->start == end;
+						if (left_here)
+							collect(left_so_far, *l);
+						if (right_here)
+							collect(right_so_far, *r);
+						if (left_here && right_so_far.has_value())
+							results.push_back(*l && right_so_far->shift(end - right_so_far->start));
+						if (right_here && left_so_far.has_value())
+							results.push_back(*r && left_so_far->shift(end - left_so_far->start));
+						if (left_here)
+							l++;
+						if (right_here)
+							r++;
 					}
 					return compress_paths(results);
 				}
@@ -804,6 +836,10 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 						return {};
 					}
 
+					// The condition on all the ticks up to a tick is the condition up to the
+					// tick before and on that tick, so it extends by a gate a tick for all the
+					// paths at once
+					std::vector<AssertionMatch> held;
 					std::vector<AssertionMatch> results;
 					for (auto path : right) {
 						if (path.empty) {
@@ -812,12 +848,12 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 						}
 
 						check_frozen_offset(condition, path.start);
-						AssertionMatch guarded = path;
-						for (int64_t t = 0; t <= path.start; t++) {
-							auto condition_at_t = collapse_or(left_at.at(path.start - t)).shift(t);
-							guarded = guarded && condition_at_t;
+						while ((int64_t) held.size() <= path.start) {
+							int64_t t = held.size();
+							auto condition_at_t = collapse_or(left_at.at(t)).shift(t);
+							held.push_back(t == 0 ? condition_at_t : held.back() && condition_at_t);
 						}
-						results.push_back(guarded);
+						results.push_back(path && held[path.start]);
 					}
 					return compress_paths(results);
 				}
@@ -897,20 +933,18 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 				if (!paths.empty() && paths.back().empty)
 					return { paths.back() };
 
-				for (auto path : paths) {
-					std::vector<AssertionMatch> earlier_matches;
-					for (auto earlier : paths) {
-						if (earlier.start >= path.start)
-							continue;
-						earlier_matches.push_back(earlier.shift(path.start - earlier.start));
+				// A path matches first if none of those ending before it did. Those are
+				// collected going by end, once for all the paths.
+				std::optional<AssertionMatch> earlier;
+				for (auto path = paths.rbegin(); path != paths.rend(); path++) {
+					if (earlier.has_value()) {
+						auto earlier_here = earlier->shift(path->start - earlier->start);
+						results.push_back(*path && !earlier_here);
+						earlier = earlier_here || *path;
+					} else {
+						results.push_back(*path);
+						earlier = *path;
 					}
-
-					if (!earlier_matches.empty()) {
-						auto no_earlier_match = !collapse_or(earlier_matches);
-						path = path && no_earlier_match;
-					}
-
-					results.push_back(path);
 				}
 
 				return compress_paths(results);
