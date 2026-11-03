@@ -55,3 +55,7 @@ Run only the OpenTitan stress test through CTest:
 ```sh
 ctest --test-dir build -L opentitan --output-on-failure
 ```
+
+CTest keeps the generated files under `build/tests/opentitan_sva_stress`.
+`run_all.sh` and the per-target `run.sh` scripts write to the directory in
+`BUILD_ROOT`, or to `tests/opentitan_sva_stress/build` when it is unset.

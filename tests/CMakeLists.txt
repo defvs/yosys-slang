@@ -122,12 +122,15 @@ endif()
 option(ENABLE_OPENTITAN_SVA_STRESS "Enable OpenTitan SVA stress tests" OFF)
 
 if (ENABLE_OPENTITAN_SVA_STRESS)
+    # Without BUILD_ROOT the script writes its filtered sources, models and
+    # logs into the source tree
     add_test(
         NAME opentitan_sva_stress
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress
         COMMAND
             ${CMAKE_COMMAND} -E env
             PLUGIN=$<TARGET_FILE:yosys-slang>
+            BUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}/opentitan_sva_stress
             ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress/run_all.sh
     )
     set_tests_properties(
