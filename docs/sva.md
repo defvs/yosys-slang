@@ -364,14 +364,23 @@ accepted when nothing it does can be seen by the design or by another assertion:
 - `$urandom` and `$urandom_range`; `$random` without a seed; `$random` and the `$dist_`
   functions with a seed that is a variable of the action block;
 - calls of functions that write only their own variables and keep no state;
+- calls of imported (DPI) subroutines not declared `context`, which can only access their
+  arguments (IEEE 1800-2017 35.5.3);
 - blocks with variables of their own, `if`, `case` and loops, and `break` and `continue`
   within those loops.
 
+A variable of the action block or of a function it calls counts as its own only while no
+hierarchical name in the design, as in `blk.n` or `f.k`, refers to it: such a name reads
+what the action block leaves there.
+
 Anything else is rejected, such as an assignment to a variable outside the action block,
-also in the argument of a report (`$error("%0d", cnt++)`), a task call, `$sformat`,
-`$value$plusargs`, `$readmemh`, `$fopen` or `$fclose`, `$assertoff` and the other
-assertion control tasks, an assertion, an event trigger, a delay or event control, `fork`,
-`disable`, or a `break`, `continue` or `return` that leaves the action block.
+also in the argument of a report (`$error("%0d", cnt++)`) or through a class or virtual
+interface handle, an assignment to a variable a hierarchical name refers to, a task call,
+`$sformat`, `$value$plusargs`, `$readmemh`, `$fopen` or `$fclose`, `$assertoff` and the
+other assertion control tasks, a call of a DPI import declared `context`, which can call
+back into the design, an assertion, an event trigger, a delay or event control, also one
+within an assignment (`x = @(posedge clk) y`), `fork`, `disable`, or a `break`, `continue`
+or `return` that leaves the action block.
 
 ## Final procedures
 

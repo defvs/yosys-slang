@@ -1346,9 +1346,13 @@ static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
 // That is for an action block, which we leave out, and the subroutines it calls. For an
 // expression of a concurrent assertion, and the functions it calls, only assignments and
 // kept state are looked for: we lower those functions like any other, which reports any
-// system subroutine or statement there is no lowering for. There an assignment to a
-// static variable of the function which the design names elsewhere, as in `f.k`, counts
-// too, as does a read of a static variable of a function the call runs in.
+// system subroutine or statement there is no lowering for, and a read of a static
+// variable of a function the call runs in counts as well.
+//
+// An assignment to a variable of our own which a hierarchical name refers to, as in
+// `blk.n` or `f.k`, counts in both: the name reads what the code leaves there, which
+// goes missing with an action block, and which a function lowered as part of an
+// assertion doesn't leave where the design looks.
 struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		ast::VisitFlags::Statements | ast::VisitFlags::Expressions>
 {
@@ -1440,7 +1444,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		// The call assigns the arguments passed in before it runs the body
 		for (auto arg : subroutine->getArguments())
 			if (arg->direction != ast::ArgumentDirection::Out) {
-				if (for_assertion && netlist.named_hierarchically(*arg))
+				if (netlist.named_hierarchically(*arg))
 					found(slang::SourceRange(arg->location, arg->location + arg->name.size()),
 						  EffectKind::NamedVariable);
 				flow.assigned.insert(arg);
@@ -1495,9 +1499,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				read(symbol, expr.sourceRange);
 			if (!is_own(symbol))
 				found(expr.sourceRange);
-			// A hierarchical name reads what the call leaves, which is lost when the
-			// call is lowered as part of the assertion
-			else if (for_assertion && netlist.named_hierarchically(symbol))
+			else if (netlist.named_hierarchically(symbol))
 				found(expr.sourceRange, EffectKind::NamedVariable);
 			else if (whole && !flow.unreachable)
 				flow.assigned.insert(&symbol);
@@ -1516,9 +1518,18 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			select.right().visit(*this);
 			break;
 		}
-		case ast::ExpressionKind::MemberAccess:
-			assign_to(expr.as<ast::MemberAccessExpression>().value(), reads, false);
+		case ast::ExpressionKind::MemberAccess: {
+			const auto &value = expr.as<ast::MemberAccessExpression>().value();
+			// Through a class or virtual interface handle the assignment is to an object
+			// or interface outside, whichever variable holds the handle
+			if (value.type->isObjectHandleType()) {
+				value.visit(*this);
+				found(expr.sourceRange);
+			} else {
+				assign_to(value, reads, false);
+			}
 			break;
+		}
 		case ast::ExpressionKind::Concatenation:
 			for (auto operand : expr.as<ast::ConcatenationExpression>().operands())
 				assign_to(*operand, reads, whole);
@@ -1551,6 +1562,11 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	{
 		bool whole = top_level;
 		top_level = false;
+		// The process waits for it, `x = @(e) y` or `x = #1 y`, like for a statement
+		if (assign.timingControl) {
+			found(assign.sourceRange);
+			return;
+		}
 		// A compound assignment reads the left-hand side, the right-hand side only
 		// stands in for it
 		if (assign.isCompound())
@@ -1621,6 +1637,15 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			found(call.sourceRange);
 			return;
 		}
+		// An imported subroutine has no body to look into. One that isn't `context` can
+		// only access its arguments (IEEE Std 1800-2017 section 35.5.3), which we look
+		// at below, a `context` one can call exported subroutines which assign the
+		// design.
+		bool imported = !for_assertion && callee.flags.has(ast::MethodFlags::DPIImport);
+		if (imported && callee.flags.has(ast::MethodFlags::DPIContext)) {
+			found(call.sourceRange);
+			return;
+		}
 
 		if (call.thisClass())
 			call.thisClass()->visit(*this);
@@ -1643,6 +1668,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			}
 		}
 
+		if (imported)
+			return;
 		auto summary = summary_of(callee);
 		if (summary.effect)
 			found(summary.effect->range, summary.effect->kind);

@@ -375,3 +375,142 @@ module event_control_action(input logic clk, input logic a);
 	end
 endmodule
 EOF
+
+design -reset
+
+# A hierarchical name reads what the action block leaves in a variable
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_block_variable(input logic clk, input logic a, output logic [7:0] fails);
+	always @(posedge clk) begin : proc
+		assert (a) else begin : on_fail
+			static logic [7:0] n = 8'd0;
+			n = n + 8'd1;
+		end
+	end
+	assign fails = proc.on_fail.n;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_function_variable(input logic clk, input logic [7:0] a, output logic [7:0] last_bad);
+	function automatic void note(logic [7:0] v);
+		static logic [7:0] last = 8'd0;
+		last = v;
+	endfunction
+	always @(posedge clk)
+		assert (a != 8'd0) else note(a);
+	assign last_bad = note.last;
+endmodule
+EOF
+
+design -reset
+
+# The arguments of a static function are assigned by each call
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_function_argument(input logic clk, input logic [7:0] a, output logic [7:0] code);
+	function void report(logic [7:0] v);
+		$error("bad %h", v);
+	endfunction
+	always @(posedge clk) begin
+		assert (a != 8'd0) else report(a);
+		code <= report.v;
+	end
+endmodule
+EOF
+
+design -reset
+
+# Through a handle the assignment is to what the handle points at
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+interface flag_if;
+	logic err;
+endinterface
+
+module virtual_interface_write(input logic clk, input logic a, output logic e);
+	flag_if flags();
+	initial flags.err = 1'b0;
+	always @(posedge clk)
+		assert (a) else begin
+			virtual flag_if vif;
+			vif = flags;
+			vif.err = 1'b1;
+		end
+	assign e = flags.err;
+endmodule
+EOF
+
+design -reset
+
+# A context import can call an exported function assigning the design
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module context_import(input logic clk, input logic a, output logic flag);
+	initial flag = 1'b0;
+	function void set_flag();
+		flag = 1'b1;
+	endfunction
+	export "DPI-C" function set_flag;
+	import "DPI-C" context function void on_error();
+	always @(posedge clk)
+		assert (a) else on_error();
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module intra_assignment_event(input logic clk, input logic a, input logic [7:0] v);
+	always @(posedge clk)
+		assert (a) else begin
+			logic [7:0] x;
+			x = @(negedge clk) v;
+			$error("%h", x);
+		end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module intra_assignment_delay(input logic clk, input logic a, input logic [7:0] v);
+	assert property (@(posedge clk) a) else begin
+		logic [7:0] x;
+		x = #1 v;
+		$error("%h", x);
+	end
+endmodule
+EOF
+
+design -reset
+
+# Variables no hierarchical name refers to are the action block's own, and an import
+# that isn't `context` accesses only its arguments
+read_slang <<EOF
+module unnamed_variables(input logic clk, input logic a, input logic [7:0] v, output logic [7:0] q);
+	import "DPI-C" function int c_hash(input int x, output int y);
+	function automatic void note(logic [7:0] x);
+		static logic [7:0] last = 8'd0;
+		last = x;
+		$error("%h", last);
+	endfunction
+	always @(posedge clk) begin : proc
+		assert (a) else begin : on_fail
+			static logic [7:0] n = 8'd0;
+			int y;
+			n = n + 8'd1;
+			note(v);
+			$error("%0d %0d %0d", n, c_hash(n, y), y);
+		end
+		q <= v;
+	end
+endmodule
+EOF
+select -assert-count 1 t:$check
