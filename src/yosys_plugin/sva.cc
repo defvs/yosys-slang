@@ -2009,6 +2009,17 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	if (!check_instance_realms(netlist, top_expr))
 		return;
 
+	// The clock inferred from `always @(edge clk)`, which --allow-dual-edge-ff lets through,
+	// ticks on both edges (16.14.6), and the registers and checks here take one edge
+	for (auto &trigger : procedural.timing.triggers) {
+		if (trigger.ast_node && ast::SignalEventControl::isKind(trigger.ast_node->kind) &&
+				trigger.ast_node->as<ast::SignalEventControl>().edge == ast::EdgeKind::BothEdges) {
+			auto &diag = netlist.add_diag(diag::BothEdgesUnsupported, statement.sourceRange);
+			diag.addNote(diag::NoteSignalEvent, trigger.ast_node->sourceRange);
+			return;
+		}
+	}
+
 	// No clock gets inferred from a process with no edge in its event control. The
 	// branches of an asynchronous reset have none either, but belong to one with an edge.
 	if (procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) {

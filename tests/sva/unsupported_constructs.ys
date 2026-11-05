@@ -384,6 +384,57 @@ EOF
 
 design -reset
 
+# A process on both edges of its clock queues attempts on both edges, also for an
+# assertion of a single tick or with a clock of its own
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process(input logic clk, input logic a, input logic b);
+	always @(edge clk)
+		dual_edge_process_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_single_tick(input logic clk, input logic a);
+	always @(edge clk)
+		dual_edge_single_tick_test: assert property (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_own_clock(input logic clk, input logic en, input logic a,
+								   input logic b);
+	always @(edge clk)
+		if (en)
+			dual_edge_own_clock_test: assert property (@(negedge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_reset(input logic clk, input logic rst, input logic a,
+							   output logic q);
+	always @(edge clk or posedge rst) begin
+		if (rst) begin
+			q <= 0;
+		end else begin
+			q <= a;
+			dual_edge_reset_test: assert property (a);
+		end
+	end
+endmodule
+EOF
+
+design -reset
+
 test_slangdiag -expect "encountered unsupported SVA feature"
 read_slang <<EOF
 module clock_event_list(input logic clk, input logic rst, input logic a, input logic b);
