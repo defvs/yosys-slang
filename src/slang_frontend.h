@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 #include <optional>
-#include <map>
 #include <set>
 #include <stdexcept>
 #include "ir.h"
@@ -246,11 +245,6 @@ struct EvalContext {
 	// Tells if the expression last evaluated by `sva()` read an automatic variable
 	// or const cast of non-constant value, as those are frozen with the attempt
 	bool sva_read_frozen = false;
-
-	// Registers delaying a signal for SVA, by the signal, the initial value, and the
-	// clock, edge and enable of the registers
-	std::map<std::tuple<RTLIL::SigSpec, RTLIL::State, RTLIL::SigBit, bool, RTLIL::SigBit>,
-			 std::vector<ir::Value>> sva_delay_lines;
 
 	friend class EnterAutomaticScopeGuard;
 };
@@ -810,6 +804,7 @@ ir::Value inside_comparison(EvalContext &eval, ir::Value left, const ast::Expres
 extern std::string hierpath_relative_to(const ast::Scope *relative_to, const ast::Scope *scope);
 std::string format_src(const slang::SourceManager *sm, slang::SourceRange source_range);
 void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, const ast::Statement *fail);
+void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr);
 #ifndef SLANG_NO_YOSYS
 void transfer_attrs(NetlistContext &netlist, const ast::Symbol &from, RTLIL::AttrObject *to);
 void transfer_attrs(NetlistContext &netlist, const ast::Statement &from, RTLIL::AttrObject *to);

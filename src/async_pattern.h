@@ -46,6 +46,7 @@ private:
 	void handle_always(const ast::ProceduralBlockSymbol &symbol);
 	void interpret_async_pattern(const ast::ProceduralBlockSymbol &symbol,
 			std::vector<const ast::SignalEventControl *> triggers, const ast::Statement &body);
+	void report_final_assertions(const ast::Statement &body);
 
 	SynthesisSettings &settings;
 	DiagnosticIssuer &issuer;

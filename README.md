@@ -81,10 +81,14 @@ Sample usage:
 
 ### Formal assertions
 
-The synthesizable SVA subset includes finite safety properties and unbounded
-liveness/fairness properties lowered to Yosys formal cells. See
-[Synthesizable SVA liveness](docs/liveness.md) for supported operators,
-semantic boundaries, proof-tool setup, and the solver-backed test flow.
+Immediate and concurrent assertions, assumptions and covers are lowered to Yosys `$check`
+cells for formal tools. See [SystemVerilog assertions](docs/sva.md) for the properties
+over a bounded number of ticks: the supported constructs, how clocks and attempts are
+lowered, when the checks fire and the deviations from the standard. Unbounded properties,
+such as `always`, `until` and unbounded ranges, are lowered to monitors, and liveness and
+fairness to `$check` cells of the `live` and `fair` flavors. See
+[Synthesizable SVA liveness](docs/liveness.md) for those, the constructs rejected on top
+of the ones in docs/sva.md, the proof-tool setup and the solver-backed test flow.
 
 ## Contributing
 

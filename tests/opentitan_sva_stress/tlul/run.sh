@@ -120,6 +120,7 @@ fi
   echo '| dDataKnown_A / dDataKnown_M | use $isunknown, which current sv-elab does not synthesize |'
   echo '| aKnown_A / dKnown_A / aReadyKnown_A / dReadyKnown_A | OpenTitan knownness macros expand to $isunknown |'
   echo "| TLUL cover properties | coverage-only, and some cover sequences use unsupported match-item locals / goto repetition |"
+  echo "| noOutstandingReqsAtEndOfSim_A | ASSERT_FINAL checks the end of simulation, which has no counterpart in a netlist |"
   echo
   echo "## Synthesized assertions"
   echo

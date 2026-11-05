@@ -1,21 +1,119 @@
-test_slangdiag -expect "assertion in final procedure will not be synthesized"
+test_slangdiag -expect "assertions in final procedures are unsupported"
 read_slang <<EOF
 module final_assertion(input logic a);
 	final assert (a);
 endmodule
 EOF
 
-select -assert-none t:$check
-
 design -reset
 
-test_slangdiag -expect "assertion in final procedure will not be synthesized"
+test_slangdiag -expect "assertions in final procedures are unsupported"
 read_slang <<EOF
 module nested_final_assertion(input logic a, input logic b);
 	final begin
 		$display("done");
 		if (b)
 			assume (a) else $error("a low");
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "assertions in final procedures are unsupported"
+read_slang <<EOF
+module final_cover(input logic a);
+	final cover (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "assertions in final procedures are unsupported"
+read_slang <<EOF
+module final_deferred_assertion(input logic a, input logic b);
+	final begin
+		assert #0 (a);
+		assert final (b);
+	end
+endmodule
+EOF
+
+design -reset
+
+# An assertion in a function is lowered where always_comb calls the function,
+# but not where a final procedure does
+test_slangdiag -expect "assertions in final procedures are unsupported"
+read_slang <<EOF
+module final_called_assertion(input logic a, output logic y);
+	function automatic logic check(input logic x);
+		assert (x) else $error("x low");
+		return x;
+	endfunction
+
+	always_comb y = check(a);
+	final $display("%b", check(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "assertions in final procedures are unsupported"
+read_slang <<EOF
+module final_nested_call_assertion(input logic a);
+	function automatic logic inner(input logic x);
+		cover (x);
+		return x ? inner(!x) : x;
+	endfunction
+
+	function automatic logic outer(input logic x);
+		automatic logic y = inner(x);
+		return y;
+	endfunction
+
+	final begin
+		automatic logic z = outer(a);
+		$display("%b", z);
+	end
+endmodule
+EOF
+
+design -reset
+
+# A final procedure without assertions is ignored as before
+read_slang <<EOF
+module final_without_assertions(input logic clk, input logic a);
+	function automatic logic invert(input logic x);
+		return !x;
+	endfunction
+
+	final begin
+		$display("done %b", invert(a));
+		for (int i = 0; i < 2; i++)
+			$display("%0d", i);
+	end
+	final $display("bye");
+
+	always @(posedge clk)
+		assert (a);
+endmodule
+EOF
+
+select -assert-count 1 t:$check
+
+design -reset
+
+# Ignoring assertions ignores those in final procedures too
+read_slang --ignore-assertions <<EOF
+module ignored_final_assertions(input logic a);
+	function automatic void check(input logic x);
+		assert (x);
+	endfunction
+
+	final begin
+		assert (a);
+		cover (a);
+		check(a);
 	end
 endmodule
 EOF

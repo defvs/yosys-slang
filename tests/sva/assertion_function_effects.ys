@@ -1,0 +1,367 @@
+# A function called from a concurrent assertion has no side effects and keeps no state
+# (IEEE Std 1800-2017 section 16.6). Any write that outlives the call, and any read of
+# a static variable a path through the call hasn't assigned yet, is an error pointing at
+# the write or read.
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module module_variable(input logic clk, input logic a, output logic [3:0] cnt);
+	initial cnt = 4'd0;
+	function logic bump();
+		cnt = cnt + 4'd1;
+		return 1'b1;
+	endfunction
+	always @(posedge clk)
+		assert property (a |-> bump());
+endmodule
+EOF
+
+design -reset
+
+# A static variable read before the call assigns it carries a value over from the
+# previous call
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module static_local(input logic clk, input logic a, input logic b);
+	function automatic logic changed(logic x);
+		static logic last = 1'b0;
+		logic ret;
+		ret = x != last;
+		last = x;
+		return ret;
+	endfunction
+	assert property (@(posedge clk) a |=> changed(b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module implicit_static(input logic clk, input logic a);
+	function logic toggled(logic x);
+		logic last;
+		toggled = x ^ last;
+		last = x;
+	endfunction
+	always @(posedge clk)
+		assert property (toggled(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module other_function_static(input logic clk, input logic a, input logic b);
+	function logic remember(logic x);
+		logic seen;
+		seen = x;
+		return x;
+	endfunction
+	function logic forget(logic x);
+		remember.seen = 1'b0;
+		return x;
+	endfunction
+	assert property (@(posedge clk) a |-> forget(b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module nested_call(input logic clk, input logic a, input logic b, output logic flag);
+	initial flag = 1'b1;
+	function logic clear(logic x);
+		flag = 1'b0;
+		return x;
+	endfunction
+	function logic outer(logic x);
+		return clear(x);
+	endfunction
+	always @(posedge clk)
+		assert property (a ##1 outer(b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module nested_output_argument(input logic clk, input logic a, input logic b, output logic q);
+	function automatic void give(output logic o, input logic x);
+		o = x;
+	endfunction
+	function logic pass(logic x);
+		give(q, x);
+		return x;
+	endfunction
+	always @(posedge clk)
+		assert property (a |-> pass(b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module property_argument(input logic clk, input logic a, input logic b, output logic [3:0] cnt);
+	initial cnt = 4'd0;
+	function logic bump(logic x);
+		cnt++;
+		return x;
+	endfunction
+	property follows(x, y);
+		x |=> y;
+	endproperty
+	assert property (@(posedge clk) follows(a, bump(b)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module const_cast_call(input logic clk, input logic a, input logic b, output logic [3:0] cnt);
+	initial cnt = 4'd0;
+	function logic bump(logic x);
+		cnt += 4'd1;
+		return x;
+	endfunction
+	always @(posedge clk)
+		assert property (a |-> const'(bump(b)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module sampled_value_argument(input logic clk, input logic a, input logic b, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	always @(posedge clk)
+		assert property (a |-> $past(note(b)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module disable_condition(input logic clk, input logic a, input logic b, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	assert property (@(posedge clk) disable iff (note(b)) a);
+endmodule
+EOF
+
+design -reset
+
+# The clock and the defaults of a scope are part of the assertions using them
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module clock_call(input logic clk, input logic a, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	assert property (@(posedge note(clk)) a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module procedural_clock_call(input logic clk, input logic a, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	always @(posedge clk)
+		assert property (@(posedge note(clk)) a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module clock_argument(input logic clk, input logic a, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	property holds(c, x);
+		@(posedge c) x;
+	endproperty
+	assert property (holds(note(clk), a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module default_clocking_call(input logic clk, input logic a);
+	function logic divided(logic x);
+		logic phase;
+		divided = x & phase;
+		phase = !phase;
+	endfunction
+	default clocking @(posedge divided(clk)); endclocking
+	assert property (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module default_disable_call(input logic clk, input logic a, input logic rst, output logic seen);
+	initial seen = 1'b0;
+	function logic note(logic x);
+		seen = x;
+		return x;
+	endfunction
+	default disable iff (note(rst));
+	always @(posedge clk)
+		assert property (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module sequence_argument(input logic clk, input logic a, input logic b, output logic [3:0] cnt);
+	initial cnt = 4'd0;
+	function logic bump(logic x);
+		cnt = cnt + 4'd1;
+		return x;
+	endfunction
+	sequence then_b(x);
+		x ##1 b;
+	endsequence
+	cover property (@(posedge clk) then_b(bump(a)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module nested_other_static(input logic clk, input logic a, input logic b);
+	function logic remember(logic x);
+		logic seen;
+		seen = x;
+		return x;
+	endfunction
+	function logic forget(logic x);
+		remember.seen = 1'b0;
+		return x;
+	endfunction
+	function automatic logic outer(logic x);
+		logic y;
+		y = forget(x);
+		return y;
+	endfunction
+	always @(posedge clk)
+		assume property (a |=> outer(b));
+endmodule
+EOF
+
+design -reset
+
+# Immediate assertions run their expression in the enclosing process, where the
+# function's writes are ordinary procedural assignments
+read_slang <<EOF
+module immediate_call(input logic clk, input logic a, output logic [3:0] cnt);
+	initial cnt = 4'd0;
+	function logic bump(logic x);
+		cnt = cnt + 4'd1;
+		return x;
+	endfunction
+	always @(posedge clk)
+		assert (bump(a));
+endmodule
+EOF
+select -assert-count 1 t:$check
+
+design -reset
+
+# Functions that keep nothing between calls are fine, whether they are automatic or
+# assign their static variables before reading them on every path
+read_slang <<EOF
+package pure_pkg;
+	function logic [3:0] reversed(logic [3:0] x);
+		logic [3:0] r;
+		r = 4'd0;
+		for (int i = 0; i < 4; i++)
+			r[i] = x[3 - i];
+		return r;
+	endfunction
+endpackage
+
+module pure_functions(input logic clk, input logic [3:0] v, input logic [1:0] s, input logic a);
+	function automatic int ones(logic [3:0] x);
+		int n = 0;
+		foreach (x[i])
+			if (x[i])
+				n++;
+		return n;
+	endfunction
+
+	function logic [3:0] decode(logic [1:0] sel);
+		case (sel)
+			2'd0: decode = 4'b0001;
+			2'd1: decode = 4'b0010;
+			2'd2: decode = 4'b0100;
+			2'd3: decode = 4'b1000;
+		endcase
+	endfunction
+
+	function logic [3:0] first_one(logic [3:0] x);
+		logic [3:0] t;
+		if (x == 4'd0)
+			return 4'd0;
+		t = x & -x;
+		return t;
+	endfunction
+
+	function logic [3:0] twice(logic [3:0] x);
+		return pure_pkg::reversed(pure_pkg::reversed(x));
+	endfunction
+
+	function automatic logic [3:0] with_static(logic [3:0] x);
+		static logic [3:0] scratch;
+		scratch = x;
+		for (int i = 0; i < 3; i++)
+			if (scratch[0] == 1'b0)
+				scratch = scratch >> 1;
+		return scratch;
+	endfunction
+
+	always @(posedge clk) begin
+		assert property (ones(v) <= 4);
+		assert property ($onehot(decode(s)));
+		assert property (v == 4'd0 || $onehot(first_one(v)));
+		assert property (twice(v) == v);
+	end
+	assert property (@(posedge clk) v == 4'd0 || with_static(v)[0]);
+	assert property (@(posedge clk) a |-> const'(ones(v)) == ones(v));
+	assert property (@(posedge twice({3'd0, clk})[0]) ones(v) <= 4);
+endmodule
+EOF
+select -assert-count 7 t:$check

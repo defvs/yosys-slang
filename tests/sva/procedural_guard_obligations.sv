@@ -34,7 +34,9 @@ module procedural_guard_obligations(input logic clk_i, input logic c, input logi
 		if (c)
 			if_test: assert property (if (e) a ##1 b);
 
-		assume_ref: assume(!c_d1 || (a_d1 && b));
+		// An assumption rules out an attempt as soon as it can't hold, here without `a`
+		// on the tick it's queued on
+		assume_ref: assume((!c || a) && (!c_d1 || (a_d1 && b)));
 		if (c)
 			assume_test: assume property (strong(a ##1 b));
 

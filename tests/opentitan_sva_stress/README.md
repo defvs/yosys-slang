@@ -34,7 +34,8 @@ Unsupported or rewritten OpenTitan constructs:
 | `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M`, `AlertPingIgnored_A` | weak sequence with an unbounded match in the consequent (`throughout` a goto repetition) |
 | `tlul_assert.sv` | knownness assertions | `$isunknown` |
 | `tlul_assert.sv` | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |
-| OpenTitan enum references | rewritten to constants where needed | hierarchical enum literals caused missing-wire frontend errors (FIXME) |
+| `tlul_assert.sv` | `noOutstandingReqsAtEndOfSim_A` (`ASSERT_FINAL`) | checks the end of simulation in a final procedure, which has no counterpart in a netlist; sv-elab rejects it |
+| `prim_alert_rxtx_assert_fpv.sv` | hierarchical enum literals in the `inside` sets of `init_pending` and `AlertPingOk_A`, rewritten to their encoding | the frontend's `inside` needs integral items that slang evaluates as constants, and slang does not evaluate hierarchical references ("Feature unimplemented ... (bool) const_result", also in plain RTL and on upstream) |
 
 ## Main Suite Integration
 
@@ -58,3 +59,7 @@ Run only the OpenTitan tests through CTest:
 ```sh
 ctest --test-dir build -L opentitan --output-on-failure
 ```
+
+CTest keeps the generated files under `build/tests/opentitan_sva_stress`.
+`run_all.sh` and the per-target `run.sh` scripts write to the directory in
+`BUILD_ROOT`, or to `tests/opentitan_sva_stress/build` when it is unset.

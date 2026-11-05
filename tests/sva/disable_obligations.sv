@@ -17,7 +17,9 @@ module disable_obligations(input clk_i, input logic r, input logic x, input logi
 		strong_ref: assert(!gate2 || r_d2 || (a_d2 && (r_d1 || (b_d1 && (r || c)))));
 		accept_ref: assert(!gate2 || r_d2 || (a_d2 && (r_d1 || (b_d1 && (r || c)))));
 		range_ref: assert(!gate2 || r_d2 || (a_d2 && (r_d1 || (b_d2 && c_d1) || (b_d1 && (r || c)))));
-		assume_ref: assume(!gate1 || r_d1 || (a_d1 && (r || b)));
+		// The assumption rules out an attempt without `a` on its first tick as of that
+		// tick, as no disable later on can cancel that
+		assume_ref: assume((r || a) && (!gate1 || r_d1 || (a_d1 && (r || b))));
 
 		// The condition sees the dual letter, as the antecedent of an implication does
 		if_ref: assert(!gate1 || !c_d1 || r_d1 || (a_d1 && (r || b)));

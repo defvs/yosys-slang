@@ -37,6 +37,9 @@ set(ALL_TESTS
     liveness/labels.ys
     sva/seqequiv.tcl
     sva/action_blocks.ys
+    sva/assertion_function_effects.ys
+    sva/assume_early.ys
+    sva/checkers.ys
     sva/comb_default_clocking.ys
     sva/final_assertions.ys
     sva/frozen_past_first_tick.ys
@@ -47,6 +50,7 @@ set(ALL_TESTS
     sva/repeated_labels.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
+    sva/unsupported_constructs.ys
     sva/vector_delay_init.ys
     unit/async.ys
     unit/dff.ys
@@ -191,12 +195,15 @@ if (ENABLE_LIVENESS_PROOFS AND ENABLE_OPENTITAN_SVA_STRESS)
 endif()
 
 if (ENABLE_OPENTITAN_SVA_STRESS)
+    # Without BUILD_ROOT the script writes its filtered sources, models and
+    # logs into the source tree
     add_test(
         NAME opentitan_sva_stress
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress
         COMMAND
             ${CMAKE_COMMAND} -E env
             PLUGIN=$<TARGET_FILE:yosys-slang>
+            BUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}/opentitan_sva_stress
             ${CMAKE_CURRENT_SOURCE_DIR}/opentitan_sva_stress/run_all.sh
     )
     set_tests_properties(

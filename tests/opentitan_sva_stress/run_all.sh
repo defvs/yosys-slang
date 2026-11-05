@@ -59,11 +59,11 @@ done
   echo "| --- | --- | --- |"
   echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | weak sequence with an unbounded match in the consequent |"
   echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A | weak sequence with an unbounded match in the consequent |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | init_pending receiver-state helper | hierarchical enum literals triggered missing-wire frontend error; rewritten to their numeric encoding |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | init_pending / AlertPingOk_A inside sets | hierarchical enum literals rewritten to their encoding: inside needs items slang evaluates as constants, and slang does not evaluate hierarchical references |"
   echo "| prim_esc_rxtx_assert_fpv.sv | FSM Idle state references | hierarchical enum literals rewritten to their numeric encoding |"
-  echo "| clkmgr_cg_en_sva_if.sv | scanmode enum literal | hierarchical package enum literal rewritten to numeric MuBi4True encoding |"
   echo "| tlul_assert.sv | knownness assertions | \$isunknown is not synthesized |"
   echo "| tlul_assert.sv | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |"
+  echo "| tlul_assert.sv | noOutstandingReqsAtEndOfSim_A | ASSERT_FINAL checks the end of simulation, which has no counterpart in a netlist |"
   echo
   echo "## Result snippets"
   echo

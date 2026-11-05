@@ -1,0 +1,17 @@
+# An assertion that follows from an assumption holds on every trace the assumption
+# allows, also on those ending before the assumption's longest path does. With the
+# assumption checked on its last tick only, the base case would fail on a trace with
+# `start` and no `busy` on its first tick.
+read_slang <<EOF
+module assume_early(input clk, input start, input busy, input done, input a, input b, input c);
+	busy_env: assume property (@(posedge clk) start |-> busy[*3] ##1 done);
+	busy_chk: assert property (@(posedge clk) start |-> busy);
+	delay_env: assume property (@(posedge clk) a |-> b ##2 c);
+	delay_chk: assert property (@(posedge clk) a |-> b);
+endmodule
+EOF
+
+async2sync
+chformal -lower
+prep -top assume_early
+sat -tempinduct -prove-asserts -set-assumes -set-init-undef -seq 1 -maxsteps 8 -verify

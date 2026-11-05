@@ -32,3 +32,122 @@ select -assert-count 3 t:$check
 select -assert-max 5000 delay_range/t:$dff
 select -assert-max 5000 repetition_range/t:$dff
 select -assert-max 5000 response_range/t:$dff
+
+design -reset
+
+# Ranges composed with each other take a few registers and gates per tick of their ranges
+# too, with or without a disable. Placing an operand after each path ending in a range
+# on its own, or building throughout, first_match and `and` for each end of a range on
+# its own, would take some 500000 registers or gates.
+read_slang <<EOF
+module nested_ranges(input logic clk, input logic a, input logic b, input logic c);
+	nested_ranges_test: assert property (@(posedge clk) a ##[1:1000] b |-> ##[1:1000] c);
+endmodule
+
+module nested_ranges_disable(input logic clk, input logic rst, input logic a, input logic b, input logic c);
+	nested_ranges_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a ##[1:1000] b |-> ##[1:1000] c);
+endmodule
+
+module sequence_ranges(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	sequence_ranges_test: assert property (@(posedge clk) a |-> b ##[1:1000] c ##[1:1000] d);
+endmodule
+
+module sequence_ranges_disable(input logic clk, input logic rst, input logic a, input logic b,
+							   input logic c, input logic d);
+	sequence_ranges_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> b ##[1:1000] c ##[1:1000] d);
+endmodule
+
+module cover_ranges_disable(input logic clk, input logic rst, input logic a, input logic b, input logic c);
+	cover_ranges_disable_test: cover property (@(posedge clk) disable iff (rst) a ##[1:1000] b ##[1:1000] c);
+endmodule
+
+module and_ranges(input logic clk, input logic a, input logic b, input logic c, input logic e);
+	and_ranges_test: assert property (@(posedge clk) e |-> (a ##[1:1000] b) and (c ##[1:1000] e));
+endmodule
+
+module and_ranges_disable(input logic clk, input logic rst, input logic a, input logic b, input logic c,
+						  input logic e);
+	and_ranges_disable_test: assert property (@(posedge clk) disable iff (rst)
+		e |-> (a ##[1:1000] b) and (c ##[1:1000] e));
+endmodule
+
+module throughout_range(input logic clk, input logic req, input logic a, input logic c, input logic ack);
+	throughout_range_test: assert property (@(posedge clk) req |-> (c throughout (a ##[1:1000] ack)));
+endmodule
+
+module throughout_range_disable(input logic clk, input logic rst, input logic req, input logic a,
+								input logic c, input logic ack);
+	throughout_range_disable_test: assert property (@(posedge clk) disable iff (rst)
+		req |-> (c throughout (a ##[1:1000] ack)));
+endmodule
+
+module first_match_ranges(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	first_match_ranges_test: assert property (@(posedge clk) a |-> first_match(b ##[1:1000] c ##[1:1000] d));
+endmodule
+
+module first_match_range_disable(input logic clk, input logic rst, input logic a, input logic b);
+	first_match_range_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> first_match(##[1:1000] b));
+endmodule
+
+module eventually_range(input logic clk, input logic a, input logic b, input logic e);
+	eventually_range_test: assert property (@(posedge clk) e |-> s_eventually [1:1000] (a ##[1:1000] b));
+endmodule
+
+module parenthesized_ranges(input logic clk, input logic a, input logic b, input logic c, input logic d,
+							input logic e);
+	parenthesized_ranges_test: assert property (@(posedge clk) e |-> a ##[1:1000] (b ##[1:1000] c) ##1 d);
+endmodule
+
+module parenthesized_ranges_disable(input logic clk, input logic rst, input logic a, input logic b,
+									input logic c, input logic d, input logic e);
+	parenthesized_ranges_disable_test: assert property (@(posedge clk) disable iff (rst)
+		e |-> a ##[1:1000] (b ##[1:1000] c) ##1 d);
+endmodule
+
+module repeated_range(input logic clk, input logic a, input logic b, input logic c, input logic e);
+	repeated_range_test: assert property (@(posedge clk) e |-> (a ##[1:1000] b)[*3] ##1 c);
+endmodule
+
+module repeated_range_disable(input logic clk, input logic rst, input logic a, input logic b, input logic c,
+							  input logic e);
+	repeated_range_disable_test: assert property (@(posedge clk) disable iff (rst)
+		e |-> (a ##[1:1000] b)[*3] ##1 c);
+endmodule
+EOF
+
+select -assert-count 16 t:$check
+select -assert-max 16000 nested_ranges/t:$dff
+select -assert-max 24000 nested_ranges/t:*
+select -assert-max 20000 nested_ranges_disable/t:$dff
+select -assert-max 46000 nested_ranges_disable/t:*
+select -assert-max 20000 sequence_ranges/t:$dff
+select -assert-max 34000 sequence_ranges/t:*
+select -assert-max 24000 sequence_ranges_disable/t:$dff
+select -assert-max 54000 sequence_ranges_disable/t:*
+select -assert-max 20000 cover_ranges_disable/t:$dff
+select -assert-max 58000 cover_ranges_disable/t:*
+select -assert-max 10000 and_ranges/t:$dff
+select -assert-max 26000 and_ranges/t:*
+select -assert-max 12000 and_ranges_disable/t:$dff
+select -assert-max 38000 and_ranges_disable/t:*
+select -assert-max 10000 throughout_range/t:$dff
+select -assert-max 18000 throughout_range/t:*
+select -assert-max 12000 throughout_range_disable/t:$dff
+select -assert-max 30000 throughout_range_disable/t:*
+select -assert-max 20000 first_match_ranges/t:$dff
+select -assert-max 46000 first_match_ranges/t:*
+select -assert-max 8000 first_match_range_disable/t:$dff
+select -assert-max 22000 first_match_range_disable/t:*
+select -assert-max 14000 eventually_range/t:$dff
+select -assert-max 20000 eventually_range/t:*
+select -assert-max 24000 parenthesized_ranges/t:$dff
+select -assert-max 42000 parenthesized_ranges/t:*
+select -assert-max 28000 parenthesized_ranges_disable/t:$dff
+select -assert-max 70000 parenthesized_ranges_disable/t:*
+select -assert-max 30000 repeated_range/t:$dff
+select -assert-max 74000 repeated_range/t:*
+select -assert-max 36000 repeated_range_disable/t:$dff
+select -assert-max 118000 repeated_range_disable/t:*

@@ -44,8 +44,15 @@ module static_functions(input logic clk_i, input logic a, input logic b, input l
 		return x & state;
 	endfunction
 
+	function logic latch(logic x);
+		logic k;
+		k = x;
+		return k;
+	endfunction
+
 	logic valid = 1'b0;
 	logic a_q;
+	logic latched;
 
 	always @(posedge clk_i) begin
 		two_calls_ref: assert(a == b);
@@ -64,6 +71,12 @@ module static_functions(input logic clk_i, input logic a, input logic b, input l
 		state = 1'b1;
 		module_state_ref: assert(a & valid);
 		module_state_test: assert property(with_state(a));
+
+		// Outside of a call of the function its static variable is state like any other,
+		// sampled in an assertion
+		latched <= latch(a);
+		static_outside_ref: assert(!valid || a_q == a);
+		static_outside_test: assert property(!valid || latch.k == a);
 
 		valid <= 1'b1;
 		a_q <= a;

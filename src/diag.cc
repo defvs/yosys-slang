@@ -143,15 +143,19 @@ DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
 DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
 DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
 DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
-DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1095);
-DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1096);
-DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1097);
-DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1098);
-DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1099);
-DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1100);
-DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1101);
-DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1102);
-DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1103);
+DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
+DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
+DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
+DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
+DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1099);
+DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1100);
+DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1101);
+DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1102);
+DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1103);
+DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1104);
+DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1105);
+DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1106);
+DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1107);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -432,8 +436,19 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(ActionBlockUnsupported, "unsupported statement in assertion action block");
 	engine.setSeverity(ActionBlockUnsupported, DiagnosticSeverity::Error);
 
-	engine.setMessage(FinalAssertionUnsupported, "assertion in final procedure will not be synthesized");
-	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Warning);
+	engine.setMessage(FinalAssertionUnsupported, "assertions in final procedures are unsupported");
+	engine.setSeverity(FinalAssertionUnsupported, DiagnosticSeverity::Error);
+	engine.setMessage(NoteAssertionInFunction, "called function runs this assertion");
+	engine.setSeverity(NoteAssertionInFunction, DiagnosticSeverity::Note);
+
+	engine.setMessage(CheckerUnsupported, "checker instances are unsupported");
+	engine.setSeverity(CheckerUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallSideEffect, "function called in a concurrent assertion assigns a variable not its own");
+	engine.setSeverity(SVACallSideEffect, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion may read state left by an earlier call");
+	engine.setSeverity(SVACallKeepsState, DiagnosticSeverity::Error);
 	// clang-format on
 }
 }; // namespace diag

@@ -10,18 +10,23 @@
 #include "slang/ast/Statement.h"
 #include "slang/ast/TimingControl.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/expressions/Operator.h"
 #include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/expressions/SelectExpressions.h"
 #include "slang/ast/statements/ConditionalStatements.h"
+#include "slang/ast/statements/LoopStatements.h"
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/Type.h"
 #include "slang/numeric/SVInt.h"
 #include <cstddef>
 #include <optional>
+#include <unordered_set>
 
 #include "async_pattern.h"
 #include "diag.h"
@@ -347,6 +352,65 @@ void TimingPatternInterpretor::interpret_async_pattern(const ast::ProceduralBloc
 	handle_ff_process(symbol, *triggers[0], prologue_block, prologue, *stmt, found_async);
 }
 
+// A final procedure runs once, when simulation ends, and nothing in the netlist
+// stands for that moment, so an assertion it runs cannot be lowered. Report
+// each one, following the functions the procedure calls: an assertion in a
+// function is reported at the outermost call in the procedure, with a note at
+// the assertion, since the same function may be lowered fine where it is
+// called from elsewhere.
+void TimingPatternInterpretor::report_final_assertions(const ast::Statement &body)
+{
+	const ast::CallExpression *outer_call = nullptr;
+	slang::Diagnostic *call_diag = nullptr;
+	std::unordered_set<const ast::SubroutineSymbol *> followed;
+
+	body.visit(ast::makeVisitor(
+			[&](auto &, const ast::ImmediateAssertionStatement &statement) {
+				if (!outer_call) {
+					issuer.add_diag(diag::FinalAssertionUnsupported, statement.sourceRange);
+					return;
+				}
+				// One error for the call, with a note at each assertion it runs. Nothing
+				// else is issued until the call is done, so the diagnostic stays put
+				if (!call_diag)
+					call_diag = &issuer.add_diag(
+							diag::FinalAssertionUnsupported, outer_call->sourceRange);
+				call_diag->addNote(diag::NoteAssertionInFunction, statement.sourceRange);
+			},
+			[&](auto &visitor, const ast::CallExpression &call) {
+				visitor.visitDefault(call);
+				if (call.isSystemCall())
+					return;
+				// Following each function once per outermost call is enough to see all
+				// its assertions, and stops at recursion
+				const auto *subroutine = std::get<0>(call.subroutine);
+				if (!followed.insert(subroutine).second)
+					return;
+				bool outermost = !outer_call;
+				if (outermost)
+					outer_call = &call;
+				subroutine->getBody().visit(visitor);
+				if (outermost) {
+					outer_call = nullptr;
+					call_diag = nullptr;
+					followed.clear();
+				}
+			},
+			// The visitor does not descend into declaration initializers on its own.
+			// Static ones run before simulation starts, not in the procedure
+			[&](auto &visitor, const ast::VariableDeclStatement &decl) {
+				if (auto init = decl.symbol.getInitializer();
+						init && decl.symbol.lifetime == ast::VariableLifetime::Automatic)
+					init->visit(visitor);
+			},
+			[&](auto &visitor, const ast::ForLoopStatement &loop) {
+				for (auto var : loop.loopVars)
+					if (auto init = var->getInitializer())
+						init->visit(visitor);
+				visitor.visitDefault(loop);
+			}));
+}
+
 void TimingPatternInterpretor::interpret(const ast::ProceduralBlockSymbol &symbol)
 {
 	auto kind = symbol.procedureKind;
@@ -362,13 +426,10 @@ void TimingPatternInterpretor::interpret(const ast::ProceduralBlockSymbol &symbo
 	case ast::ProceduralBlockKind::Initial: handle_initial_process(symbol, symbol.getBody()); break;
 
 	case ast::ProceduralBlockKind::Final:
-		// Final blocks are ignored by synthesis, as are the assertions in them
-		if (!settings.ignore_assertions.value_or(false)) {
-			symbol.getBody().visit(ast::makeVisitor(
-					[&](auto &, const ast::ImmediateAssertionStatement &statement) {
-						issuer.add_diag(diag::FinalAssertionUnsupported, statement.sourceRange);
-					}));
-		}
+		// Final blocks are ignored by synthesis. The assertions they run would be
+		// lost with them, so those are an error unless assertions are ignored
+		if (!settings.ignore_assertions.value_or(false))
+			report_final_assertions(symbol.getBody());
 		break;
 
 	default: assert_invariant(false && "unreachable");
