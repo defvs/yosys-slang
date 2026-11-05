@@ -15,3 +15,26 @@ async2sync
 chformal -lower
 prep -top assume_early
 sat -tempinduct -prove-asserts -set-assumes -set-init-undef -seq 1 -maxsteps 8 -verify
+
+# The ticks of a process with an `iff` guard can stop for good, and `nexttime` holds when
+# its tick never comes. So the assumption only rejects an attempt on its second tick, and
+# allows a trace whose guard stays low from the tick after `a` on. On that trace the
+# assertion fails, while it holds if the assumption rejects the attempt on the tick of `a`.
+# The inputs are kept defined, as an undefined guard lets a trace past either check.
+design -reset
+read_slang <<EOF
+module stopped_clock(input clk, input en, input a);
+	reg seen = 0;
+	always @(posedge clk iff en) begin
+		stop_env: assume property (a |-> nexttime [2] 1'b0);
+		if (a)
+			seen <= 1;
+	end
+	stop_chk: assert property (@(posedge clk) !seen);
+endmodule
+EOF
+
+async2sync
+chformal -lower
+prep -top stopped_clock
+sat -tempinduct -prove-asserts -set-assumes -set-init-undef -set-def-inputs -seq 1 -maxsteps 8 -falsify

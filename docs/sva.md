@@ -140,8 +140,10 @@ logic, see [Assumptions](#assumptions).
 A bounded sequence has settled all its matches once its longest path is over, which is
 where its strong and weak forms agree. Likewise `nexttime` and `s_nexttime` are lowered
 alike, and so are `eventually` and `s_eventually`: checks come at the end of an attempt
-(see [When checks fire](#when-checks-fire)), so an attempt cut short by the end of a trace
-is not reported either way.
+(see [When checks fire](#when-checks-fire)), so an attempt cut short by the end of a trace,
+or by a clock that stops for good, is not reported either way. An assumption can rule out
+such an attempt before its end, but only once it has failed on the values sampled so far,
+see [Assumptions](#assumptions).
 
 Local variables of sequences and properties, `local` arguments, match items, unbounded
 ranges and repetitions, and the other operators of chapter 16 are rejected, see
@@ -192,9 +194,24 @@ tick alone, it would leave a trace ending sooner unconstrained, and a bounded or
 proof, or a cover, could pick a trace the environment rules out. So an assumption is also
 checked on each earlier tick of an attempt on which the values sampled so far show that
 no way of going on can satisfy the property. All of these checks share the one `$check`
-cell, whose `EN` is high on any of them. Over traces that go on forever an assumption
-allows the same traces as with the last check alone; only finite traces ending in a doomed
-attempt are ruled out sooner.
+cell, whose `EN` is high on any of them.
+
+One way of going on is the clock stopping for good: the clock of a process with an `iff`
+guard, or any clock in a flow with several clocks (such as `multiclock on` in
+SymbiYosys), can tick no more. A weak operator whose ticks never come then holds (IEEE
+1800-2017 16.12.10 and 16.12.13), and so does a weak sequence that can match once the
+missing ticks are padded with letters that satisfy every boolean, `1'b0` included (Annex
+F.5.3.1). So whatever is sampled on a later tick, a constant too, counts as unknown until
+that tick:
+
+- `a |-> ##2 1'b0`, `a |-> nexttime [2] 1'b0` and `a |=> 1'b0` are rejected on their
+  last tick only;
+- `a |-> b ##2 1'b0` is also rejected on the tick of `a` if `b` is low then, as that
+  failure stands whatever comes next.
+
+Over traces on which the clock keeps ticking, an assumption allows the same traces as with
+the last check alone. A trace that ends, or whose clock stops for good, after an attempt
+has failed on the values sampled so far is ruled out sooner.
 
 The checks before the last tick come from evaluating the property with the samples not
 yet taken as unknown, in three-valued logic. They are not always on the earliest tick
@@ -202,6 +219,8 @@ possible:
 
 - Values that are unknown but related are taken as unrelated. `a |-> (##2 c) and (##2 !c)`
   is doomed on the tick of `a`, but rejected on its last tick only.
+- A strong operator over ticks still to come is taken like a weak one. `a |-> s_nexttime
+  [2] 1'b0` fails whether or not the clock stops, but is rejected on its last tick only.
 - The analysis gets a budget in proportion to the size of the property. It is done for the
   first tick of the attempt, then for twice as many ticks at a time. Once a pass goes over
   the budget, the later ticks get checks that may come later than they could, or only the

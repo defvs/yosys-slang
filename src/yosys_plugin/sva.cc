@@ -84,7 +84,11 @@ public:
 
 	EvalContext &eval;
 
-	explicit SvaFormulas(EvalContext &eval_): eval(eval_) {
+	// With `ticked_constants`, a constant sampled after the first tick of the attempt is
+	// kept as a value of its tick, not folded into the formulas reading it, so that a
+	// prefix takes it for unknown until that tick has come (see early_rejection()). The
+	// logic built for a formula has its constants folded in all the same, see folded().
+	SvaFormulas(EvalContext &eval_, bool ticked_constants_): eval(eval_), ticked_constants(ticked_constants_) {
 		ops.push_back({});
 		ops.push_back({});
 	}
@@ -104,9 +108,10 @@ public:
 		return it->second.first;
 	}
 
-	// The value of `bit` sampled on tick `tick` of the attempt
+	// The value of `bit` sampled on tick `tick` of the attempt. A constant is folded unless
+	// it's kept on its tick, and on the first tick it's known from the start anyway.
 	Node value(ir::Net bit, int64_t tick) {
-		if (bit.is_const())
+		if (bit.is_const() && (!ticked_constants || tick <= 0))
 			return bit == ir::S1 ? True : False;
 
 		auto [it, inserted] = values.emplace(std::make_pair(bit.raw(), tick), (Node) ops.size());
@@ -172,9 +177,60 @@ public:
 		return intern(Op::Mux, sel, a, b);
 	}
 
-	// The number of gates making up `root`, counted up to `limit`
-	size_t gates(Node root, size_t limit) const {
+	// `root` with the constants kept on their ticks folded in, as they are once the
+	// attempt has reached the ticks of the formula. It's the formula that folding them
+	// right away would have given.
+	Node folded(Node root) {
+		if (!ticked_constants)
+			return root;
+
 		std::vector<Node> stack = {root};
+		while (!stack.empty()) {
+			Node node = stack.back();
+			if (is_const(node) || folded_nodes.count(node)) {
+				stack.pop_back();
+				continue;
+			}
+
+			// Folding adds formulas, a reference would dangle
+			const Op op = ops[node];
+			if (op.kind == Op::Value) {
+				folded_nodes[node] = !op.sig.is_const() ? node : op.sig == ir::S1 ? True : False;
+				stack.pop_back();
+				continue;
+			}
+
+			bool ready = true;
+			for (Node operand : {op.a, op.b, op.c}) {
+				if (!is_const(operand) && !folded_nodes.count(operand)) {
+					stack.push_back(operand);
+					ready = false;
+				}
+			}
+			if (!ready)
+				continue;
+			stack.pop_back();
+
+			auto get = [&](Node operand) {
+				return is_const(operand) ? operand : folded_nodes.at(operand);
+			};
+			Node result;
+			switch (op.kind) {
+			case Op::And: result = conj(get(op.a), get(op.b)); break;
+			case Op::Or: result = disj(get(op.a), get(op.b)); break;
+			case Op::Not: result = neg(get(op.a)); break;
+			case Op::Mux: result = mux(get(op.a), get(op.b), get(op.c)); break;
+			case Op::Shifted: result = shifted(get(op.a), op.tick); break;
+			default: assert_invariant(false && "unreachable");
+			}
+			folded_nodes[node] = result;
+		}
+		return is_const(root) ? root : folded_nodes.at(root);
+	}
+
+	// The number of gates making up `root`, counted up to `limit`
+	size_t gates(Node root, size_t limit) {
+		std::vector<Node> stack = {folded(root)};
 		Yosys::pool<Node> seen;
 		size_t count = 0;
 		while (!stack.empty() && count <= limit) {
@@ -192,6 +248,7 @@ public:
 	// Logic for `root` on tick `tick` of the attempt, a tick none of the values it reads
 	// is sampled after
 	ir::Net materialize(Node root, int64_t tick, slang::SourceLocation loc) {
+		root = folded(root);
 		// Formulas get deep, a delay chained over a long range is as deep as the range
 		std::vector<Node> stack = {root};
 		while (!stack.empty()) {
@@ -396,6 +453,9 @@ public:
 	// before again on each tick. A formula that's been built on an earlier tick gets
 	// delayed from there instead.
 	std::optional<ir::Net> materialize_prefix(Node root, int64_t tick, slang::SourceLocation loc) {
+		// A prefix on a tick reads the values up to that tick, the constants among them
+		// are known
+		root = folded(root);
 		std::vector<std::pair<Node, int64_t>> stack = {{root, tick}};
 		while (!stack.empty()) {
 			auto [node, at] = stack.back();
@@ -484,8 +544,10 @@ private:
 		int64_t last = INT64_MIN;
 	};
 
+	bool ticked_constants;
 	std::vector<Op> ops;
 	Yosys::dict<std::pair<RTLIL::SigBit, int64_t>, Node> values;
+	Yosys::dict<Node, Node> folded_nodes;
 	Yosys::dict<std::tuple<int, Node, Node, Node>, Node> interned;
 	Yosys::dict<std::pair<Node, int64_t>, ir::Net> materialized;
 	std::map<const ast::Expression *, std::pair<ir::Net, bool>> evaluated;
@@ -813,13 +875,13 @@ struct AttemptContext {
 
 	// A path of the 1'b1s of a delay, `length` ticks long from tick `tick` of the attempt.
 	// Only the last one counts, as the next boolean in a path sees the disable over the
-	// ticks before it as well.
+	// ticks before it as well. It's sampled on its tick like any other boolean.
 	AssertionMatch true_path(SvaFormulas& f, int64_t tick, int64_t length, slang::SourceLocation loc) const {
-		AssertionMatch path = AssertionMatch(f, SvaFormulas::True, loc).shift(length);
-		if (!dual || (abort == nullptr && !settled))
-			return path;
 		if (settled)
-			return path && AssertionMatch(f, SvaFormulas::False, loc);
+			return AssertionMatch(f, dual ? SvaFormulas::False : SvaFormulas::True, loc).shift(length);
+		AssertionMatch path = AssertionMatch(f, f.value(ir::S1, tick + length), loc).shift(length);
+		if (!dual || abort == nullptr)
+			return path;
 		return path && !abort->span(tick + length, 0, length);
 	}
 };
@@ -995,7 +1057,7 @@ static std::vector<AssertionMatch> property_paths(SvaFormulas& f, const AttemptC
 												  slang::SourceLocation loc, int64_t tick) {
 	std::erase_if(paths, [](const AssertionMatch& path) { return path.empty; });
 	if (paths.empty())
-		paths.push_back(ctx.atom(AssertionMatch(f, SvaFormulas::False, loc), tick));
+		paths.push_back(ctx.atom(AssertionMatch(f, f.value(ir::S0, tick), loc), tick));
 	return paths;
 }
 
@@ -1278,7 +1340,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 						}
 						return synthesize_assertion_expr(f, at, instance->body, tick);
 					}
-					return { at.atom(simple.isNullExpr ? AssertionMatch(f, SvaFormulas::False, expr_loc(expr))
+					return { at.atom(simple.isNullExpr ? AssertionMatch(f, f.value(ir::S0, tick), expr_loc(expr))
 													   : AssertionMatch::Operand(f, simple.expr, tick, expr_loc(expr)), tick) };
 				}, instance && !instance->isRecursiveProperty ? concat_after(f, instance->body) : nullptr);
 				return apply_repetition(f, ctx, expr, simple.repetition, operand);
@@ -1575,9 +1637,18 @@ struct AssertionResult {
 // then gets to pick traces the environment rules out, where IEEE Std 1800-2017 section
 // 16.14.2 has the tools constrain the environment so that the property holds. So an
 // assumption gets checked as well on each tick on which what has been sampled of an
-// attempt so far can show it doomed. Each check rules out traces the one on the last
-// tick rules out on any way they go on, and those of an attempt are folded into one
-// cell with it.
+// attempt so far can show it doomed, and those checks are folded into one cell with the
+// one on the last tick.
+//
+// Doomed means no way of going on satisfies the property, and one way is the clock
+// stopping for good: a process clock gated by `iff` can tick no more, and so can any
+// clock in a flow with several clocks. A weak operator whose ticks never come then holds
+// (sections 16.12.10 and 16.12.13), and a weak sequence holds if it can match once the
+// missing ticks are padded with T letters (Annex F.5.3.1), which satisfy every boolean,
+// 1'b0 included. So the prefixes take whatever is sampled on a later tick for unknown,
+// constants too (see SvaFormulas::value()). An unknown stands for T and its dual as well
+// as for any value, so an attempt shown doomed fails whichever way the trace goes on, the
+// clock stopping included, and if it keeps ticking, the check on the last tick fails too.
 //
 // Over many ticks, prefixes can take more merging than the budget for them allows, in
 // proportion to the property, and then the earliest checkpoints are the ones to go. Those
@@ -1600,7 +1671,7 @@ static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net a
 			int64_t tick = std::max<int64_t>(f.prefix_tick(p), 0);
 			if (tick <= exact)
 				break;
-			SvaFormulas::Node value = f.prefix_value(p);
+			SvaFormulas::Node value = f.folded(f.prefix_value(p));
 			if (tick < sig.start && value != SvaFormulas::True)
 				checks.emplace(tick, value);
 			if (tick == 0)
@@ -1617,7 +1688,13 @@ static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net a
 	std::optional<ir::Net> a;
 	f.limit_prefix_logic(budget);
 	// The earliest first, those are the ones a check on the last tick misses most
+	Yosys::pool<SvaFormulas::Node> checked;
 	for (auto [tick, value] : checks) {
+		// The same formula on a later tick reads the same samples of the attempt, it can
+		// only fail where the earlier check has failed already. Constants on their ticks
+		// make for many of these.
+		if (!checked.insert(value).second)
+			continue;
 		auto holds = f.materialize_prefix(value, tick, sig.loc);
 		if (!holds.has_value())
 			break;
@@ -1705,7 +1782,7 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 		condition = scope->getCompilation().getDefaultDisable(*scope);
 	}
 
-	SvaFormulas f(eval);
+	SvaFormulas f(eval, assume);
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
 	if (condition) {
