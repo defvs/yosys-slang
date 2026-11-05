@@ -1313,6 +1313,25 @@ static bool is_random_function(std::string_view name)
 	return functions.count(name);
 }
 
+// System tasks formatting into their first argument (IEEE Std 1800-2017 section 21.3.3)
+static bool is_string_output_task(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> tasks = {
+		"$sformat", "$swrite", "$swriteb", "$swriteh", "$swriteo",
+	};
+	return tasks.count(name);
+}
+
+// Methods of the string type changing the string (section 6.16), all of it except
+// for putc
+static bool is_string_mutator(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> methods = {
+		"putc", "itoa", "hextoa", "octtoa", "bintoa", "realtoa",
+	};
+	return methods.count(name);
+}
+
 // System functions and methods that only compute a value. Some of the names are also
 // those of associative array methods writing their index argument, slang marks those
 // as having output arguments.
@@ -1680,14 +1699,17 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void handle(const ast::CallExpression &call)
 	{
+		bool whole_statement = top_level;
 		top_level = false;
 		if (call.isSystemCall()) {
 			const auto &info = std::get<1>(call.subroutine);
 			auto name = info.subroutine->name;
 			auto args = call.arguments();
-			// The argument the system subroutine assigns, and if it reads it first
+			// The argument the system subroutine assigns, if it reads it first, and if it
+			// assigns all of it
 			std::optional<size_t> written;
 			bool reads_written = false;
+			bool writes_whole = false;
 			if (for_assertion) {
 				// Of the system subroutines we lower, only $readmem assigns a variable
 				if ((name == "$readmemb" || name == "$readmemh") && args.size() >= 2)
@@ -1700,6 +1722,13 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 					written = 0;
 					reads_written = true;
 				}
+			} else if (is_string_output_task(name) && !args.empty()) {
+				written = 0;
+				writes_whole = true;
+			} else if (is_string_mutator(name) && !args.empty() && args[0]->type->isString()) {
+				written = 0;
+				reads_written = name == "putc";
+				writes_whole = !reads_written;
 			} else if (!is_reporting_task(name) && !is_pure_function(info)) {
 				found(call.sourceRange);
 				return;
@@ -1710,17 +1739,26 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				return;
 			}
 			for (size_t i = 0; i < args.size(); i++) {
-				if (i == *written)
-					assign_to(*args[i], reads_written, false);
-				else
+				if (i != *written) {
 					args[i]->visit(*this);
+					continue;
+				}
+				// slang binds an argument some system subroutines assign as an assignment
+				// from an empty argument, as for $sformat, $readmem or the seed of the
+				// $dist functions
+				const ast::Expression *target = args[i];
+				if (ast::AssignmentExpression::isKind(target->kind) &&
+						target->as<ast::AssignmentExpression>().isLValueArg())
+					target = &target->as<ast::AssignmentExpression>().left();
+				assign_to(*target, reads_written, whole_statement && writes_whole);
 			}
 			return;
 		}
 
 		const auto &callee = *std::get<0>(call.subroutine);
-		if (callee.subroutineKind == ast::SubroutineKind::Task) {
-			// Tasks can wait, which no assertion can
+		// Tasks can wait, which no assertion can. In an action block a task is looked
+		// into like a function, which finds any delay or event control in it.
+		if (callee.subroutineKind == ast::SubroutineKind::Task && for_assertion) {
 			found(call.sourceRange);
 			return;
 		}
@@ -1785,7 +1823,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	{
 		if (effect)
 			return;
-		top_level = whole_statement && ast::AssignmentExpression::isKind(expr.kind);
+		top_level = whole_statement && (ast::AssignmentExpression::isKind(expr.kind) ||
+										ast::CallExpression::isKind(expr.kind));
 		expr.visit(*this);
 		top_level = false;
 	}
@@ -1942,6 +1981,21 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			if (!after || (subroutine && !covers_all_values(case_stmt)))
 				after = after ? meet(*after, before) : before;
 			flow = *after;
+			break;
+		}
+		case ast::StatementKind::RandCase: {
+			// With all weights zero no branch is taken (IEEE Std 1800-2017 section 18.16)
+			const auto &randcase = stmt.as<ast::RandCaseStatement>();
+			for (auto &item : randcase.items)
+				expression(*item.expr);
+			Flow before = flow;
+			Flow after = before;
+			for (auto &item : randcase.items) {
+				flow = before;
+				statement(*item.stmt);
+				after = meet(after, flow);
+			}
+			flow = after;
 			break;
 		}
 		case ast::StatementKind::ForLoop: {

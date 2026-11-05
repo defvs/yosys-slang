@@ -427,6 +427,20 @@ EOF
 
 design -reset
 
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
+read_slang <<EOF
+module module_memory_load(input logic clk, input logic [1:0] i);
+	logic m [4];
+	function logic lookup(logic [1:0] idx);
+		$readmemh("function_table.hex", m);
+		return m[idx];
+	endfunction
+	assert property (@(posedge clk) lookup(i) || i == 2'd1);
+endmodule
+EOF
+
+design -reset
+
 # Immediate assertions run their expression in the enclosing process, where the
 # function's writes are ordinary procedural assignments
 read_slang <<EOF
@@ -517,6 +531,13 @@ module pure_functions(input logic clk, input logic [3:0] v, input logic [1:0] s,
 	always @(posedge clk)
 		q <= latch(v);
 
+	// $readmem assigns the function's own memory
+	function automatic logic lookup(logic [1:0] idx);
+		logic m [4];
+		$readmemh("function_table.hex", m);
+		return m[idx];
+	endfunction
+
 	// Parts selected by constants add up to the whole variable
 	function logic [3:0] swap(logic [3:0] x);
 		logic [3:0] t;
@@ -548,6 +569,7 @@ module pure_functions(input logic clk, input logic [3:0] v, input logic [1:0] s,
 	assert property (@(posedge clk) latched_ones(q));
 	assert property (@(posedge clk) swap(swap(v)) == v);
 	assert property (@(posedge clk) split(v) == v);
+	assert property (@(posedge clk) lookup(s) || s == 2'd1);
 endmodule
 EOF
-select -assert-count 10 t:$check
+select -assert-count 11 t:$check

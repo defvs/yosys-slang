@@ -52,6 +52,7 @@ _VARIOUS_DATA = glob([
     yosys_test(
         name = "sva_" + t,
         script = "sva/%s.ys" % t,
+        data = glob(["sva/*.hex"]),
     )
     for t in _SVA_TESTS
 ]

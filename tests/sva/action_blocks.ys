@@ -199,18 +199,6 @@ design -reset
 
 test_slangdiag -expect "unsupported statement in assertion action block"
 read_slang <<EOF
-module task_call(input logic clk, input logic a);
-	task report(input string msg);
-		$error(msg);
-	endtask
-	assert property (@(posedge clk) a) else report("a low");
-endmodule
-EOF
-
-design -reset
-
-test_slangdiag -expect "unsupported statement in assertion action block"
-read_slang <<EOF
 module impure_function(input logic clk, input logic a, output logic [7:0] fails);
 	initial fails = 8'd0;
 	function automatic logic [7:0] count_fail();
@@ -583,5 +571,142 @@ module nonblocking_state(input logic clk, input logic a, input logic [3:0] x, ou
 		y <= delayed(x);
 		assert (a) else $error("%h", delayed(x));
 	end
+endmodule
+EOF
+
+design -reset
+
+# Tasks are looked into like functions, and formatting into a string of the action's
+# own or picking a report at random is reporting too
+read_slang <<EOF
+module reporting_tasks(input logic clk, input logic a, input logic [7:0] v);
+	task automatic say(input string msg, input logic [7:0] x);
+		$display("%s %h", msg, x);
+	endtask
+
+	task report(input logic [7:0] x);
+		string s;
+		$sformat(s, "v=%h", x);
+		$error(s);
+	endtask
+
+	task automatic countdown(input int n);
+		if (n > 0) begin
+			$display("%0d", n);
+			countdown(n - 1);
+		end
+	endtask
+
+	task automatic describe(input logic [7:0] x, output string s);
+		s.itoa(x);
+		s.putc(0, "v");
+		$swriteh(s, "%s %h", s, x);
+	endtask
+
+	function automatic int seeded_draw();
+		int seed = 1;
+		return $dist_normal(seed, 0, 3);
+	endfunction
+
+	always @(posedge clk) begin
+		assert (a) else say("a low", v);
+		assert (a) else report(v);
+		assert (a) else countdown(3);
+		assert (a) else begin
+			string s;
+			describe(v, s);
+			$swrite(s, "%s!", s);
+			$error(s);
+		end
+		assert (a) else randcase
+			1: $error("a low");
+			2: $display("a low again");
+		endcase
+		assert (a) else begin
+			int seed;
+			seed = 1;
+			$error("%0d %0d %0d", $dist_uniform(seed, 0, 3), $dist_poisson(seed, 2),
+				   seeded_draw());
+		end
+	end
+
+	always_comb
+		assert #0 (a) else say("a low", v);
+	assert final (a) else say("a low", v);
+	assert property (@(posedge clk) a) else report(v);
+	cover property (@(posedge clk) a) countdown(2);
+endmodule
+EOF
+
+select -assert-count 10 t:$check
+
+design -reset
+
+# A task is still left out with the action block: it may not wait, nor assign
+# anything the design sees
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module waiting_task(input logic clk, input logic a);
+	task automatic later(input string msg);
+		@(negedge clk);
+		$display(msg);
+	endtask
+	always @(posedge clk)
+		assert (a) else later("a low");
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_intra_assignment(input logic clk, input logic a, input logic [7:0] v);
+	task automatic later(input logic [7:0] x);
+		logic [7:0] y;
+		y = #1 x;
+		$display("%h", y);
+	endtask
+	always @(posedge clk)
+		assert (a) else later(v);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_assigns(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	task flag();
+		err = 1'b1;
+	endtask
+	assert property (@(posedge clk) a) else flag();
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_output(input logic clk, input logic a, output logic [7:0] n);
+	task automatic give(output logic [7:0] x);
+		x = 8'd1;
+	endtask
+	always @(posedge clk)
+		assert (a) else give(n);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module randcase_assigns(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	always @(posedge clk)
+		assert (a) else randcase
+			1: $error("a low");
+			1: err <= 1'b1;
+		endcase
 endmodule
 EOF
