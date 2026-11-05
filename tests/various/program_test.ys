@@ -1,3 +1,4 @@
+test_slangdiag -expect "program block will not be synthesized"
 read_slang <<EOF
 module regular_module(input logic clk, output logic q);
     always_ff @(posedge clk) begin
@@ -21,4 +22,39 @@ program tst;
 endprogram
 EOF
 
+design -reset
+
+# The assertions in a program are left out with it
 test_slangdiag -expect "program block will not be synthesized"
+read_slang <<EOF
+module program_peer(input logic clk, input logic a, output logic q);
+    always_ff @(posedge clk)
+        q <= a;
+endmodule
+
+program checks(input logic clk, input logic a);
+    assert property (@(posedge clk) a);
+    initial begin
+        assert property (@(posedge clk) a ##1 !a);
+        assert (a);
+    end
+endprogram
+EOF
+select -assert-none t:$check
+
+design -reset
+
+test_slangdiag -expect "program block will not be synthesized"
+read_slang <<EOF
+program nested_checks(input logic clk, input logic a);
+    assert property (@(posedge clk) a |=> !a);
+endprogram
+
+module program_host(input logic clk, input logic a, output logic q);
+    nested_checks checks(clk, a);
+    always_ff @(posedge clk)
+        q <= a;
+endmodule
+EOF
+select -assert-none t:$check
+select -assert-count 1 t:$dff

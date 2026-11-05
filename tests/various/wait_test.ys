@@ -1,3 +1,4 @@
+test_slangdiag -expect "wait statement will not be synthesized"
 read_slang <<EOF
 module wait_test(input logic clk, input logic rst, output logic q);
     logic condition = 1'b0;
@@ -13,5 +14,3 @@ module wait_test(input logic clk, input logic rst, output logic q);
         end
 endmodule
 EOF
-
-test_slangdiag -expect "wait statement will not be synthesized"
