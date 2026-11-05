@@ -264,17 +264,33 @@ public:
 	static constexpr Prefix AlwaysTrue = 0;
 	static constexpr Prefix AlwaysFalse = 2;
 
-	// Bound the merging of prefixes, and the logic built for them, to an amount in
-	// proportion to the formulas there are, which keeps both linear in the property.
-	// Past that, checkpoints get dropped, which leaves some attempts to show doomed on a
-	// later tick.
-	void limit_prefixes(size_t per_node) {
-		merge_budget = merge_steps + per_node * ops.size();
-		logic_budget = logic_cost + per_node * ops.size();
+	// Start over on prefixes that read the values up to tick `last` only, as if those
+	// after were never sampled, with `budget` steps of merging. Past the budget,
+	// checkpoints get dropped, which leaves some attempts to show doomed on a later tick.
+	// A prefix that drops a checkpoint holds on to the one before it, and with a value
+	// sampled only ever ruling out more, that still holds where the formula can.
+	void start_prefixes(int64_t last, size_t budget) {
+		horizon = last;
+		prefixes.clear();
+		merged.clear();
+		shifted_prefixes.clear();
+		merge_steps = 0;
+		merge_budget = budget;
+		dropped = false;
 	}
 
-	bool prefix_logic_left() const {
-		return logic_cost < logic_budget;
+	// Did the prefixes since start_prefixes() drop checkpoints over the budget?
+	bool prefixes_dropped() const {
+		return dropped;
+	}
+
+	// Bound the logic built for prefixes to `budget` gates and registers more
+	void limit_prefix_logic(size_t budget) {
+		logic_budget = logic_cost + budget;
+	}
+
+	size_t size() const {
+		return ops.size();
 	}
 
 	Prefix prefix(Node root, bool may) {
@@ -325,6 +341,8 @@ public:
 				if (placed_from.count(node)) {
 					auto [formula, ticks] = placed_from.at(node);
 					result = shift_prefix(get(formula, node_may), ticks, node_may);
+				} else if (op.tick > horizon) {
+					result = node_may ? AlwaysTrue : AlwaysFalse;
 				} else {
 					result = checkpoint(op.tick, node, node_may ? AlwaysTrue : AlwaysFalse);
 				}
@@ -372,11 +390,12 @@ public:
 		return earlier(p);
 	}
 
-	// Logic for `root` on tick `tick` of the attempt, a prefix on a tick of its own.
-	// Prefixes on many ticks are built one on the other, and materialize() would build
-	// all those before again on each tick. A formula that's been built on an earlier tick
-	// gets delayed from there instead.
-	ir::Net materialize_prefix(Node root, int64_t tick, slang::SourceLocation loc) {
+	// Logic for `root` on tick `tick` of the attempt, a prefix on a tick of its own, or
+	// none if that takes more than the budget left (see limit_prefix_logic()). Prefixes
+	// on many ticks are built one on the other, and materialize() would build all those
+	// before again on each tick. A formula that's been built on an earlier tick gets
+	// delayed from there instead.
+	std::optional<ir::Net> materialize_prefix(Node root, int64_t tick, slang::SourceLocation loc) {
 		std::vector<std::pair<Node, int64_t>> stack = {{root, tick}};
 		while (!stack.empty()) {
 			auto [node, at] = stack.back();
@@ -388,10 +407,15 @@ public:
 			const Op op = ops[node];
 			assert_invariant(op.last <= at);
 			if (op.kind == Op::Value) {
+				// The line of the value reaches that far for the last tick already
 				materialized[{node, at}] = delay_sva_sample(eval, op.sig, at - op.tick, ir::Sx, loc).as_net();
 				stack.pop_back();
 				continue;
 			}
+
+			// What's been built so far is left for the checks on later ticks to use
+			if (logic_cost >= logic_budget)
+				return {};
 
 			auto earlier_tick = built_on.find(node);
 			if (earlier_tick != built_on.end() && earlier_tick->second < at) {
@@ -497,7 +521,9 @@ private:
 	Yosys::dict<Node, std::pair<Node, int64_t>> placed_from;
 	// The latest tick a formula has been built on for a prefix
 	Yosys::dict<Node, int64_t> built_on;
+	int64_t horizon = INT64_MAX;
 	size_t merge_steps = 0, merge_budget = 0;
+	bool dropped = false;
 	size_t logic_cost = 0, logic_budget = 0;
 
 	// `node` with each value read `ticks` later
@@ -533,10 +559,13 @@ private:
 			}
 			if (merge_steps >= merge_budget) {
 				rest = may ? AlwaysTrue : AlwaysFalse;
+				dropped = true;
 				break;
 			}
 			merge_steps++;
-			steps.push_back(p);
+			// The value placed later can read past the horizon
+			if (prefix_tick(p) + ticks <= horizon)
+				steps.push_back(p);
 			p = earlier(p);
 		}
 		for (auto step = steps.rbegin(); step != steps.rend(); step++) {
@@ -623,6 +652,7 @@ private:
 					rest = may ? x : AlwaysFalse;
 				else
 					rest = may ? AlwaysTrue : x;
+				dropped = true;
 				break;
 			}
 			merge_steps++;
@@ -1547,39 +1577,57 @@ struct AssertionResult {
 // on which what has been sampled of an attempt so far can show it doomed. Each check
 // rules out traces the one on the last tick rules out on any way they go on, and those
 // of an attempt are folded into one cell with it.
+//
+// Over many ticks, prefixes can take more merging than the budget for them allows, in
+// proportion to the property, and then the earliest checkpoints are the ones to go. Those
+// matter the most though, a trace ending on the first ticks of an attempt the soonest. So
+// the prefixes get worked out over the first tick of the attempt first, then over twice as
+// many ticks each time, for as long as they take no more than the budget.
 static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net attempt,
 							AssertionResult& result) {
 	// Prefixes built one on the other take a step or two per formula
 	static constexpr size_t work_per_node = 4;
+	const size_t budget = work_per_node * f.size();
 
-	f.limit_prefixes(work_per_node);
-	std::vector<std::pair<int64_t, SvaFormulas::Node>> checks;
-	for (auto p = f.prefix(sig.sig, true);; p = f.prefix_earlier(p)) {
-		// The checkpoint holding on the first tick of the attempt is the last one to go
-		// by, before its first checkpoint a prefix is constant
-		int64_t tick = std::max<int64_t>(f.prefix_tick(p), 0);
-		SvaFormulas::Node value = f.prefix_value(p);
-		if (tick < sig.start && value != SvaFormulas::True)
-			checks.push_back({tick, value});
-		if (tick == 0)
+	// Up to tick `exact`, the checks are from prefixes that dropped no checkpoint
+	std::map<int64_t, SvaFormulas::Node> checks;
+	int64_t exact = -1;
+	for (int64_t horizon = 0; exact < sig.start - 1; horizon = std::min(2 * horizon + 1, sig.start - 1)) {
+		f.start_prefixes(horizon, budget);
+		for (auto p = f.prefix(sig.sig, true);; p = f.prefix_earlier(p)) {
+			// Before its first checkpoint a prefix is constant, from the start of the attempt on
+			int64_t tick = std::max<int64_t>(f.prefix_tick(p), 0);
+			if (tick <= exact)
+				break;
+			SvaFormulas::Node value = f.prefix_value(p);
+			if (tick < sig.start && value != SvaFormulas::True)
+				checks.emplace(tick, value);
+			if (tick == 0)
+				break;
+		}
+		// The checks after `exact` hold all the same, some come later than they could
+		if (f.prefixes_dropped())
 			break;
+		exact = horizon;
 	}
-
-	if (checks.empty())
-		return;
 
 	auto &netlist = f.eval.netlist;
 	ir::Net en = netlist.ReduceBool(result.en);
-	ir::Net a = netlist.LogicOr(netlist.ReduceBool(result.a), netlist.LogicNot(en));
+	std::optional<ir::Net> a;
+	f.limit_prefix_logic(budget);
 	// The earliest first, those are the ones a check on the last tick misses most
-	for (auto check = checks.rbegin(); check != checks.rend() && f.prefix_logic_left(); check++) {
-		auto [tick, value] = *check;
+	for (auto [tick, value] : checks) {
+		auto holds = f.materialize_prefix(value, tick, sig.loc);
+		if (!holds.has_value())
+			break;
+		if (!a.has_value())
+			a = netlist.LogicOr(netlist.ReduceBool(result.a), netlist.LogicNot(en));
 		ir::Net attempted = delay_sva_sample(f.eval, attempt, tick, ir::S0, sig.loc).as_net();
-		ir::Net holds = f.materialize_prefix(value, tick, sig.loc);
 		en = netlist.LogicOr(en, attempted);
-		a = netlist.LogicAnd(a, netlist.LogicOr(holds, netlist.LogicNot(attempted)));
+		a = netlist.LogicAnd(*a, netlist.LogicOr(*holds, netlist.LogicNot(attempted)));
 	}
-	result = { a, en };
+	if (a.has_value())
+		result = { *a, en };
 }
 
 static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingControl &clocking,
