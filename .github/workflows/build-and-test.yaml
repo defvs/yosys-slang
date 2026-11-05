@@ -141,11 +141,23 @@ jobs:
         run: |
           git clone --depth 1 --branch "$YOSYS_VERSION" https://github.com/YosysHQ/sby.git sby
           sudo make -C sby install
+      - name: Read the pinned suprove archive
+        id: suprove-archive
+        shell: bash
+        run: |
+          grep '^archive_sha256=' tools/setup_liveness_tools.sh >> "$GITHUB_OUTPUT"
+      - name: Cache suprove
+        uses: actions/cache@v6
+        env:
+          cache-name: cache-suprove
+        with:
+          path: ~/.cache/sv-elab-tools/oss-cad-suite
+          key: suprove-${{ runner.os }}-${{ steps.suprove-archive.outputs.archive_sha256 }}
       - name: Install suprove
         id: suprove
         shell: bash
         run: |
-          tools/setup_liveness_tools.sh | tee setup.log
+          YOSYS_SLANG_TOOL_ROOT="$HOME/.cache/sv-elab-tools" tools/setup_liveness_tools.sh | tee setup.log
           grep '^SUPROVE_EXECUTABLE=' setup.log >> "$GITHUB_OUTPUT"
       - name: Run liveness proofs
         run: |

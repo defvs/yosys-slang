@@ -12,17 +12,24 @@ download_dir="${tool_root}/downloads"
 install_dir="${tool_root}/oss-cad-suite/${suite_tag}"
 archive="${download_dir}/${archive_name}"
 suprove="${install_dir}/oss-cad-suite/bin/suprove"
+# Holds the checksum of the archive an install was extracted from, once it is
+# complete
+stamp="${install_dir}/.archive-sha256"
 
-mkdir -p -- "${download_dir}" "${install_dir}"
+# An install extracted from the pinned archive is used as it is, so that one
+# restored from a cache needs neither the archive nor the download
+if [[ ! -x "${suprove}" || ! -f "${stamp}" ||
+		"$(<"${stamp}")" != "${archive_sha256}" ]]; then
+	mkdir -p -- "${download_dir}" "${install_dir}"
 
-if [[ ! -f "${archive}" ]]; then
-	curl --fail --location --retry 3 --output "${archive}.part" "${download_url}"
-	mv -- "${archive}.part" "${archive}"
-fi
+	if [[ ! -f "${archive}" ]]; then
+		curl --fail --location --retry 3 --output "${archive}.part" "${download_url}"
+		mv -- "${archive}.part" "${archive}"
+	fi
 
-printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum --check -
+	printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum --check -
 
-if [[ ! -x "${suprove}" ]]; then
+	rm -f -- "${stamp}"
 	tar -xzf "${archive}" -C "${install_dir}" \
 		oss-cad-suite/bin/suprove \
 		oss-cad-suite/super_prove \
@@ -30,6 +37,7 @@ if [[ ! -x "${suprove}" ]]; then
 		oss-cad-suite/libexec/abc.exe \
 		oss-cad-suite/libexec/bip \
 		oss-cad-suite/license
+	printf '%s\n' "${archive_sha256}" > "${stamp}"
 fi
 
 smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/sv-elab-suprove.XXXXXXXX")
