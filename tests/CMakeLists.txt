@@ -39,6 +39,7 @@ set(ALL_TESTS
     sva/repeated_labels.ys
     sva/unsupported_sampled_clocking.ys
     sva/unsupported_clocking.ys
+    sva/unsupported_constructs.ys
     sva/vector_delay_init.ys
     unit/async.ys
     unit/dff.ys

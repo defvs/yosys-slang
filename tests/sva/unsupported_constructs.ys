@@ -1,0 +1,567 @@
+# Each construct here has no exact lowering to a check, so it is an error rather than
+# something left out or approximated. docs/sva.md lists these along with the rejections
+# tested elsewhere.
+
+# Unbounded delays and repetitions wait for a match with no bound on the ticks
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_delay(input logic clk, input logic a, input logic b);
+	unbounded_delay_test: assert property (@(posedge clk) a ##[1:$] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_delay_shorthand(input logic clk, input logic a, input logic b);
+	unbounded_delay_test: assert property (@(posedge clk) a ##[+] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_delay_star(input logic clk, input logic a, input logic b);
+	unbounded_delay_test: assert property (@(posedge clk) a ##[*] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_repetition(input logic clk, input logic a, input logic b);
+	unbounded_repetition_test: assert property (@(posedge clk) a[*1:$] ##1 b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_repetition_shorthand(input logic clk, input logic a, input logic b);
+	unbounded_repetition_test: assert property (@(posedge clk) b ##1 a[*]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module unbounded_repetition_plus(input logic clk, input logic a, input logic b);
+	unbounded_repetition_test: assert property (@(posedge clk) b ##1 a[+]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module nonconsecutive_repetition(input logic clk, input logic a, input logic b);
+	nonconsecutive_test: assert property (@(posedge clk) a |-> b[=2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module goto_repetition(input logic clk, input logic a, input logic b);
+	goto_test: assert property (@(posedge clk) a |-> b[->2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module sequence_within(input logic clk, input logic a, input logic b, input logic c);
+	within_test: assert property (@(posedge clk) c |-> (a ##1 b) within (c ##3 c));
+endmodule
+EOF
+
+design -reset
+
+# A match item runs on each match of the sequence, which a check has no way to do
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module match_item_call(input logic clk, input logic a, input logic b, input logic c);
+	match_item_test: assert property (@(posedge clk) (a ##1 b, $display("matched")) |=> c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module first_match_item(input logic clk, input logic a, input logic b, input logic c);
+	first_match_item_test: assert property (@(posedge clk)
+		first_match(a ##[1:2] b, $display("matched")) |=> c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported system task 'triggered'"
+read_slang <<EOF
+module sequence_triggered(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	triggered_test: assert property (@(posedge clk) s.triggered |-> a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported system task 'matched'"
+read_slang <<EOF
+module sequence_matched(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a ##1 b;
+	endsequence
+	matched_test: assert property (@(posedge clk) s.matched |-> a);
+endmodule
+EOF
+
+design -reset
+
+# Property operators outside the subset: those over unbounded time, the temporal ones
+# with no bounded lowering here, aborts, and properties chosen by a condition
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_always(input logic clk, input logic a, input logic b);
+	always_test: assert property (@(posedge clk) a |-> always b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module bounded_always(input logic clk, input logic a, input logic b);
+	always_test: assert property (@(posedge clk) a |-> always [1:3] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module bounded_s_always(input logic clk, input logic a, input logic b);
+	s_always_test: assert property (@(posedge clk) a |-> s_always [1:3] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module s_eventually_unranged(input logic clk, input logic a, input logic b);
+	s_eventually_test: assert property (@(posedge clk) a |-> s_eventually b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module s_eventually_unbounded(input logic clk, input logic a, input logic b);
+	s_eventually_test: assert property (@(posedge clk) a |-> s_eventually [1:$] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_until(input logic clk, input logic a, input logic b);
+	until_test: assert property (@(posedge clk) a until b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_s_until(input logic clk, input logic a, input logic b);
+	s_until_test: assert property (@(posedge clk) a s_until b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_until_with(input logic clk, input logic a, input logic b);
+	until_with_test: assert property (@(posedge clk) a until_with b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_s_until_with(input logic clk, input logic a, input logic b);
+	s_until_with_test: assert property (@(posedge clk) a s_until_with b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_implies(input logic clk, input logic a, input logic b, input logic c);
+	implies_test: assert property (@(posedge clk) (a |=> b) implies (a |=> c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_iff(input logic clk, input logic a, input logic b, input logic c);
+	iff_test: assert property (@(posedge clk) (a |=> b) iff (a |=> c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module overlapped_followed_by(input logic clk, input logic a, input logic b, input logic c);
+	followed_by_test: assert property (@(posedge clk) (a ##1 b) #-# c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module nonoverlapped_followed_by(input logic clk, input logic a, input logic b, input logic c);
+	followed_by_test: assert property (@(posedge clk) (a ##1 b) #=# c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module abort_accept_on(input logic clk, input logic a, input logic b, input logic c);
+	accept_on_test: assert property (@(posedge clk) accept_on (c) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module abort_reject_on(input logic clk, input logic a, input logic b, input logic c);
+	reject_on_test: assert property (@(posedge clk) reject_on (c) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module abort_sync_accept_on(input logic clk, input logic a, input logic b, input logic c);
+	sync_accept_on_test: assert property (@(posedge clk) sync_accept_on (c) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module abort_sync_reject_on(input logic clk, input logic a, input logic b, input logic c);
+	sync_reject_on_test: assert property (@(posedge clk) sync_reject_on (c) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_if(input logic clk, input logic a, input logic b, input logic c);
+	if_test: assert property (@(posedge clk) if (a) b else c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module property_case(input logic clk, input logic a, input logic b, input logic c);
+	case_test: assert property (@(posedge clk) case (a) 1'b0: b; default: c; endcase);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module recursive_property(input logic clk, input logic a);
+	property p;
+		a and (1'b1 |=> p);
+	endproperty
+	recursive_test: assert property (@(posedge clk) p);
+endmodule
+EOF
+
+design -reset
+
+# Restrictions and sequence covers are other statements than assert, assume and cover
+# of a property
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module restrict_statement(input logic clk, input logic a);
+	restrict_test: restrict property (@(posedge clk) a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported assertion statement"
+read_slang <<EOF
+module cover_sequence(input logic clk, input logic a, input logic b);
+	cover_sequence_test: cover sequence (@(posedge clk) a ##1 b);
+endmodule
+EOF
+
+design -reset
+
+# A clock is a single edge of a 1-bit signal
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module clock_without_edge(input logic clk, input logic a, input logic b);
+	no_edge_test: assert property (@(clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module sequence_clock(input logic clk, input logic a, input logic b);
+	sequence s;
+		@(posedge clk) a;
+	endsequence
+	sequence_clock_test: assert property (@(s) b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module global_clock(input logic clk, input logic a, input logic b);
+	global clocking @(posedge clk); endclocking
+	global_clock_test: assert property (@($global_clock) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module clocking_block_clock(input logic clk, input logic a, input logic b);
+	default clocking cb @(posedge clk); endclocking
+	clocking_block_test: assert property (@(cb) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_clock(input logic clk, input logic a, input logic b);
+	dual_edge_test: assert property (@(edge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module clock_event_list(input logic clk, input logic rst, input logic a, input logic b);
+	event_list_test: assert property (@(posedge clk or posedge rst) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "iff qualifier not supported in combination with this event"
+read_slang <<EOF
+module default_clocking_iff(input logic clk, input logic en, input logic a, input logic b);
+	default clocking @(posedge clk iff en); endclocking
+	default_iff_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+# An explicit clock in a process has to be the one the process runs on
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module explicit_clock_in_other_process(input logic clk, input logic clk2, input logic a,
+									   input logic b);
+	always @(posedge clk)
+		other_clock_test: assert property (@(posedge clk2) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module explicit_clock_in_initial(input logic clk, input logic a, input logic b);
+	initial
+		initial_test: assert property (@(posedge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module multiclocked_property(input logic clk, input logic clk2, input logic a, input logic b);
+	multiclock_test: assert property (@(posedge clk) a |=> @(posedge clk2) b);
+endmodule
+EOF
+
+design -reset
+
+# Delays count the ticks of one clock edge
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module delay_without_clock(input logic a, input logic b);
+	no_clock_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module delay_in_comb_without_clock(input logic a, input logic b);
+	always_comb
+		comb_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module delay_in_reset_branch(input logic clk, input logic rst, input logic a, input logic b,
+							 input logic d, output logic q);
+	always @(posedge clk or posedge rst) begin
+		if (rst) begin
+			q <= 1'b0;
+		end else begin
+			reset_branch_test: assert property (a |=> b);
+			q <= d;
+		end
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module delay_in_initial(input logic clk, input logic a, input logic b);
+	default clocking @(posedge clk); endclocking
+	initial
+		initial_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+# Clocking blocks other than the default one are rejected like other timing controls
+test_slangdiag -expect "unsynthesizable timing control (ignore with '--ignore-timing')"
+read_slang <<EOF
+module named_clocking_block(input logic clk, input logic a);
+	clocking cb @(posedge clk); endclocking
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsynthesizable timing control (ignore with '--ignore-timing')"
+read_slang <<EOF
+module global_clocking_block(input logic clk, input logic a);
+	global clocking @(posedge clk); endclocking
+endmodule
+EOF
+
+design -reset
+
+# Sampled value functions take the clock of the assertion or process they're in
+test_slangdiag -expect "$past gating_expr (3rd argument) and clocking_event (4th argument) are not supported"
+read_slang <<EOF
+module past_gating(input logic clk, input logic a, input logic b, input logic en);
+	past_gating_test: assert property (@(posedge clk) b |-> $past(a, 1, en));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "$past gating_expr (3rd argument) and clocking_event (4th argument) are not supported"
+read_slang <<EOF
+module past_clocking(input logic clk, input logic clk2, input logic a, input logic b);
+	past_clocking_test: assert property (@(posedge clk) b |-> $past(a, 1, , @(posedge clk2)));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "system function '$past' can only be called within a clocked procedural block with explicit timing"
+read_slang <<EOF
+module past_without_clock(input logic a, input logic b);
+	always_comb
+		past_test: assert ($past(a) == b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "system function '$rose' can only be called within a clocked procedural block with explicit timing"
+read_slang <<EOF
+module rose_without_clock(input logic a, input logic b);
+	rose_test: assert property ($rose(a) |-> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported system task '$sampled'"
+read_slang <<EOF
+module sampled_function(input logic clk, input logic a, input logic b);
+	sampled_test: assert property (@(posedge clk) $sampled(a) |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported system task '$past_gclk'"
+read_slang <<EOF
+module global_clock_past(input logic clk, input logic a, input logic b);
+	global clocking @(posedge clk); endclocking
+	past_gclk_test: assert property (@(posedge clk) a |-> $past_gclk(b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported system task '$rose_gclk'"
+read_slang <<EOF
+module global_clock_rose(input logic clk, input logic a, input logic b);
+	global clocking @(posedge clk); endclocking
+	rose_gclk_test: assert property (@(posedge clk) a |-> $rose_gclk(b));
+endmodule
+EOF

@@ -352,3 +352,26 @@ module escaping_break(input logic [3:0] v);
 			assert (v[i]) else break;
 endmodule
 EOF
+
+design -reset
+
+# A delay or an event control would run the rest of the action block on a later tick
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module delayed_action(input logic clk, input logic a);
+	assert property (@(posedge clk) a) else begin
+		#1 $display("a low");
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module event_control_action(input logic clk, input logic a);
+	assert property (@(posedge clk) a) else begin
+		@(posedge clk) $display("a low a tick ago");
+	end
+endmodule
+EOF

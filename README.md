@@ -79,6 +79,14 @@ Sample usage:
 
     read_slang picorv32.v --top picorv32 -D DEBUG
 
+### Formal assertions
+
+Immediate and concurrent assertions, assumptions and covers are lowered to Yosys `$check`
+cells for formal tools. A subset of the properties over a bounded number of ticks is
+supported, and constructs outside it are errors. See [SystemVerilog assertions](docs/sva.md) for
+the supported constructs, how clocks and attempts are lowered, when the checks fire, the
+deviations from the standard and the list of rejected constructs.
+
 ## Contributing
 
 Contributions are welcome! If you intent to develop a particular feature, feel free to get in touch and consult on the appropriate approach.
