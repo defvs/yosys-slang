@@ -136,15 +136,6 @@ def filter_source(src, dst):
             "prim_alert_rxtx_sva_harness.u_tb.i_prim_alert_sender.PingHsPhase2",
             "3'd4",
         )
-    if source_name == "prim_esc_rxtx_assert_fpv.sv":
-        text = text.replace(
-            "prim_esc_rxtx_sva_harness.u_tb.u_prim_esc_sender.Idle",
-            "3'd0",
-        )
-        text = text.replace(
-            "prim_esc_rxtx_sva_harness.u_tb.u_prim_esc_receiver.Idle",
-            "3'd0",
-        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(text)
 
