@@ -32,6 +32,7 @@ set(ALL_TESTS
     sva/comb_default_clocking.ys
     sva/final_assertions.ys
     sva/frozen_past_first_tick.ys
+    sva/initial_attempt.ys
     sva/kept_hierarchy.ys
     sva/large_ranges.ys
     sva/local_variables.ys

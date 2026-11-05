@@ -1966,6 +1966,74 @@ static const ast::TimingControl *assertion_clocking(NetlistContext &netlist,
 	return default_clocking ? &default_clocking->as<ast::ClockingBlockSymbol>().getEvent() : nullptr;
 }
 
+// Can the one attempt an initial procedure queues be placed on the first tick of the
+// assertion's clock? Not if the procedure gets to the assertion in a branch it can't tell
+// is taken, or after a timing control that --ignore-timing has it run through.
+static bool initial_attempt_exact(NetlistContext &netlist, const ast::ConcurrentAssertionStatement &statement,
+								  const ProceduralContext &process)
+{
+	bool conditional = false;
+#ifdef SLANG_MUX_LOWERING
+	conditional = process.enabled != ir::S1;
+#else
+	// An `if` on a constant takes its branch right away. The switches left are those of
+	// conditions on unknown values and of `case` statements, and the enable of an initial
+	// procedure doesn't follow them.
+	std::vector<std::pair<const Case *, bool>> stack = {{process.root_case.get(), false}};
+	while (!stack.empty()) {
+		auto [node, switched] = stack.back();
+		stack.pop_back();
+		if (node == process.current_case) {
+			conditional = switched;
+			break;
+		}
+		for (auto switch_ : node->switches)
+			for (auto case_ : switch_->cases)
+				stack.push_back({case_, switched || !switch_->signal.empty()});
+	}
+#endif
+
+	// Any timing control in the procedure, or in a task it calls, as one in a loop can
+	// come before the assertion for all that it's written after it
+	bool timed = false;
+	if (netlist.settings.ignore_timing.value_or(false)) {
+		for (auto &procedure : netlist.process_scope->membersOfType<ast::ProceduralBlockSymbol>()) {
+			if (procedure.procedureKind != ast::ProceduralBlockKind::Initial)
+				continue;
+			bool found = false, has_timing = false;
+			Yosys::pool<const ast::SubroutineSymbol *> called;
+			auto visitor = ast::makeVisitor([&](auto &visitor, const ast::TimedStatement &timed_statement) {
+				has_timing = true;
+				visitor.visitDefault(timed_statement);
+			}, [&](auto &visitor, const ast::AssignmentExpression &assignment) {
+				if (assignment.timingControl)
+					has_timing = true;
+				visitor.visitDefault(assignment);
+			}, [&](auto &visitor, const ast::CallExpression &call) {
+				if (!call.isSystemCall()) {
+					auto subroutine = std::get<const ast::SubroutineSymbol *>(call.subroutine);
+					if (called.insert(subroutine).second)
+						subroutine->getBody().visit(visitor);
+				}
+				visitor.visitDefault(call);
+			}, [&](auto &, const ast::ConcurrentAssertionStatement &assertion) {
+				if (&assertion == &statement)
+					found = true;
+			});
+			procedure.getBody().visit(visitor);
+			// A function with the assertion can be called from more than one procedure
+			if (found && has_timing)
+				timed = true;
+		}
+	}
+
+	if (conditional || timed) {
+		netlist.add_diag(diag::UnsupportedSVAFeature, statement.sourceRange);
+		return false;
+	}
+	return true;
+}
+
 // Lower a concurrent assertion on a clock of its own. In a process the attempts are
 // queued by the code around the assertion, as of the clock tick, outside of one there's
 // an attempt on each tick.
@@ -1987,6 +2055,18 @@ static void process_clocked_sva_property(NetlistContext &netlist,
 		procedure.eval.scope_nest_level = process->eval.scope_nest_level;
 		procedure.inherit_state(*process);
 		attempt = process->case_enable();
+
+		if (process->timing.kind == ProcessTiming::Initial) {
+			// The procedure runs once, at time 0, and queues one attempt, which starts on
+			// the first tick of the clock (16.14.6). Its automatic variables hold
+			// constants, which it keeps on the side.
+			if (!initial_attempt_exact(netlist, statement, *process))
+				return;
+			for (auto [bit, value] : process->initial_locals_state)
+				procedure.vstate.set(VariableBits(bit), ir::Value(value));
+			ir::Value ticked = delay_sva_sample(procedure.eval, ir::S1, 1, ir::S0, expr_loc(expr), "sva_ticked");
+			attempt = netlist.LogicAnd(attempt, netlist.LogicNot(ticked.as_net()));
+		}
 	} else {
 		attempt = procedure.case_enable();
 	}
@@ -2020,9 +2100,11 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 		}
 	}
 
-	// No clock gets inferred from a process with no edge in its event control. The
-	// branches of an asynchronous reset have none either, but belong to one with an edge.
-	if (procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) {
+	// No clock gets inferred from a process with no edge in its event control, nor from an
+	// initial procedure. The branches of an asynchronous reset have none either, but belong
+	// to one with an edge.
+	if ((procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) ||
+			procedural.timing.kind == ProcessTiming::Initial) {
 		const ast::AssertionExpr *expr = &top_expr;
 		if (auto clocking = assertion_clocking(netlist, expr)) {
 			process_clocked_sva_property(netlist, statement, block, *clocking, *expr, &procedural);

@@ -468,16 +468,6 @@ design -reset
 
 test_slangdiag -expect "encountered unsupported SVA feature"
 read_slang <<EOF
-module explicit_clock_in_initial(input logic clk, input logic a, input logic b);
-	initial
-		initial_test: assert property (@(posedge clk) a |=> b);
-endmodule
-EOF
-
-design -reset
-
-test_slangdiag -expect "encountered unsupported SVA feature"
-read_slang <<EOF
 module multiclocked_property(input logic clk, input logic clk2, input logic a, input logic b);
 	multiclock_test: assert property (@(posedge clk) a |=> @(posedge clk2) b);
 endmodule
@@ -522,10 +512,11 @@ EOF
 
 design -reset
 
+# An initial procedure has no clock to give, see initial_attempt.sv and
+# initial_own_clock.sv for assertions that take the default clocking or a clock of their own
 test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
 read_slang <<EOF
 module delay_in_initial(input logic clk, input logic a, input logic b);
-	default clocking @(posedge clk); endclocking
 	initial
 		initial_test: assert property (a |=> b);
 endmodule

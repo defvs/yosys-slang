@@ -85,9 +85,17 @@ queues an attempt of its own and gives a cell of its own.
   One without is lowered like an immediate assertion in the same place: on the clock edge
   in the clocked branch, and as an unclocked check while the reset is active in the reset
   branch.
-- In an `initial` procedure an assertion with a clock of its own, or with a delay, is an
-  error. One without either is lowered like an immediate assertion there: it is checked
-  once, on the initial values, also when there is a default clocking.
+- An `initial` procedure infers no clock either, so the assertion takes its own clock or
+  the default clocking. The procedure runs once, at time 0, and queues one attempt, which
+  starts on the first tick of that clock with the values sampled then. That tick need not
+  be the first step of a trace when there are several clocks. Automatic variables are read
+  as they are at the statement, and the conditions around it are worked out at time 0.
+  An assertion the procedure reaches under an `if` on a value unknown then (`x`), or in a
+  `case` statement, is an error, and so is one in a procedure with a timing control under
+  `--ignore-timing`, which runs the procedure as if there were none. With neither a clock
+  of its own nor a default clocking, an assertion with no delay and no sampled value
+  function is lowered like an immediate assertion there: it is checked once, on the
+  initial values.
 
 ## Sampling
 
@@ -288,9 +296,9 @@ reads. So a condition that depends on a register on the assertion's clock takes 
 tick later than in simulation, and a pulse between two ticks, which in simulation queues an
 attempt for the next tick, goes unseen.
 
-### No clock, `initial`, reset branches
+### No clock, reset branches
 
-Without a clock, in an `initial` procedure and in the reset branch of an asynchronous
+Without a clock, also in an `initial` procedure, and in the reset branch of an asynchronous
 reset, an assertion of a single tick is lowered like an immediate assertion, as described
 under [Clocking](#clocking) and [Attempts](#attempts). It is then checked at every point in
 time, or once on the initial values, rather than on the ticks of a clock.
@@ -395,12 +403,13 @@ first variable part. The tests are under `tests/`.
 | Clocking argument of `$rose`, `$fell`, `$stable`, `$changed` | `encountered unsupported SVA feature` | `sva/unsupported_sampled_clocking.ys` |
 | Sampled value function without a single clock edge | `system function` | `sva/unsupported_constructs.ys` |
 | Automatic variable or `const'` cast read after the first tick of an attempt | `automatic variable or const cast of non-constant value used past the first tick of an assertion attempt` | `sva/frozen_past_first_tick.ys` |
-| Delay without a single clock edge: no clock, a process with no edge and no clock for the assertion, a reset branch, an `initial` procedure | `SVA temporal delay requires exactly one clock edge` | `sva/unsupported_constructs.ys` |
+| Delay without a single clock edge: no clock, also in an `initial` procedure, a process with no edge and no clock for the assertion, a reset branch | `SVA temporal delay requires exactly one clock edge` | `sva/unsupported_constructs.ys` |
 | Clock without an edge: `@(clk)`, a clocking block, a sequence or `$global_clock` as the event, as in `@(cb)` or `@(s)` | `SVA clocking requires a signal edge` | `sva/unsupported_constructs.ys` |
 | Clock on both edges, `@(edge clk)`, also with `--allow-dual-edge-ff`, and any concurrent assertion in a process `always @(edge clk)` | `@(edge) will not be synthesized` | `sva/unsupported_constructs.ys` |
 | `iff` on the clock of an assertion or on the default clocking | `iff qualifier not supported in combination with this event` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Clock of more than one bit, event list as the clock | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
-| Clock of an assertion in a process other than the process's own: another signal or edge, a process with an `iff` guard, a reset branch, an `initial` procedure | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
+| Clock of an assertion in a process other than the process's own: another signal or edge, a process with an `iff` guard, a reset branch | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
+| Assertion with a clock in an `initial` procedure, reached under an `if` on an unknown value or in a `case` statement, or in a procedure with a timing control under `--ignore-timing` | `encountered unsupported SVA feature` | `sva/initial_attempt.ys` |
 | Clock within a property: multiclocked properties, repetition of a clocked sequence | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Signals of a clocking block, read or driven | `clocking block signals unsupported` | `sva/unsupported_clocking.ys` |
 | Event control of a process on a clocking block or a sequence, `always @(cb)`, `always @(s)` | `unsynthesizable feature` | `sva/unsupported_clocking.ys` |
