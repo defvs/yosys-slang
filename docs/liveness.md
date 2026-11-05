@@ -20,6 +20,12 @@ No unbounded operator is replaced with a selected finite depth. Bounded ranges
 are lowered whatever their size, with no limit on the number of samples;
 unbounded ranges use finite-state monitors.
 
+This document describes what the liveness monitors add to the lowering that
+[sva.md](sva.md) describes. Clocking, sampling, the finite subset and its empty
+matches, when finite checks fire, `disable iff` and the deviations from the
+standard, functions, action blocks and the rejected finite constructs are as
+described there.
+
 ## Supported property forms
 
 The following forms are supported where they appear as described in the next
@@ -48,10 +54,10 @@ implications, and `p` and `q` for properties.
 | `disable iff (b)`, `accept_on (b)`, `reject_on (b)` and their `sync_` forms | abort letters, see below |
 | named sequences and named properties | lowered in place, recursion rejected |
 
-Finite properties are lowered to safety checks. Sequences and their `not`,
-`or` and `and` are lowered along the paths of their matches; property `if`,
-`case`, `implies`, `iff`, `disable iff` and `accept_on` as in the table, which
-leaves out `not` and `or` of them.
+Finite properties are lowered to safety checks: sequences and their `not`,
+`or` and `and` along the paths of their matches, as [sva.md](sva.md)
+describes, and property `if`, `case`, `implies`, `iff`, `disable iff` and
+`accept_on` as in the table, which leaves out `not` and `or` of them.
 
 `eventually p` and `s_always p` with no range, and `eventually [m:$] p` and
 `s_always [m:$] p`, are not legal SystemVerilog: the grammar of IEEE 1800-2017
@@ -80,10 +86,8 @@ of `until` or `iff`, on the left of `implies`, or in any other `or`.
 
 ## Sequences
 
-Finite sequences retain the path-based lowering, including
-concatenation delays, bounded ranges, consecutive repetition, sequence
-`and`/`or`/`intersect`, `throughout`, implications, followed-by,
-`first_match` without actions, and empty-match edge cases.
+Finite sequences are lowered along the paths of their matches, as
+[sva.md](sva.md#sequences) describes, and so is the left side of followed-by.
 
 Unbounded sequence monitors support:
 
@@ -101,13 +105,12 @@ Unbounded sequence monitors support:
   attempts cannot tell which match of an attempt came first, so it is
   rejected in a concatenation or a repetition.
 
-Empty matches follow IEEE 1800-2017 16.9.2.1 in concatenation and repetition,
-so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`, while `##0 b[*0:$]` has only the
-non-empty matches of `b[*0:$]`. An empty match of an implication antecedent
-does not start the consequent of `|->`, and starts the consequent of `|=>` on
-the first tick. The same goes for the left side of `#-#` and `#=#`. A sequence
-used as a property, as under `strong`, `nexttime` or `s_eventually`, is not met
-by an empty match, and with no other match it fails every attempt.
+Empty matches follow the rules of [sva.md](sva.md#empty-matches) in unbounded
+concatenation and repetition too, so `a ##1 b[*0:$] ##1 c` matches `a ##1 c`,
+while `##0 b[*0:$]` has only the non-empty matches of `b[*0:$]`. The left side
+of `#-#` and `#=#` takes an empty match as the antecedent of `|->` and `|=>`
+does. A sequence used as a property, under `strong`, `nexttime` or
+`s_eventually` too, is not met by an empty match.
 
 A sequence used as a property is weak in `assert` and `assume` unless written
 `strong(...)`, and strong in `cover` (IEEE 1800-2017 16.12.2). So is the
@@ -151,13 +154,21 @@ Vacuity and triggering follow the property structure:
   of overlapping intervals are one and the same.
 
 The condition of a property `if` or `case` is a sampled value, like the
-operands, and so is the condition of an abort, synchronous or not. An abort
-condition, like that of a `disable iff`, is read on the ticks of the
-assertion clock, so `accept_on` and `reject_on` act as `sync_accept_on` and
-`sync_reject_on`. That is exact for a condition that changes with the
-assertion clock, while a pulse between two of its ticks goes unseen.
-The items of a property `case` compare with case equality: an `x` in an item
-is no wildcard, it matches nothing but the same constant `x`.
+operands. The items of a property `case` compare with case equality: an `x` in
+an item is no wildcard, it matches nothing but the same constant `x`.
+
+The condition of an abort, synchronous or not, is a sampled value as well
+(IEEE 1800-2017 16.12.14). It is read on the ticks of the assertion clock, so
+`accept_on` and `reject_on` act as `sync_accept_on` and `sync_reject_on`. That
+is exact for a condition that changes with the assertion clock, while a pulse
+between two of its ticks goes unseen.
+
+The condition of a `disable iff` is read the same way, as a sampled value on
+the ticks of the assertion clock. The standard reads it on current values
+instead, which makes this a deviation, the one
+[sva.md](sva.md#the-disable-condition-is-sampled) describes: a condition that
+changes on an edge of the assertion clock takes effect one tick later than in
+simulation.
 
 An assertion in procedural code launches an attempt on the clock ticks where
 the code around it reaches the statement, the attempt then runs to completion
@@ -179,10 +190,10 @@ An unbounded minimum delay is exact. For
 `s_eventually [m:$] p`, observations before sample `m` cannot complete the
 obligation; there is no artificial maximum.
 
-Aborts follow Annex F of IEEE 1800-2017. From the sample a `disable iff` or
-`accept_on` condition holds in, the letters of the attempts in flight are T:
-they meet every Boolean, so a pending liveness goal is accepted in that
-sample, while the antecedent of an implication sees them dual and starts no
+Aborts follow Annex F of IEEE 1800-2017. From the tick a `disable iff` or
+`accept_on` condition is read true on, the letters of the attempts in flight
+are T: they meet every Boolean, so a pending liveness goal is accepted on that
+tick, while the antecedent of an implication sees them dual and starts no
 consequent. A failure settled before the abort stands, so does one of a
 finite part of a liveness property, such as the left side of a followed-by or
 the first element of a selected regular sequence. A `reject_on` gives the
@@ -209,6 +220,13 @@ Weak until enforces its left operand only while waiting for the right operand
 and does not require the right operand to arrive. Strong until adds that
 progress requirement. `until_with` includes the completion sample in the
 left-operand safety interval.
+
+A finite property under these operators is checked as
+[sva.md](sva.md#when-checks-fire) describes: on the last tick of its paths,
+and in an assumption also on each earlier tick that shows the attempt doomed.
+The safety monitors of `always`, of the `until` operators, of the dual forms
+of `not` and of `iff` have no last tick to wait for, and fail on the tick that
+settles the failure.
 
 Monitor state and finite-history enables are initialized explicitly. A finite
 check is disabled until every required historical sample exists, including

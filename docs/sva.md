@@ -6,6 +6,11 @@ by registers that delay the values the assertion samples. This document describe
 subset that gets lowered, when the checks fire, where the lowering departs from the
 standard, and which constructs are rejected.
 
+The unbounded operators, `always`, the `until` operators, followed-by, the aborts and
+property `if` and `case` are lowered by the monitors that [liveness.md](liveness.md)
+describes, along with what they still reject. What this document says holds for them
+too, unless that one says otherwise.
+
 A construct outside the subset is an error, so a design that reads in has every
 assertion it states. The exceptions are the deviations listed under [Deviations from
 IEEE 1800-2017](#deviations-from-ieee-1800-2017) and the two statements [dropped with a
@@ -14,7 +19,9 @@ warning](#dropped-with-a-warning).
 ## Checks
 
 Each `assert property`, `assume property` and `cover property` becomes a `$check` cell
-with the `FLAVOR` parameter `"assert"`, `"assume"` or `"cover"`. The ports are:
+with the `FLAVOR` parameter `"assert"`, `"assume"` or `"cover"`. A property with an
+unbounded obligation in it can give more than one cell, and the flavors `"live"` and
+`"fair"` as well, see [liveness.md](liveness.md). The ports are:
 
 - `TRG`, with `TRG_POLARITY`: the clock of the assertion and its edge;
 - `EN`: an attempt is reported on this tick;
@@ -131,7 +138,7 @@ value where 16.9.3 uses the default sampled value. The gating and clocking argum
   [Disable iff](#disable-iff);
 - named properties, with arguments, unless recursive.
 
-Ranges and repetitions are bounded, but of any size; there is no limit on `n` in `##[1:n]`
+Bounded ranges and repetitions can be of any size; there is no limit on `n` in `##[1:n]`
 or `[*1:n]`. Ticks are counted in 64 bits. The registers and cells grow linearly with the
 bounds, except for a ranged repetition of a sequence of variable length, as in `(a ##[1:2]
 b)[*1:n]`, which takes a number of cells quadratic in `n`. An assumption takes some more
@@ -143,9 +150,10 @@ alike, and so are `eventually` and `s_eventually`: checks come at the end of an 
 (see [When checks fire](#when-checks-fire)), so an attempt cut short by the end of a trace
 is not reported either way.
 
-Local variables of sequences and properties, `local` arguments, match items, unbounded
-ranges and repetitions, and the other operators of chapter 16 are rejected, see
-[Rejected constructs](#rejected-constructs).
+Unbounded ranges and repetitions, and the property operators of chapter 16 not listed
+here, are lowered within the limits [liveness.md](liveness.md) gives. Local variables of
+sequences and properties, `local` arguments and match items are rejected, see [Rejected
+constructs](#rejected-constructs).
 
 ### Empty matches
 
@@ -340,26 +348,20 @@ functions of assertions. Checker instances are still rejected.
 ## Rejected constructs
 
 Each of these is an error. The message column gives the start of the diagnostic, up to its
-first variable part. The tests are under `tests/`.
+first variable part. The tests are under `tests/`. What the liveness monitors reject of the
+operators they lower is listed in [liveness.md](liveness.md#rejected-constructs).
 
 | Construct | Message | Test |
 | --- | --- | --- |
-| Unbounded delay, `##[m:$]`, `##[*]`, `##[+]` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| Unbounded repetition, `[*m:$]`, `[*]`, `[+]` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| Nonconsecutive and goto repetition, `[=n]`, `[->n]` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `within` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| Match items, `(s, v = e)`, `(s, f())`, `first_match(s, ...)` | `unsupported assertion statement` | `sva/unsupported_constructs.ys`, `sva/local_variables.ys` |
-| Local variables of sequences and properties, `local` arguments | `unsupported assertion statement` | `sva/local_variables.ys` |
-| `always`, `s_always`, with or without a range | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `s_eventually` without a range or with `$` as its bound | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `until`, `s_until`, `until_with`, `s_until_with` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `implies`, `iff` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `#-#`, `#=#` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| `accept_on`, `reject_on`, `sync_accept_on`, `sync_reject_on` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| Property `if`/`else` and `case` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
-| Recursive properties | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
+| Unbounded delay, `##[m:$]`, `##[*]`, `##[+]`, unbounded repetition, `[*m:$]`, `[*]`, `[+]`, and nonconsecutive and goto repetition, `[=n]`, `[->n]`, in a weak sequence: one used as a property in `assert` or `assume` and not written `strong(...)` | `weak sequence with an unbounded match is unsupported` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
+| `within` of sequences with no unbounded match | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
+| Match items, `(s, f())`, `first_match(s, ...)` | `SVA match items and local-variable actions are not synthesizable` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
+| Local variables of sequences and properties, as in `(s, v = e)`, `local` arguments | `unsupported assertion statement` | `sva/local_variables.ys` |
+| `implies` with a left operand other than a boolean, `iff` of operands other than booleans | `unsupported assertion statement` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
+| `reject_on` and `sync_reject_on` around a finite property | `` `reject_on` is supported around a liveness property `` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
+| Recursive properties | `unsupported assertion statement` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
 | `disable iff` other than at the top of the property | `unsupported assertion statement` | `sva/nested_disable.ys` |
-| `restrict property`, `cover sequence` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
+| `restrict property`, `cover sequence` | `unsupported assertion statement` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
 | The sequence methods `.triggered`, `.matched` | `unsupported system task` | `sva/unsupported_constructs.ys` |
 | `$sampled`, the global clocking functions `$past_gclk`, `$rose_gclk` and so on | `unsupported system task` | `sva/unsupported_constructs.ys` |
 | Gating or clocking argument of `$past` | `$past gating_expr (3rd argument) and clocking_event (4th argument) are not supported` | `sva/unsupported_constructs.ys` |

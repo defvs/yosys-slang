@@ -2425,8 +2425,10 @@ static ir::Value monitor_operand(EvalContext& eval, const ast::Expression& expr,
 	return value;
 }
 
-// The condition of a disable iff or an abort, a sampled value like the operands. The
-// monitors read it on all the ticks of an attempt.
+// The condition of a disable iff or an abort, which the monitors read on all the ticks of
+// an attempt. The condition of an abort is a sampled value like the operands (IEEE Std
+// 1800-2017 section 16.12.14). That of a disable iff is read on current values in the
+// standard; sampling it is a deliberate deviation (see eval_assertion()).
 static ir::Net abort_condition(EvalContext& eval, const ast::Expression& condition) {
 	return eval.netlist.ReduceBool(monitor_operand(eval, condition, true));
 }
@@ -4038,8 +4040,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 	if (expr.kind == ast::AssertionExprKind::Abort) {
 		const auto& abort = expr.as<ast::AbortAssertionExpr>();
 		// The condition of an asynchronous abort is a sampled value as well (IEEE Std
-		// 1800-2017 section 16.12.14). We read it on the ticks of the clock only, like
-		// the condition of a disable iff.
+		// 1800-2017 section 16.12.14). We read it on the ticks of the clock only, which
+		// is exact for a condition that changes with the clock, while a pulse between
+		// two ticks goes unseen.
 		ir::Net condition = abort_condition(eval, abort.condition);
 		if (abort.action == ast::AbortAssertionExpr::Accept) {
 			PropertyAborts inner = aborts;
