@@ -235,31 +235,37 @@ paths involving empty repetitions.
 ## Rejected constructs
 
 The frontend raises an error for every construct it cannot lower exactly,
-rather than lowering it to a bounded approximation or a weaker check. Each
-of these has a negative test in `tests/liveness/unsupported.ys` or
-`tests/sva/*.ys`. The diagnostic is given by the start of its message.
+rather than lowering it to a bounded approximation or a weaker check. The
+constructs [sva.md](sva.md#rejected-constructs) lists are rejected here as
+well, among them the signals of a clocking block, an `iff` on the clock of an
+assertion, `local` arguments, a process event control on a clocking block or
+a sequence, a reference across a hierarchy kept by `--keep-hierarchy`, and an
+action block with effects. What the liveness monitors reject of the operators
+they lower is listed below. The diagnostic is given by the start of its
+message, the tests are under `tests/`.
 
-| Construct | Diagnostic |
-| --- | --- |
-| `restrict property`, `cover sequence` | unsupported assertion statement |
-| a weak sequence with an unbounded match, as a bare `a ##[1:$] b` in `assert` or `assume`, in a consequent, under an eventuality or in `weak(...)` | weak sequence with an unbounded match is unsupported |
-| `cover property` of `always`, `until`, an unbounded eventuality or a sequence with an unbounded match | cover of a property with `always`, `until`, ... |
-| `cover property` with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent: no check would see its vacuous successes | cover of a property with a property `if`, ... |
-| `cover property` of an `and` or followed-by with `iff` or an abort in an operand, whose parts would each be covered on their own | cover of a property `and`, or of followed-by, ... |
-| an unbounded generalized sequence in an assumption where it needs attempt selection, which would weaken the assumption | property needs an acceptance condition ... |
-| `or` with a temporal operand, unless both sides are unbounded eventualities of sequences the monitor takes without an attempt selection; a temporal operand of `iff` or on the left of `implies` | property needs an acceptance condition ... |
-| sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence under an eventuality or on the left of `within` | sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where ... |
-| `first_match` or a sequence product of an unbounded sequence inside a concatenation or a repetition | unsupported assertion statement |
-| followed-by with an unbounded left operand, or whose left operand ends on more than one tick, when the right operand is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it | followed-by with an unbounded left operand, ... |
-| `reject_on` around a finite property, or around a liveness property with a safety part, with `always`, or with more than a Boolean antecedent ahead of its obligations | `reject_on` is supported around a liveness property ... |
-| temporal operands of `until`, `s_until`, `until_with` and `s_until_with` | unsupported assertion statement |
-| liveness under `not` (other than the dual forms), `nexttime` or `s_nexttime`, or under an eventuality other than as `strong(s)`; `not` of `until` or of an unbounded `strong` sequence | unsupported assertion statement |
-| recursive named properties | unsupported assertion statement |
-| SVA match items, sequence local-variable assignments and action subroutines | SVA match items and local-variable actions are not synthesizable |
-| a `disable iff` nested in a property by way of instances, which IEEE 1800-2017 16.12 does not allow | unsupported assertion statement |
-| an automatic variable or a const cast read on a later tick than the one the attempt was queued on (in the condition of a `disable iff` or an abort, in an operand of `always`, `until` or an eventuality, after a delay or an unbounded repetition, or in a consequent that starts on a later tick) | automatic variable or const cast of non-constant value used past the first tick of an assertion attempt |
-| several or incompatible clocks in one property, such as liveness on a second clock, and sampled-value clock arguments | encountered unsupported SVA feature |
-| a temporal monitor with no single clock edge to run on: in `always_comb` or `always @*` with neither a clock of the assertion's own nor a default clocking, or in a process with an asynchronous reset | SVA temporal delay requires exactly one clock edge |
+| Construct | Diagnostic | Test |
+| --- | --- | --- |
+| `restrict property`, `cover sequence` | unsupported assertion statement | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| a weak sequence with an unbounded match, as a bare `a ##[1:$] b` in `assert` or `assume`, in a consequent, under an eventuality or in `weak(...)` | weak sequence with an unbounded match is unsupported | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| `cover property` of `always`, `until`, an unbounded eventuality or a sequence with an unbounded match | cover of a property with `always`, `until`, ... | `liveness/unsupported.ys` |
+| `cover property` with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent: no check would see its vacuous successes | cover of a property with a property `if`, ... | `liveness/unsupported.ys` |
+| `cover property` of an `and` or followed-by with `iff` or an abort in an operand, whose parts would each be covered on their own | cover of a property `and`, or of followed-by, ... | `liveness/unsupported.ys` |
+| an unbounded generalized sequence in an assumption where it needs attempt selection, which would weaken the assumption | property needs an acceptance condition ... | `liveness/unsupported.ys` |
+| `or` with a temporal operand, unless both sides are unbounded eventualities of sequences the monitor takes without an attempt selection; a temporal operand of `iff` or on the left of `implies` | property needs an acceptance condition ... | `liveness/unsupported.ys` |
+| sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence under an eventuality or on the left of `within` | sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where ... | `liveness/unsupported.ys` |
+| `first_match` or a sequence product of an unbounded sequence inside a concatenation, a repetition or an antecedent | unsupported assertion statement | `liveness/unsupported.ys` |
+| followed-by with an unbounded left operand, or whose left operand ends on more than one tick, when the right operand is temporal or has a property `if`, `case`, `implies`, `iff` or abort in it | followed-by with an unbounded left operand, ... | `liveness/unsupported.ys` |
+| `reject_on` around a finite property, or around a liveness property with a safety part, with `always`, or with more than a Boolean antecedent ahead of its obligations | `reject_on` is supported around a liveness property ... | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| temporal operands of `until`, `s_until`, `until_with` and `s_until_with`, a repeated sequence as an operand of `until` or `implies` | unsupported assertion statement | `liveness/unsupported.ys` |
+| liveness under `not` (other than the dual forms), `nexttime` or `s_nexttime`, or under an eventuality other than as `strong(s)`; `not` of `until` or of an unbounded `strong` sequence | unsupported assertion statement | `liveness/unsupported.ys` |
+| recursive named properties | unsupported assertion statement | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| SVA match items, sequence local-variable assignments and action subroutines, also in an unbounded sequence | SVA match items and local-variable actions are not synthesizable | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| a `disable iff` nested in a property by way of instances, which IEEE 1800-2017 16.12 does not allow | unsupported assertion statement | `sva/nested_disable.ys` |
+| an automatic variable or a const cast read on a later tick than the one the attempt was queued on (in the condition of a `disable iff` or an abort, in an operand of `always`, `until` or an eventuality, after a delay or an unbounded repetition, or in a consequent that starts on a later tick) | automatic variable or const cast of non-constant value used past the first tick of an assertion attempt | `liveness/frozen.ys`, `liveness/procedural.ys` |
+| several or incompatible clocks in one property, such as liveness on a second clock or a repeated sequence instance with a clock of its own, and a clock of the assertion other than that of its process | encountered unsupported SVA feature | `liveness/unsupported.ys`, `liveness/procedural.ys` |
+| a temporal monitor with no single clock edge to run on: in `always_comb` or `always @*` with neither a clock of the assertion's own nor a default clocking, or in a process with an asynchronous reset | SVA temporal delay requires exactly one clock edge | `liveness/procedural.ys` |
+| an action block with effects on a liveness assertion | unsupported statement in assertion action block | `liveness/procedural.ys` |
 
 An automatic variable or a const cast read on the first tick of the attempt,
 as in the antecedent `t` of `t |-> s_eventually b` or in the condition of a
@@ -420,5 +426,5 @@ yosys -m build/slang.so -p '
   prep -top top
   write_rtlil design.il
 '
-grep -E '\\$check|FLAVOR|sva_(pending|nfa|response|select)' design.il
+grep -E 'cell \$check|FLAVOR|sva_(pending|nfa|response|select)' design.il
 ```
