@@ -32,7 +32,9 @@ module disable_settled_sequence(input clk_i, input logic r, input logic a, input
 		vector_operand_ref: assert(!gate1 || r_d1 || (v_d1 != 0 && (r || a)));
 		never_disabled_ref: assert(!gate1 || (a_d1 && b));
 		always_disabled_ref: assert(1);
-		assume_ref: assume(!gate1 || r_d1 || (a_d1 && (r || b)));
+		// The assumption rules out an attempt without `a` on its first tick as of that
+		// tick, as no disable later on can cancel that
+		assume_ref: assume((r || a) && (!gate1 || r_d1 || (a_d1 && (r || b))));
 
 		gate1 <= 1;
 		gate2 <= gate1;

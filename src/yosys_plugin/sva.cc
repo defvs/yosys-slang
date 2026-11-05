@@ -115,9 +115,20 @@ public:
 			op.kind = Op::Value;
 			op.sig = bit;
 			op.tick = tick;
+			op.last = tick;
 			ops.push_back(op);
 		}
 		return it->second;
+	}
+
+	// The value of `logic`, built for `formula` on the tick its path ends on, sampled
+	// `ticks` later on tick `tick`. The prefixes of the value are those of the formula,
+	// `ticks` later.
+	Node placed_logic(ir::Net logic, int64_t tick, Node formula, int64_t ticks) {
+		Node node = value(logic, tick);
+		if (!is_const(node))
+			placed_from[node] = {formula, ticks};
+		return node;
 	}
 
 	Node conj(Node a, Node b) {
@@ -232,13 +243,221 @@ public:
 		return materialized.at({root, tick});
 	}
 
+	// What the ticks of an attempt so far tell of a formula, before the values it reads
+	// later on have been sampled: on each tick, a formula over the values sampled up to
+	// that tick that holds wherever the formula can still turn out true (with `may`), or
+	// that holds only where it's sure to turn out true (without).
+	//
+	// These are the formula in three-valued logic, with the values not sampled yet
+	// unknown: `may` of a conjunction is the conjunction of the operands' `may`s, `may` of
+	// a negation is the negation of the operand's other prefix. An attempt is doomed
+	// wherever `may` is low, whatever comes next, since the logic never takes an unknown
+	// for known. It can take a known value for unknown though, as with a value read both
+	// ways on a later tick, so some doomed attempts only show on a later tick.
+	//
+	// A prefix changes on the ticks the formula reads values on and is kept as a list
+	// of checkpoints, latest first, each holding up to the next one. From the last tick
+	// of the formula on it's the formula itself, before its first checkpoint `may` holds
+	// and `must` doesn't. Checkpoints are interned, so a prefix built on another one
+	// shares its checkpoints, as with a path and the paths extending it.
+	using Prefix = int;
+	static constexpr Prefix AlwaysTrue = 0;
+	static constexpr Prefix AlwaysFalse = 2;
+
+	// Bound the merging of prefixes, and the logic built for them, to an amount in
+	// proportion to the formulas there are, which keeps both linear in the property.
+	// Past that, checkpoints get dropped, which leaves some attempts to show doomed on a
+	// later tick.
+	void limit_prefixes(size_t per_node) {
+		merge_budget = merge_steps + per_node * ops.size();
+		logic_budget = logic_cost + per_node * ops.size();
+	}
+
+	bool prefix_logic_left() const {
+		return logic_cost < logic_budget;
+	}
+
+	Prefix prefix(Node root, bool may) {
+		std::vector<std::pair<Node, bool>> stack = {{root, may}};
+		while (!stack.empty()) {
+			auto [node, node_may] = stack.back();
+			if (prefixes.count({node, node_may})) {
+				stack.pop_back();
+				continue;
+			}
+
+			// Merging adds formulas, a reference would dangle
+			const Op op = ops[node];
+			std::vector<std::pair<Node, bool>> operands;
+			if (op.kind == Op::Not) {
+				// A negation reads the other prefix of its operand
+				operands = {{op.a, !node_may}};
+			} else if (op.kind == Op::Mux) {
+				operands = {{op.a, true}, {op.a, false}, {op.b, node_may}, {op.c, node_may}};
+			} else if (op.kind == Op::And || op.kind == Op::Or) {
+				operands = {{op.a, node_may}, {op.b, node_may}};
+			} else if (op.kind == Op::Value && placed_from.count(node)) {
+				operands = {{placed_from.at(node).first, node_may}};
+			}
+			assert_invariant(op.kind != Op::Shifted);
+			bool ready = true;
+			for (auto operand : operands) {
+				if (!is_const(operand.first) && !prefixes.count(operand)) {
+					stack.push_back(operand);
+					ready = false;
+				}
+			}
+			if (!ready)
+				continue;
+			stack.pop_back();
+
+			auto get = [&](Node operand, bool operand_may) {
+				if (is_const(operand))
+					return operand == True ? AlwaysTrue : AlwaysFalse;
+				return prefixes.at({operand, operand_may});
+			};
+			Prefix result;
+			switch (op.kind) {
+			case Op::Const:
+				result = node == True ? AlwaysTrue : AlwaysFalse;
+				break;
+			case Op::Value:
+				if (placed_from.count(node)) {
+					auto [formula, ticks] = placed_from.at(node);
+					result = shift_prefix(get(formula, node_may), ticks, node_may);
+				} else {
+					result = checkpoint(op.tick, node, node_may ? AlwaysTrue : AlwaysFalse);
+				}
+				break;
+			case Op::Not:
+				result = negated(get(op.a, !node_may));
+				break;
+			case Op::And:
+			case Op::Or:
+				result = merge(op.kind, node_may, get(op.a, node_may), get(op.b, node_may));
+				break;
+			case Op::Mux: {
+				// `c` if the select can be (or is) high, `b` if it can be (or is) low
+				Prefix high = merge(Op::And, node_may, get(op.a, node_may), get(op.c, node_may));
+				Prefix low = merge(Op::And, node_may, negated(get(op.a, !node_may)), get(op.b, node_may));
+				result = merge(Op::Or, node_may, high, low);
+				break;
+			}
+			default:
+				assert_invariant(false && "unreachable");
+			}
+			prefixes[{node, node_may}] = result;
+		}
+		return prefixes.at({root, may});
+	}
+
+	Prefix negated(Prefix p) const {
+		// The two prefixes holding a constant throughout swap
+		return is_bottom(p) ? (p ^ 2) : (p ^ 1);
+	}
+
+	// The tick of the latest checkpoint of `p`, below any tick if it's constant
+	int64_t prefix_tick(Prefix p) const {
+		return checkpoints[p >> 1].tick;
+	}
+
+	// What `p` holds from its latest checkpoint on
+	Node prefix_value(Prefix p) {
+		Node value = checkpoints[p >> 1].value;
+		return (p & 1) ? neg(value) : value;
+	}
+
+	// The checkpoints of `p` before its latest
+	Prefix prefix_earlier(Prefix p) const {
+		return earlier(p);
+	}
+
+	// Logic for `root` on tick `tick` of the attempt, a prefix on a tick of its own.
+	// Prefixes on many ticks are built one on the other, and materialize() would build
+	// all those before again on each tick. A formula that's been built on an earlier tick
+	// gets delayed from there instead.
+	ir::Net materialize_prefix(Node root, int64_t tick, slang::SourceLocation loc) {
+		std::vector<std::pair<Node, int64_t>> stack = {{root, tick}};
+		while (!stack.empty()) {
+			auto [node, at] = stack.back();
+			if (is_const(node) || materialized.count({node, at})) {
+				stack.pop_back();
+				continue;
+			}
+
+			const Op op = ops[node];
+			assert_invariant(op.last <= at);
+			if (op.kind == Op::Value) {
+				materialized[{node, at}] = delay_sva_sample(eval, op.sig, at - op.tick, ir::Sx, loc).as_net();
+				stack.pop_back();
+				continue;
+			}
+
+			auto earlier_tick = built_on.find(node);
+			if (earlier_tick != built_on.end() && earlier_tick->second < at) {
+				ir::Net built = materialized.at({node, earlier_tick->second});
+				materialized[{node, at}] = delay_sva_sample(eval, built, at - earlier_tick->second, ir::Sx, loc).as_net();
+				logic_cost += at - earlier_tick->second;
+				earlier_tick->second = at;
+				stack.pop_back();
+				continue;
+			}
+
+			// A shifted formula reads its values that much later
+			std::vector<std::pair<Node, int64_t>> operands;
+			if (op.kind == Op::Shifted)
+				operands = {{op.a, at - op.tick}};
+			else
+				operands = {{op.a, at}, {op.b, at}, {op.c, at}};
+			bool ready = true;
+			for (auto operand : operands) {
+				if (!is_const(operand.first) && !materialized.count(operand)) {
+					stack.push_back(operand);
+					ready = false;
+				}
+			}
+			if (!ready)
+				continue;
+			stack.pop_back();
+
+			auto get = [&](Node operand) -> ir::Net {
+				if (is_const(operand))
+					return operand == True ? ir::S1 : ir::S0;
+				return materialized.at({operand, at});
+			};
+			auto &netlist = eval.netlist;
+			ir::Net result;
+			switch (op.kind) {
+			case Op::And: result = netlist.LogicAnd(get(op.a), get(op.b)); break;
+			case Op::Or:  result = netlist.LogicOr(get(op.a), get(op.b)); break;
+			case Op::Not: result = netlist.LogicNot(get(op.a)); break;
+			case Op::Mux: result = netlist.Mux(get(op.b), get(op.c), get(op.a)).as_net(); break;
+			case Op::Shifted: result = materialized.at(operands[0]); break;
+			default: assert_invariant(false && "unreachable");
+			}
+			if (op.kind != Op::Shifted)
+				logic_cost++;
+			materialized[{node, at}] = result;
+			auto [it, inserted] = built_on.emplace(node, at);
+			if (!inserted)
+				it->second = std::max(it->second, at);
+		}
+
+		if (is_const(root))
+			return root == True ? ir::S1 : ir::S0;
+		return materialized.at({root, tick});
+	}
+
 private:
 	struct Op {
-		enum Kind { Const, Value, And, Or, Not, Mux } kind = Const;
+		// A shifted formula is formula `a` with each value read `tick` ticks later. It
+		// stands for prefixes of an operand placed later on, the logic of which is shared.
+		enum Kind { Const, Value, And, Or, Not, Mux, Shifted } kind = Const;
 		// Operands, `a` selecting between `b` and `c` for a mux
 		Node a = False, b = False, c = False;
 		ir::Net sig = ir::S0;
 		int64_t tick = 0;
+		int64_t last = INT64_MIN;
 	};
 
 	std::vector<Op> ops;
@@ -255,9 +474,172 @@ private:
 			op.a = a;
 			op.b = b;
 			op.c = c;
+			op.last = std::max({ops[a].last, ops[b].last, ops[c].last});
 			ops.push_back(op);
 		}
 		return it->second;
+	}
+
+	// Prefixes, see prefix()
+
+	struct Checkpoint {
+		int64_t tick;
+		Node value;
+		Prefix earlier;
+	};
+
+	std::vector<Checkpoint> checkpoints = {{INT64_MIN, True, -1}, {INT64_MIN, False, -1}};
+	Yosys::dict<std::tuple<int64_t, Node, Prefix>, Prefix> checkpoint_ids;
+	Yosys::dict<std::pair<Node, bool>, Prefix> prefixes;
+	Yosys::dict<std::tuple<int, bool, Prefix, Prefix>, Prefix> merged;
+	Yosys::dict<std::tuple<Prefix, int64_t, bool>, Prefix> shifted_prefixes;
+	Yosys::dict<std::pair<Node, int64_t>, Node> shifted_formulas;
+	Yosys::dict<Node, std::pair<Node, int64_t>> placed_from;
+	// The latest tick a formula has been built on for a prefix
+	Yosys::dict<Node, int64_t> built_on;
+	size_t merge_steps = 0, merge_budget = 0;
+	size_t logic_cost = 0, logic_budget = 0;
+
+	// `node` with each value read `ticks` later
+	Node shifted(Node node, int64_t ticks) {
+		if (is_const(node) || ticks == 0)
+			return node;
+		if (ops[node].kind == Op::Shifted)
+			return shifted(ops[node].a, ops[node].tick + ticks);
+		auto [it, inserted] = shifted_formulas.emplace(std::make_pair(node, ticks), (Node) ops.size());
+		if (inserted) {
+			Op op;
+			op.kind = Op::Shifted;
+			op.a = node;
+			op.tick = ticks;
+			op.last = ops[node].last + ticks;
+			ops.push_back(op);
+		}
+		return it->second;
+	}
+
+	// `p` with each checkpoint `ticks` later, a `may` prefix or not
+	Prefix shift_prefix(Prefix p, int64_t ticks, bool may) {
+		std::vector<Prefix> steps;
+		Prefix rest;
+		while (true) {
+			if (is_bottom(p)) {
+				rest = p;
+				break;
+			}
+			if (auto it = shifted_prefixes.find({p, ticks, may}); it != shifted_prefixes.end()) {
+				rest = it->second;
+				break;
+			}
+			if (merge_steps >= merge_budget) {
+				rest = may ? AlwaysTrue : AlwaysFalse;
+				break;
+			}
+			merge_steps++;
+			steps.push_back(p);
+			p = earlier(p);
+		}
+		for (auto step = steps.rbegin(); step != steps.rend(); step++) {
+			rest = checkpoint(prefix_tick(*step) + ticks, shifted(prefix_value(*step), ticks), rest);
+			shifted_prefixes[{*step, ticks, may}] = rest;
+		}
+		return rest;
+	}
+
+	static bool is_bottom(Prefix p) {
+		return (p >> 1) < 2;
+	}
+
+	Prefix earlier(Prefix p) const {
+		Prefix next = checkpoints[p >> 1].earlier;
+		return (p & 1) ? negated(next) : next;
+	}
+
+	// A checkpoint on `tick`, ahead of those of `rest`. One holding what the checkpoint
+	// before it holds tells nothing new, so it's left out.
+	Prefix checkpoint(int64_t tick, Node value, Prefix rest) {
+		if (prefix_value(rest) == value)
+			return rest;
+		auto [it, inserted] = checkpoint_ids.emplace(std::make_tuple(tick, value, rest),
+													 (Prefix) (checkpoints.size() << 1));
+		if (inserted)
+			checkpoints.push_back({tick, value, rest});
+		return it->second;
+	}
+
+	// The conjunction or disjunction of two values a prefix holds. Merging prefixes
+	// goes over the checkpoints of both, which the absorption laws keep from piling up
+	// copies of what they read.
+	Node prefix_op(typename Op::Kind kind, Node a, Node b) {
+		auto absorbs = [&](Node x, Node y) {
+			// Is `x` an operation of the dual kind on `y`, or of the same kind?
+			if (is_const(x) || (ops[x].kind != Op::And && ops[x].kind != Op::Or))
+				return false;
+			return ops[x].a == y || ops[x].b == y;
+		};
+		for (auto [x, y] : {std::make_pair(a, b), std::make_pair(b, a)}) {
+			if (absorbs(x, y))
+				return ops[x].kind == kind ? x : y;
+		}
+		return kind == Op::And ? conj(a, b) : disj(a, b);
+	}
+
+	// The prefix holding the conjunction (or disjunction) of what `x` and `y` hold, going
+	// over the checkpoints of both, latest first, up to where they've been merged before
+	Prefix merge(typename Op::Kind kind, bool may, Prefix x, Prefix y) {
+		struct Step {
+			Prefix x, y;
+			int64_t tick;
+			Node value;
+		};
+		std::vector<Step> steps;
+		auto key = [&](Prefix p, Prefix q) {
+			return std::make_tuple((int) kind, may, std::min(p, q), std::max(p, q));
+		};
+
+		Prefix rest;
+		while (true) {
+			if (x == y) {
+				rest = x;
+				break;
+			}
+			if (is_bottom(x) || is_bottom(y)) {
+				// A prefix holding a constant throughout
+				Prefix constant = is_bottom(x) ? x : y, other = is_bottom(x) ? y : x;
+				if ((constant == AlwaysTrue) == (kind == Op::And))
+					rest = other;
+				else
+					rest = constant;
+				break;
+			}
+			if (auto it = merged.find(key(x, y)); it != merged.end()) {
+				rest = it->second;
+				break;
+			}
+			if (merge_steps >= merge_budget) {
+				// Dropping checkpoints only ever makes a prefix hold on more ticks
+				// (`may`) or on fewer (`must`), which is what either one stands for
+				if (kind == Op::And)
+					rest = may ? x : AlwaysFalse;
+				else
+					rest = may ? AlwaysTrue : x;
+				break;
+			}
+			merge_steps++;
+
+			int64_t x_tick = checkpoints[x >> 1].tick, y_tick = checkpoints[y >> 1].tick;
+			steps.push_back({x, y, std::max(x_tick, y_tick), prefix_op(kind, prefix_value(x), prefix_value(y))});
+			if (x_tick >= y_tick)
+				x = earlier(x);
+			if (y_tick >= x_tick)
+				y = earlier(y);
+		}
+
+		for (auto step = steps.rbegin(); step != steps.rend(); step++) {
+			rest = checkpoint(step->tick, step->value, rest);
+			merged[key(step->x, step->y)] = rest;
+		}
+		return rest;
 	}
 };
 
@@ -456,7 +838,8 @@ public:
 			paths = from_start;
 			for (size_t i = 0; i < paths.size(); i++)
 				if (!paths[i].empty)
-					paths[i].sig = paths[i].f.value(logic[i], base + offset + paths[i].start);
+					paths[i].sig = paths[i].f.placed_logic(logic[i], base + offset + paths[i].start,
+														   from_start[i].sig, offset);
 		} else {
 			paths = synthesize(ctx, base + offset);
 		}
@@ -1156,6 +1539,49 @@ struct AssertionResult {
 	ir::Value en;
 };
 
+// An assumption constrains a trace on the ticks it gets checked on only. Checked on the
+// last tick of an attempt, it leaves a trace that ends sooner unconstrained, even when no
+// way of going on would satisfy the property, which Annex F of IEEE Std 1800-2017 has
+// the property fail on. A bounded or inductive proof, or a cover, then gets to pick
+// traces the environment rules out. So an assumption gets checked as well on each tick
+// on which what has been sampled of an attempt so far can show it doomed. Each check
+// rules out traces the one on the last tick rules out on any way they go on, and those
+// of an attempt are folded into one cell with it.
+static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net attempt,
+							AssertionResult& result) {
+	// Prefixes built one on the other take a step or two per formula
+	static constexpr size_t work_per_node = 4;
+
+	f.limit_prefixes(work_per_node);
+	std::vector<std::pair<int64_t, SvaFormulas::Node>> checks;
+	for (auto p = f.prefix(sig.sig, true);; p = f.prefix_earlier(p)) {
+		// The checkpoint holding on the first tick of the attempt is the last one to go
+		// by, before its first checkpoint a prefix is constant
+		int64_t tick = std::max<int64_t>(f.prefix_tick(p), 0);
+		SvaFormulas::Node value = f.prefix_value(p);
+		if (tick < sig.start && value != SvaFormulas::True)
+			checks.push_back({tick, value});
+		if (tick == 0)
+			break;
+	}
+
+	if (checks.empty())
+		return;
+
+	auto &netlist = f.eval.netlist;
+	ir::Net en = netlist.ReduceBool(result.en);
+	ir::Net a = netlist.LogicOr(netlist.ReduceBool(result.a), netlist.LogicNot(en));
+	// The earliest first, those are the ones a check on the last tick misses most
+	for (auto check = checks.rbegin(); check != checks.rend() && f.prefix_logic_left(); check++) {
+		auto [tick, value] = *check;
+		ir::Net attempted = delay_sva_sample(f.eval, attempt, tick, ir::S0, sig.loc).as_net();
+		ir::Net holds = f.materialize_prefix(value, tick, sig.loc);
+		en = netlist.LogicOr(en, attempted);
+		a = netlist.LogicAnd(a, netlist.LogicOr(holds, netlist.LogicNot(attempted)));
+	}
+	result = { a, en };
+}
+
 static bool timing_from_sva_clocking(NetlistContext &netlist, const ast::TimingControl &clocking,
 									 ProcessTiming &timing);
 
@@ -1209,8 +1635,12 @@ static bool clocking_matches_process(const ProcessTiming &clocking, const Proces
 // `attempt` is the condition of the procedural code around the assertion. It's read
 // when the statement is reached and decides if an attempt is queued, the attempts
 // in flight run to completion regardless (IEEE Std 1800-2017 section 16.14.6).
+//
+// An attempt is reported on the last tick it can take, which is when an assertion or
+// a cover gets checked. An assumption also gets checked on each tick on which a doomed
+// attempt can show, see early_rejection().
 static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExpr& assertion,
-									  ir::Net attempt, bool cover) {
+									  ir::Net attempt, bool cover, bool assume) {
 	const ast::AssertionExpr *property = &assertion;
 	const ast::Expression *condition = nullptr;
 	slang::SourceLocation disable_loc = expr_loc(assertion);
@@ -1251,7 +1681,10 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 
 	// Starts out low, so no attempt gets reported before it had the time to finish
 	auto attempted = delay_sva_sample(eval, attempt, sig.start, ir::S0, sig.loc);
-	return { f.materialize(sig.sig, sig.start, sig.loc), attempted };
+	AssertionResult result = { f.materialize(sig.sig, sig.start, sig.loc), attempted };
+	if (assume)
+		early_rejection(f, sig, attempt, result);
+	return result;
 }
 
 // The body of a sequence or property names signals of the instance it's declared in.
@@ -1299,7 +1732,8 @@ static void lower_sva_property(const ast::ConcurrentAssertionStatement &statemen
 	}
 
 	AssertionResult result = eval_assertion(procedural.eval, *expr, attempt,
-											statement.assertionKind == ast::AssertionKind::CoverProperty);
+											statement.assertionKind == ast::AssertionKind::CoverProperty,
+											statement.assertionKind == ast::AssertionKind::Assume);
 
 	std::string flavor;
 	switch (statement.assertionKind) {
