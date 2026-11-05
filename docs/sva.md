@@ -145,9 +145,20 @@ value where 16.9.3 uses the default sampled value. The gating and clocking argum
 
 Ranges and repetitions are bounded, but of any size; there is no limit on `n` in `##[1:n]`
 or `[*1:n]`. Ticks are counted in 64 bits. The registers and cells grow linearly with the
-bounds, except for a ranged repetition of a sequence of variable length, as in `(a ##[1:2]
-b)[*1:n]`, which takes a number of cells quadratic in `n`. An assumption takes some more
-logic, see [Assumptions](#assumptions).
+bounds, with two exceptions, which take a number of cells quadratic in `n`:
+
+- a ranged repetition of a sequence whose matches differ in length, as in
+  `(a ##[1:2] b)[*1:n]`;
+- a sequence with matches ending on several ticks, placed in a concatenation after a range
+  or after a sequence that ends on several ticks, if it is built again for each of those
+  ticks, as in `a ##[1:n] ((b ##[1:n] c) and d)`. That is the case for `and` and
+  `intersect`; for `first_match`, unless of a concatenation of elements that each match on
+  one tick from their start, with a range as the last delay and fixed delays otherwise,
+  as in `first_match(b ##2 c ##[1:n] d)`; for `throughout` of a concatenation with an
+  element that can match empty; for a concatenation whose first element can match
+  empty; and for `or`, `throughout`, concatenation and repetition of one of these.
+
+An assumption takes some more logic, see [Assumptions](#assumptions).
 
 A bounded sequence has settled all its matches once its longest path is over, which is
 where its strong and weak forms agree. Likewise `nexttime` and `s_nexttime` are lowered

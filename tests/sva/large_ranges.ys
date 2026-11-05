@@ -151,3 +151,99 @@ select -assert-max 30000 repeated_range/t:$dff
 select -assert-max 74000 repeated_range/t:*
 select -assert-max 36000 repeated_range_disable/t:$dff
 select -assert-max 118000 repeated_range_disable/t:*
+
+design -reset
+
+# Operands with paths ending on many ticks, placed after a range or a ranged repetition,
+# take registers and gates in proportion to the ranges as well: a ranged repetition, a
+# concatenation of ranges or one starting with a ranged repetition, and first_match and
+# throughout of a range, with or without a disable, and in an assumption, which takes more
+# for its earlier checks. Synthesizing the operand again for each tick the paths before it
+# can end on would take millions of gates.
+read_slang <<EOF
+module repetition_ranges(input logic clk, input logic a, input logic b, input logic c);
+	repetition_ranges_test: assert property (@(posedge clk) a |-> b[*1:1000] ##1 c[*1:1000]);
+endmodule
+
+module repetition_ranges_disable(input logic clk, input logic rst, input logic a, input logic b,
+								 input logic c);
+	repetition_ranges_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> b[*1:1000] ##1 c[*1:1000]);
+endmodule
+
+module repetition_ranges_assume(input logic clk, input logic a, input logic b, input logic c);
+	repetition_ranges_assume_test: assume property (@(posedge clk) a |-> b[*1:1000] ##1 c[*1:1000]);
+endmodule
+
+module range_repetition(input logic clk, input logic a, input logic b, input logic c);
+	range_repetition_test: assert property (@(posedge clk) a |-> b ##[1:1000] c[*1:1000]);
+endmodule
+
+module range_repetition_disable(input logic clk, input logic rst, input logic a, input logic b,
+								input logic c);
+	range_repetition_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> b ##[1:1000] c[*1:1000]);
+endmodule
+
+module leading_range_concat(input logic clk, input logic a, input logic b, input logic c);
+	leading_range_concat_test: assert property (@(posedge clk) a |-> ##[1:1000] (b ##[1:1000] c));
+endmodule
+
+module range_concat_repetition(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	range_concat_repetition_test: assert property (@(posedge clk) a |-> b ##[1:1000] (c[*1:1000] ##1 d));
+endmodule
+
+module range_first_match(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	range_first_match_test: assert property (@(posedge clk) a |-> b ##[1:1000] first_match(c ##[1:1000] d));
+endmodule
+
+module range_first_match_disable(input logic clk, input logic rst, input logic a, input logic b,
+								 input logic c, input logic d);
+	range_first_match_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> b ##[1:1000] first_match(c ##[1:1000] d));
+endmodule
+
+module range_first_match_assume(input logic clk, input logic rst, input logic a, input logic b,
+								input logic c, input logic d);
+	range_first_match_assume_test: assume property (@(posedge clk) disable iff (rst)
+		a |-> b ##[1:1000] first_match(c ##[1:1000] d));
+endmodule
+
+module range_throughout(input logic clk, input logic a, input logic b, input logic c, input logic d,
+						input logic e);
+	range_throughout_test: assert property (@(posedge clk)
+		a |-> b ##[1:1000] (e throughout (c ##[1:1000] d)));
+endmodule
+
+module range_throughout_disable(input logic clk, input logic rst, input logic a, input logic b,
+								input logic c, input logic d, input logic e);
+	range_throughout_disable_test: assert property (@(posedge clk) disable iff (rst)
+		a |-> b ##[1:1000] (e throughout (c ##[1:1000] d)));
+endmodule
+EOF
+
+select -assert-count 12 t:$check
+select -assert-max 12000 repetition_ranges/t:$dff
+select -assert-max 28000 repetition_ranges/t:*
+select -assert-max 15000 repetition_ranges_disable/t:$dff
+select -assert-max 44000 repetition_ranges_disable/t:*
+select -assert-max 25000 repetition_ranges_assume/t:$dff
+select -assert-max 91000 repetition_ranges_assume/t:*
+select -assert-max 12000 range_repetition/t:$dff
+select -assert-max 27000 range_repetition/t:*
+select -assert-max 15000 range_repetition_disable/t:$dff
+select -assert-max 39000 range_repetition_disable/t:*
+select -assert-max 12000 leading_range_concat/t:$dff
+select -assert-max 21000 leading_range_concat/t:*
+select -assert-max 15000 range_concat_repetition/t:$dff
+select -assert-max 33000 range_concat_repetition/t:*
+select -assert-max 15000 range_first_match/t:$dff
+select -assert-max 42000 range_first_match/t:*
+select -assert-max 18000 range_first_match_disable/t:$dff
+select -assert-max 57000 range_first_match_disable/t:*
+select -assert-max 20000 range_first_match_assume/t:$dff
+select -assert-max 250000 range_first_match_assume/t:*
+select -assert-max 18000 range_throughout/t:$dff
+select -assert-max 42000 range_throughout/t:*
+select -assert-max 21000 range_throughout_disable/t:$dff
+select -assert-max 63000 range_throughout_disable/t:*
