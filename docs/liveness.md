@@ -164,7 +164,9 @@ the code around it reaches the statement, the attempt then runs to completion
 whatever that code does on later ticks (IEEE 1800-2017 16.14.6). An assertion
 in `always_comb` or `always @*` runs on its own clock or else the default
 clocking. In `always @(posedge clk iff en)` the clock ticks only where `en` is
-high: a justice goal is met only on such a tick, not on the cycles between.
+high: a justice goal is met only on such a tick, not on the cycles between. An
+attempt still pending when the clock stops for good is never met, so it fails,
+even where the match ending on the last tick meets an older attempt.
 
 Overlapping triggers are preserved. For an eventual finite suffix of maximum
 duration `N`, the monitor keeps pending trigger ages `1..N-1` and a saturated
@@ -349,6 +351,8 @@ with a failing variant next to the passing one:
 - `regular.sby`: the unbounded sequence operators;
 - `procedural.sby`: procedural assertions, guards, `iff` clocking and default
   clocking;
+- `clock_stop.sby`: an `iff` qualified clock that stops for good, or pauses,
+  with attempts pending;
 - `sequence.sby`: named sequences, `nexttime` and empty matches;
 - `abort.sby`: aborts around selected sequences, implications and
   followed-by, and their order;

@@ -1,0 +1,98 @@
+[tasks]
+stop_minimum_fail
+stop_minimum_pass
+stop_minimum_single_fail
+stop_minimum_late_fail
+stop_minimum_ticking_fail
+stop_sequence_fail
+stop_sequence_pass
+stop_or_fail
+stop_or_pass
+stop_not_always_fail
+stop_not_always_pass
+stop_strong_fail
+stop_strong_pass
+stop_top_fail
+stop_zero_fail
+stop_zero_pass
+pause_pass
+stop_assume_pass
+stop_assume_fail
+
+[options]
+mode live
+stop_minimum_fail: expect fail
+stop_minimum_single_fail: expect fail
+stop_minimum_late_fail: expect fail
+stop_minimum_ticking_fail: expect fail
+stop_sequence_fail: expect fail
+stop_or_fail: expect fail
+stop_not_always_fail: expect fail
+stop_strong_fail: expect fail
+stop_top_fail: expect fail
+stop_zero_fail: expect fail
+stop_assume_fail: expect fail
+
+[engines]
+aiger suprove
+
+[script]
+stop_minimum_fail: read_rtlil stop_minimum_fail.il
+stop_minimum_fail: prep -top stop_minimum_fail
+stop_minimum_pass: read_rtlil stop_minimum_pass.il
+stop_minimum_pass: prep -top stop_minimum_pass
+stop_minimum_single_fail: read_rtlil stop_minimum_single_fail.il
+stop_minimum_single_fail: prep -top stop_minimum_single_fail
+stop_minimum_late_fail: read_rtlil stop_minimum_late_fail.il
+stop_minimum_late_fail: prep -top stop_minimum_late_fail
+stop_minimum_ticking_fail: read_rtlil stop_minimum_ticking_fail.il
+stop_minimum_ticking_fail: prep -top stop_minimum_ticking_fail
+stop_sequence_fail: read_rtlil stop_sequence_fail.il
+stop_sequence_fail: prep -top stop_sequence_fail
+stop_sequence_pass: read_rtlil stop_sequence_pass.il
+stop_sequence_pass: prep -top stop_sequence_pass
+stop_or_fail: read_rtlil stop_or_fail.il
+stop_or_fail: prep -top stop_or_fail
+stop_or_pass: read_rtlil stop_or_pass.il
+stop_or_pass: prep -top stop_or_pass
+stop_not_always_fail: read_rtlil stop_not_always_fail.il
+stop_not_always_fail: prep -top stop_not_always_fail
+stop_not_always_pass: read_rtlil stop_not_always_pass.il
+stop_not_always_pass: prep -top stop_not_always_pass
+stop_strong_fail: read_rtlil stop_strong_fail.il
+stop_strong_fail: prep -top stop_strong_fail
+stop_strong_pass: read_rtlil stop_strong_pass.il
+stop_strong_pass: prep -top stop_strong_pass
+stop_top_fail: read_rtlil stop_top_fail.il
+stop_top_fail: prep -top stop_top_fail
+stop_zero_fail: read_rtlil stop_zero_fail.il
+stop_zero_fail: prep -top stop_zero_fail
+stop_zero_pass: read_rtlil stop_zero_pass.il
+stop_zero_pass: prep -top stop_zero_pass
+pause_pass: read_rtlil pause_pass.il
+pause_pass: prep -top pause_pass
+stop_assume_pass: read_rtlil stop_assume_pass.il
+stop_assume_pass: prep -top stop_assume_pass
+stop_assume_fail: read_rtlil stop_assume_fail.il
+stop_assume_fail: prep -top stop_assume_fail
+
+[files]
+stop_minimum_fail: stop_minimum_fail.il
+stop_minimum_pass: stop_minimum_pass.il
+stop_minimum_single_fail: stop_minimum_single_fail.il
+stop_minimum_late_fail: stop_minimum_late_fail.il
+stop_minimum_ticking_fail: stop_minimum_ticking_fail.il
+stop_sequence_fail: stop_sequence_fail.il
+stop_sequence_pass: stop_sequence_pass.il
+stop_or_fail: stop_or_fail.il
+stop_or_pass: stop_or_pass.il
+stop_not_always_fail: stop_not_always_fail.il
+stop_not_always_pass: stop_not_always_pass.il
+stop_strong_fail: stop_strong_fail.il
+stop_strong_pass: stop_strong_pass.il
+stop_top_fail: stop_top_fail.il
+stop_zero_fail: stop_zero_fail.il
+stop_zero_pass: stop_zero_pass.il
+pause_pass: pause_pass.il
+stop_assume_pass: stop_assume_pass.il
+stop_assume_fail: stop_assume_fail.il

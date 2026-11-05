@@ -28,6 +28,7 @@ cp -- "${test_dir}/regular_reachability.sby" \
 	"${work_dir}/regular_reachability.sby"
 cp -- "${test_dir}/reject_safety.sby" "${work_dir}/reject_safety.sby"
 cp -- "${test_dir}/procedural.sby" "${work_dir}/procedural.sby"
+cp -- "${test_dir}/clock_stop.sby" "${work_dir}/clock_stop.sby"
 cp -- "${test_dir}/sequence.sby" "${work_dir}/sequence.sby"
 cp -- "${test_dir}/sequence_safety.sby" "${work_dir}/sequence_safety.sby"
 cp -- "${test_dir}/abort.sby" "${work_dir}/abort.sby"
@@ -151,6 +152,38 @@ for top in \
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/procedural_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
+for top in \
+	stop_minimum_fail \
+	stop_minimum_pass \
+	stop_minimum_single_fail \
+	stop_minimum_late_fail \
+	stop_minimum_ticking_fail \
+	stop_sequence_fail \
+	stop_sequence_pass \
+	stop_or_fail \
+	stop_or_pass \
+	stop_not_always_fail \
+	stop_not_always_pass \
+	stop_strong_fail \
+	stop_strong_pass \
+	stop_top_fail \
+	stop_zero_fail \
+	stop_zero_pass \
+	pause_pass \
+	stop_assume_pass \
+	stop_assume_fail
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/clock_stop_proof.sv;
 		prep -top ${top};
 		async2sync;
 		formalff -clk2ff;
@@ -354,6 +387,8 @@ yosys -q -m "${plugin}" -p "
 	sby --prefix "${work_dir}/reject_safety" -f reject_safety.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/procedural" \
 		-f procedural.sby
+	sby --suprove "${suprove_driver}" --prefix "${work_dir}/clock_stop" \
+		-f clock_stop.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/sequence" \
 		-f sequence.sby
 	sby --prefix "${work_dir}/sequence_safety" -f sequence_safety.sby

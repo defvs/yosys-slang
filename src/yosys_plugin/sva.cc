@@ -2389,6 +2389,9 @@ struct PropertyObligation {
 	// before on which the attempt can show doomed, for an assumption to rule it out on
 	// (see early_rejection())
 	std::function<void(AssertionResult&)> early_rejection = nullptr;
+	// For a liveness obligation that answers for the attempts of all the ticks at once,
+	// whether any are held over from the ticks before (see lower_sva_obligations())
+	ir::Net held = ir::S0;
 };
 
 struct PropertyResult {
@@ -2891,6 +2894,7 @@ static void add_response_liveness_obligation(
 	result.obligations.push_back(
 		{PropertyObligationKind::Liveness, goal,
 		 ir::S1, in_flight});
+	result.obligations.back().held = held;
 }
 
 // The ticks to start the right side of `sequence |-> p`, or of `sequence |=> p` if
@@ -4566,11 +4570,25 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 
 		// A justice goal is looked at on every cycle, not only on the ones the clock of
 		// an `iff` qualified process ticks on
+		ir::Net ticks = procedural.timing.background_enable;
 		if (obligation.kind != PropertyObligationKind::Safety)
-			a = netlist.LogicAnd(a, procedural.timing.background_enable);
+			a = netlist.LogicAnd(a, ticks);
 
 		auto cell = netlist.backend->canvas->addCell(std::move(cell_name), ID($check));
 		procedural.timing.extract_trigger(netlist, cell, en);
+
+		// The goal of a monitor that answers for all the attempts at once can be met on
+		// the tick an older attempt completes, with a newer one still in flight. Should the
+		// clock stop for good after that, nothing would raise the obligation again, and the
+		// newer attempt, which no later tick can complete, would go unnoticed. So between
+		// the ticks the obligation stays raised and unmet while attempts are held, which
+		// for an assumption rules out the clock stopping with one pending.
+		if (obligation.held != ir::S0 && ticks != ir::S1) {
+			ir::Net between = netlist.LogicNot(ticks);
+			a = netlist.LogicOr(a, netlist.LogicAnd(between, netlist.LogicNot(obligation.held)));
+			cell->setPort(ID::EN, {netlist.LogicOr(netlist.LogicAnd(ticks, en),
+												   netlist.LogicAnd(between, obligation.held))});
+		}
 		cell->setParam(ID::FLAVOR, flavor);
 		cell->setParam(ID::FORMAT, std::string(""));
 		cell->setParam(ID::ARGS_WIDTH, 0);
