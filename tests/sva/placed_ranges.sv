@@ -107,6 +107,28 @@ module placed_ranges(input clk_i, input logic a, input logic b, input logic c, i
 					|| (b_d4 && c_d3 && c_d2 && d_d1)
 					|| (b_d4 && c_d2 && d_d1)
 					|| (b_d4 && c_d2 && c_d1 && d)));
+		// A concatenation with an empty first element
+		empty_first_ref: assert(!gate4
+				|| (!a_d4
+					|| (b_d4 && d_d3)
+					|| (b_d4 && c_d3 && d_d2)
+					|| (b_d4 && c_d3 && c_d2 && d_d1)
+					|| (b_d4 && d_d2)
+					|| (b_d4 && c_d2 && d_d1)
+					|| (b_d4 && c_d2 && c_d1 && d)));
+		// A range after an empty first element, after a leading range
+		empty_first_range_ref: assert(!gate5
+				|| (!a_d5
+					|| (d_d4 && e_d3)
+					|| (d_d3 && e_d2)
+					|| (c_d4 && d_d4 && e_d3)
+					|| (c_d4 && d_d3 && e_d2)
+					|| (c_d4 && d_d2 && e_d1)
+					|| (d_d3 && e_d2)
+					|| (d_d2 && e_d1)
+					|| (c_d3 && d_d3 && e_d2)
+					|| (c_d3 && d_d2 && e_d1)
+					|| (c_d3 && d_d1 && e)));
 		// First_match of a range
 		first_match_ref: assert(!gate5
 				|| (!a_d5
@@ -307,6 +329,9 @@ module placed_ranges(input clk_i, input logic a, input logic b, input logic c, i
 	leading_concat_test: assert property(@(posedge clk_i) a |-> ##[1:2] (c ##[1:2] d));
 	empty_before_test: assert property(@(posedge clk_i) a |-> b[*0:1] ##[1:2] c[*1:2] ##1 d);
 	first_element_test: assert property(@(posedge clk_i) a |-> b ##[1:2] (c[*1:2] ##1 d));
+	empty_first_test: assert property(@(posedge clk_i) a |-> b ##[1:2] (c[*0:2] ##1 d));
+	empty_first_range_test: assert property(@(posedge clk_i)
+		a |-> ##[1:2] (c[*0:1] ##[0:2] d) ##1 e);
 	first_match_test: assert property(@(posedge clk_i)
 		a |-> b ##[1:2] first_match(c ##[1:2] d) ##1 e);
 	first_match_leading_test: assert property(@(posedge clk_i)

@@ -155,8 +155,8 @@ bounds, with two exceptions, which take a number of cells quadratic in `n`:
   `intersect`; for `first_match`, unless of a concatenation of elements that each match on
   one tick from their start, with a range as the last delay and fixed delays otherwise,
   as in `first_match(b ##2 c ##[1:n] d)`; for `throughout` of a concatenation with an
-  element that can match empty; for a concatenation whose first element can match
-  empty; and for `or`, `throughout`, concatenation and repetition of one of these.
+  element that can match empty; for a concatenation whose first two elements can both
+  match empty; and for `or`, `throughout`, concatenation and repetition of one of these.
 
 An assumption takes some more logic, see [Assumptions](#assumptions).
 

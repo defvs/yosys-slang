@@ -1643,15 +1643,20 @@ static OperandPaths::Synthesize synthesize_operand(SvaFormulas& f, const ast::As
 // the paths instead, as if part of the sequence before, which takes as many paths as there
 // are ticks. That's the same placement: the disable from `base` on settles an element
 // the same way, whether read by the concatenation from its start or by the element, and
-// an element can't be placed past the first tick if it couldn't be before. None if the
-// first element can be empty, as an empty match from a tick has nothing in common with a
-// path ending there, or if an element can't be placed under the condition of `held`.
+// an element can't be placed past the first tick if it couldn't be before.
+//
+// An empty match of a bare first element from a tick has nothing in common with a path
+// ending there, but `empty ##N seq` is `##(N-1) seq`, so the second element gets placed
+// after the starts themselves too, one tick sooner. None if the second element can be
+// empty as well, as the two empty matches leave an empty match where `starts` end, or if
+// an element can't be placed under the condition of `held`.
 static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas& f, const AttemptContext& ctx,
 																	const ast::SequenceConcatExpr& sequence, size_t count,
 																	int64_t base, const std::vector<AssertionMatch>* starts,
 																	HeldCondition* held) {
 	assert_invariant(held == nullptr || starts != nullptr);
 	std::vector<AssertionMatch> own_paths;
+	bool empty_first = false;
 	for (size_t i = 0; i < count; i++) {
 		const auto& element = sequence.elements[i];
 		OperandPaths inner_paths(ctx, base, synthesize_operand(f, *element.sequence), sequence_after(f, *element.sequence));
@@ -1665,9 +1670,22 @@ static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas&
 		// slang gives a bare first element a delay of zero too, which is
 		// not the same as an explicit `##0` if the element can be empty
 		bool bare = !element.delayRange.start().valid();
-		if (i == 0 && starts != nullptr) {
-			if (bare && inner_paths.can_be_empty())
+		if (i == 0 && starts != nullptr && bare && inner_paths.can_be_empty()) {
+			if (held != nullptr || count < 2)
 				return {};
+			empty_first = true;
+		}
+		if (empty_first && i == 1) {
+			if (inner_paths.can_be_empty())
+				return {};
+			own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
+			// `empty ##0 seq` has no match
+			if (delay.max.value() > 0) {
+				auto sooner = seq_vec(ctx, *starts, std::max<int64_t>(delay.min, 1) - 1, delay.max.value() - 1, inner_paths);
+				own_paths.insert(own_paths.end(), sooner.begin(), sooner.end());
+				own_paths = compress_paths(own_paths);
+			}
+			continue;
 		}
 		if (held != nullptr) {
 			std::vector<AssertionMatch> before = own_paths;

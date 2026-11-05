@@ -245,6 +245,34 @@ module placed_ranges_disable(input clk_i, input logic a, input logic b, input lo
 						&& (c_d2 || dis4_2)
 						&& (c_d1 || dis4_3)
 						&& (d || dis4_4))));
+		// A concatenation with an empty first element
+		empty_first_ref: assert(!gate4
+				|| (!(a_d4 && !dis4_0)
+					|| ((b_d4 || dis4_0) && (d_d3 || dis4_1))
+					|| ((b_d4 || dis4_0) && (c_d3 || dis4_1) && (d_d2 || dis4_2))
+					|| ((b_d4 || dis4_0)
+						&& (c_d3 || dis4_1)
+						&& (c_d2 || dis4_2)
+						&& (d_d1 || dis4_3))
+					|| ((b_d4 || dis4_0) && (d_d2 || dis4_2))
+					|| ((b_d4 || dis4_0) && (c_d2 || dis4_2) && (d_d1 || dis4_3))
+					|| ((b_d4 || dis4_0)
+						&& (c_d2 || dis4_2)
+						&& (c_d1 || dis4_3)
+						&& (d || dis4_4))));
+		// A range after an empty first element, after a leading range
+		empty_first_range_ref: assert(!gate5
+				|| (!(a_d5 && !dis5_0)
+					|| ((d_d4 || dis5_1) && (e_d3 || dis5_2))
+					|| ((d_d3 || dis5_2) && (e_d2 || dis5_3))
+					|| ((c_d4 || dis5_1) && (d_d4 || dis5_1) && (e_d3 || dis5_2))
+					|| ((c_d4 || dis5_1) && (d_d3 || dis5_2) && (e_d2 || dis5_3))
+					|| ((c_d4 || dis5_1) && (d_d2 || dis5_3) && (e_d1 || dis5_4))
+					|| ((d_d3 || dis5_2) && (e_d2 || dis5_3))
+					|| ((d_d2 || dis5_3) && (e_d1 || dis5_4))
+					|| ((c_d3 || dis5_2) && (d_d3 || dis5_2) && (e_d2 || dis5_3))
+					|| ((c_d3 || dis5_2) && (d_d2 || dis5_3) && (e_d1 || dis5_4))
+					|| ((c_d3 || dis5_2) && (d_d1 || dis5_4) && (e || dis5_5))));
 		// First_match of a range
 		first_match_ref: assert(!gate5
 				|| (!(a_d5 && !dis5_0)
@@ -611,6 +639,10 @@ module placed_ranges_disable(input clk_i, input logic a, input logic b, input lo
 		a |-> b[*0:1] ##[1:2] c[*1:2] ##1 d);
 	first_element_test: assert property(@(posedge clk_i) disable iff (r)
 		a |-> b ##[1:2] (c[*1:2] ##1 d));
+	empty_first_test: assert property(@(posedge clk_i) disable iff (r)
+		a |-> b ##[1:2] (c[*0:2] ##1 d));
+	empty_first_range_test: assert property(@(posedge clk_i) disable iff (r)
+		a |-> ##[1:2] (c[*0:1] ##[0:2] d) ##1 e);
 	first_match_test: assert property(@(posedge clk_i) disable iff (r)
 		a |-> b ##[1:2] first_match(c ##[1:2] d) ##1 e);
 	first_match_leading_test: assert property(@(posedge clk_i) disable iff (r)

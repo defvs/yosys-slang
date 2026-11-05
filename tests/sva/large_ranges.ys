@@ -156,10 +156,10 @@ design -reset
 
 # Operands with paths ending on many ticks, placed after a range or a ranged repetition,
 # take registers and gates in proportion to the ranges as well: a ranged repetition, a
-# concatenation of ranges or one starting with a ranged repetition, and first_match and
-# throughout of a range, with or without a disable, and in an assumption, which takes more
-# for its earlier checks. Synthesizing the operand again for each tick the paths before it
-# can end on would take millions of gates.
+# concatenation of ranges or one starting with a ranged repetition, even one that can match
+# empty, and first_match and throughout of a range, with or without a disable, and in an
+# assumption, which takes more for its earlier checks. Synthesizing the operand again for
+# each tick the paths before it can end on would take millions of gates.
 read_slang <<EOF
 module repetition_ranges(input logic clk, input logic a, input logic b, input logic c);
 	repetition_ranges_test: assert property (@(posedge clk) a |-> b[*1:1000] ##1 c[*1:1000]);
@@ -193,6 +193,10 @@ module range_concat_repetition(input logic clk, input logic a, input logic b, in
 	range_concat_repetition_test: assert property (@(posedge clk) a |-> b ##[1:1000] (c[*1:1000] ##1 d));
 endmodule
 
+module range_concat_empty(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	range_concat_empty_test: assert property (@(posedge clk) a |-> b ##[1:1000] (c[*0:1000] ##1 d));
+endmodule
+
 module range_first_match(input logic clk, input logic a, input logic b, input logic c, input logic d);
 	range_first_match_test: assert property (@(posedge clk) a |-> b ##[1:1000] first_match(c ##[1:1000] d));
 endmodule
@@ -222,7 +226,7 @@ module range_throughout_disable(input logic clk, input logic rst, input logic a,
 endmodule
 EOF
 
-select -assert-count 12 t:$check
+select -assert-count 13 t:$check
 select -assert-max 12000 repetition_ranges/t:$dff
 select -assert-max 28000 repetition_ranges/t:*
 select -assert-max 15000 repetition_ranges_disable/t:$dff
@@ -237,6 +241,8 @@ select -assert-max 12000 leading_range_concat/t:$dff
 select -assert-max 21000 leading_range_concat/t:*
 select -assert-max 15000 range_concat_repetition/t:$dff
 select -assert-max 33000 range_concat_repetition/t:*
+select -assert-max 15000 range_concat_empty/t:$dff
+select -assert-max 36000 range_concat_empty/t:*
 select -assert-max 15000 range_first_match/t:$dff
 select -assert-max 42000 range_first_match/t:*
 select -assert-max 18000 range_first_match_disable/t:$dff
