@@ -1346,19 +1346,40 @@ static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
 // That is for an action block, which we leave out, and the subroutines it calls. For an
 // expression of a concurrent assertion, and the functions it calls, only assignments and
 // kept state are looked for: we lower those functions like any other, which reports any
-// system subroutine or statement there is no lowering for.
+// system subroutine or statement there is no lowering for. There an assignment to a
+// static variable of the function which the design names elsewhere, as in `f.k`, counts
+// too, as does a read of a static variable of a function the call runs in.
 struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		ast::VisitFlags::Statements | ast::VisitFlags::Expressions>
 {
+	enum class EffectKind {
+		// An assignment to a variable that isn't own, or anything else
+		Other,
+		// A read of what an earlier call left in a static variable
+		KeepsState,
+		// An assignment to an own variable which a hierarchical name refers to
+		NamedVariable,
+	};
+
 	struct Effect {
 		slang::SourceRange range;
-		bool keeps_state;
+		EffectKind kind;
+	};
+
+	// What we know about a subroutine once its body has been looked into. A static
+	// variable of another subroutine read in it, as in `f.k`, holds what the last call of
+	// that subroutine left there. Whether that was a call this one runs in depends on
+	// who calls it, so those reads go to the callers: the one owning the variable checks
+	// the read like one of its own, at the call.
+	struct Summary {
+		std::optional<Effect> effect;
+		hashlib::dict<const ast::Symbol *, slang::SourceRange> foreign_reads;
 	};
 
 	// The subroutines being looked into, and what was found in those done
 	struct Calls {
 		std::vector<const ast::SubroutineSymbol *> stack;
-		hashlib::dict<const ast::SubroutineSymbol *, std::optional<Effect>> done;
+		hashlib::dict<const ast::SubroutineSymbol *, Summary> done;
 	};
 
 	// The static variables of the subroutine which every path so far has assigned,
@@ -1382,6 +1403,7 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	bool top_level = false;
 	const ast::Statement *current_statement = nullptr;
 	std::optional<Effect> effect;
+	hashlib::dict<const ast::Symbol *, slang::SourceRange> foreign_reads;
 
 	EffectFinder(NetlistContext &netlist, bool for_assertion)
 		: netlist(netlist), for_assertion(for_assertion), calls(own_calls) {}
@@ -1390,14 +1412,14 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				 const ast::SubroutineSymbol &subroutine)
 		: netlist(netlist), for_assertion(for_assertion), calls(calls), subroutine(&subroutine) {}
 
-	void found(slang::SourceRange range, bool keeps_state = false)
+	void found(slang::SourceRange range, EffectKind kind = EffectKind::Other)
 	{
 		if (effect)
 			return;
 		// What gets left out of an action block is a statement, point at that
 		if (!for_assertion && !subroutine && current_statement)
 			range = current_statement->sourceRange;
-		effect = Effect{range, keeps_state};
+		effect = Effect{range, kind};
 	}
 
 	static Flow meet(const Flow &a, const Flow &b)
@@ -1417,8 +1439,12 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	{
 		// The call assigns the arguments passed in before it runs the body
 		for (auto arg : subroutine->getArguments())
-			if (arg->direction != ast::ArgumentDirection::Out)
+			if (arg->direction != ast::ArgumentDirection::Out) {
+				if (for_assertion && netlist.named_hierarchically(*arg))
+					found(slang::SourceRange(arg->location, arg->location + arg->name.size()),
+						  EffectKind::NamedVariable);
 				flow.assigned.insert(arg);
+			}
 		statement(subroutine->getBody());
 		leave(slang::SourceRange(subroutine->location,
 								 subroutine->location + subroutine->name.size()), false);
@@ -1437,11 +1463,19 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void read(const ast::Symbol &symbol, slang::SourceRange range)
 	{
-		if (!subroutine || flow.unreachable || !ast::VariableSymbol::isKind(symbol.kind))
+		if (!subroutine || flow.unreachable || !ast::VariableSymbol::isKind(symbol.kind) ||
+				symbol.as<ast::VariableSymbol>().lifetime != ast::VariableLifetime::Static)
 			return;
-		if (symbol.as<ast::VariableSymbol>().lifetime == ast::VariableLifetime::Static &&
-				owning_subroutine(symbol) == subroutine && !flow.assigned.count(&symbol))
-			found(range, true);
+		auto owner = owning_subroutine(symbol);
+		if (owner == subroutine) {
+			if (!flow.assigned.count(&symbol))
+				found(range, EffectKind::KeepsState);
+		} else if (owner && for_assertion && !foreign_reads.count(&symbol)) {
+			// Whether a call of the owner runs around this one depends on the callers,
+			// which check the read at their calls. At the top of the assertion none
+			// runs, the read is of a sampled value there.
+			foreign_reads[&symbol] = range;
+		}
 	}
 
 	bool is_own(const ast::Symbol &symbol)
@@ -1461,6 +1495,10 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				read(symbol, expr.sourceRange);
 			if (!is_own(symbol))
 				found(expr.sourceRange);
+			// A hierarchical name reads what the call leaves, which is lost when the
+			// call is lowered as part of the assertion
+			else if (for_assertion && netlist.named_hierarchically(symbol))
+				found(expr.sourceRange, EffectKind::NamedVariable);
 			else if (whole && !flow.unreachable)
 				flow.assigned.insert(&symbol);
 			break;
@@ -1605,11 +1643,14 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			}
 		}
 
-		if (auto callee_effect = effect_of(callee))
-			found(callee_effect->range, callee_effect->keeps_state);
+		auto summary = summary_of(callee);
+		if (summary.effect)
+			found(summary.effect->range, summary.effect->kind);
+		for (auto &[symbol, range] : summary.foreign_reads)
+			read(*symbol, range);
 	}
 
-	std::optional<Effect> effect_of(const ast::SubroutineSymbol &callee)
+	Summary summary_of(const ast::SubroutineSymbol &callee)
 	{
 		// A recursive call has its effects found in the call already being looked into
 		if (std::find(calls.stack.begin(), calls.stack.end(), &callee) != calls.stack.end())
@@ -1621,8 +1662,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		EffectFinder finder(netlist, for_assertion, calls, callee);
 		finder.body_of_subroutine();
 		calls.stack.pop_back();
-		calls.done[&callee] = finder.effect;
-		return finder.effect;
+		calls.done[&callee] = Summary{finder.effect, finder.foreign_reads};
+		return calls.done.at(&callee);
 	}
 
 	void expression(const ast::Expression &expr, bool whole_statement = false)
@@ -1879,7 +1920,9 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 // that of any other, so an assignment to a variable of the design would drive it from
 // the process around the assertion, or go missing outside of one, and a read of a static
 // variable of the function before the call assigns it would see what the design's calls
-// of the function left there.
+// of the function left there. A static variable the call assigns is the call's own, so
+// one a hierarchical name refers to would read the design's value there instead, also
+// when the name is in another function of the same assertion.
 void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 {
 	EffectFinder finder(netlist, true);
@@ -1887,7 +1930,11 @@ void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 	if (!finder.effect)
 		return;
 
-	auto code = finder.effect->keeps_state ? diag::SVACallKeepsState : diag::SVACallSideEffect;
+	slang::DiagCode code = diag::SVACallSideEffect;
+	if (finder.effect->kind == EffectFinder::EffectKind::KeepsState)
+		code = diag::SVACallKeepsState;
+	else if (finder.effect->kind == EffectFinder::EffectKind::NamedVariable)
+		code = diag::SVACallAssignsNamedVariable;
 	// The same function comes up again in other operands and assertions
 	for (auto &diag : netlist.issued_diagnostics)
 		if (diag.code == code && diag.location == finder.effect->range.start())
@@ -4174,6 +4221,31 @@ std::vector<const ast::InstanceSymbol *> NetlistContext::collect_nondissolved_in
 			}));
 
 	return instances;
+}
+
+bool NetlistContext::named_hierarchically(const ast::Symbol &symbol)
+{
+	if (!hierarchical_targets) {
+		// A reference from outside of the realm crosses a kept module boundary, which
+		// check_hier_ref rejects, so those inside it are all there is to find
+		hierarchical_targets.emplace();
+		realm.visit(ast::makeVisitor(
+				[&](auto &visitor, const ast::HierarchicalValueExpression &expr) {
+					hierarchical_targets->insert(&expr.symbol);
+					visitor.visitDefault(expr);
+				},
+				[&](auto &visitor, const ast::InstanceSymbol &sym) {
+					if (should_dissolve(sym))
+						visitor.visitDefault(sym);
+				},
+				[&](auto &visitor, const ast::GenerateBlockSymbol &sym) {
+					/* stop at uninstantiated generate blocks */
+					if (sym.isUninstantiated)
+						return;
+					visitor.visitDefault(sym);
+				}));
+	}
+	return hierarchical_targets->count(&symbol);
 }
 // clang-format off
 

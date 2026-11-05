@@ -284,6 +284,117 @@ EOF
 
 design -reset
 
+# A hierarchical name reads what the last call left in a static variable, and we lower
+# what a call in an assertion assigns as the call's own: the design, or another function
+# or assertion, would see something else there
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable a hierarchical name refers to"
+read_slang <<EOF
+module named_static(input logic clk, input logic [3:0] b, output logic [3:0] q);
+	function automatic logic [3:0] keep(logic [3:0] x);
+		static logic [3:0] last = 4'd0;
+		last = x;
+		return x;
+	endfunction
+	always @(posedge clk)
+		q <= keep.last;
+	assert property (@(posedge clk) keep(b) == b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable a hierarchical name refers to"
+read_slang <<EOF
+module static_after_call(input logic clk, input logic [3:0] a, output logic [3:0] q);
+	function automatic logic [3:0] keep(logic [3:0] x);
+		static logic [3:0] last;
+		last = x;
+		return x;
+	endfunction
+	function automatic logic changed(logic [3:0] x);
+		logic [3:0] r;
+		r = keep(x);
+		return keep.last != x;
+	endfunction
+	always_comb
+		q = keep(a + 4'd1);
+	assert property (@(posedge clk) !changed(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable a hierarchical name refers to"
+read_slang <<EOF
+module static_read_by_assertion(input logic clk, input logic [3:0] b);
+	function automatic logic [3:0] keep(logic [3:0] x);
+		static logic [3:0] last = 4'd0;
+		last = x;
+		return x;
+	endfunction
+	assert property (@(posedge clk) keep(b) == b);
+	assert property (@(posedge clk) ##1 keep.last == $past(b));
+endmodule
+EOF
+
+design -reset
+
+# The arguments of a static function are static variables too, assigned by each call
+test_slangdiag -expect "function called in a concurrent assertion assigns a variable a hierarchical name refers to"
+read_slang <<EOF
+module named_argument(input logic clk, input logic [3:0] b, output logic [3:0] q);
+	function logic [3:0] same(logic [3:0] x);
+		return x;
+	endfunction
+	always @(posedge clk)
+		q <= same.x;
+	assert property (@(posedge clk) same(b) == b);
+endmodule
+EOF
+
+design -reset
+
+# A function reading a static variable of a function whose call it runs in reads what
+# that call has assigned so far, or else what an earlier one left. The callee is looked
+# into first here, from the assertion, where the same read is of a sampled value.
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module static_read_by_callee(input logic clk, input logic [3:0] b);
+	function logic [3:0] previous(logic [3:0] x);
+		logic [3:0] acc;
+		previous = peek(x);
+		acc = x;
+	endfunction
+	function automatic logic [3:0] peek(logic [3:0] x);
+		return previous.acc;
+	endfunction
+	assert property (@(posedge clk) peek(b) == peek(b) && previous(b) == 4'd0);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module design_static_read_by_callee(input logic clk, input logic [3:0] b);
+	function logic [3:0] outer(logic [3:0] x);
+		logic [3:0] acc;
+		return x + inner(x);
+	endfunction
+	function automatic logic [3:0] inner(logic [3:0] x);
+		return x & middle(x);
+	endfunction
+	function automatic logic [3:0] middle(logic [3:0] x);
+		return outer.acc;
+	endfunction
+	always @(posedge clk)
+		outer.acc <= b;
+	assert property (@(posedge clk) outer(b) != 4'd0);
+endmodule
+EOF
+
+design -reset
+
 # Immediate assertions run their expression in the enclosing process, where the
 # function's writes are ordinary procedural assignments
 read_slang <<EOF
@@ -359,9 +470,25 @@ module pure_functions(input logic clk, input logic [3:0] v, input logic [1:0] s,
 		assert property (v == 4'd0 || $onehot(first_one(v)));
 		assert property (twice(v) == v);
 	end
+	// Only the design calls it, what it leaves there is state like any other
+	function logic [3:0] latch(logic [3:0] x);
+		logic [3:0] k;
+		k = x;
+		return k;
+	endfunction
+
+	function automatic logic latched_ones(logic [3:0] x);
+		return ones(latch.k) == ones(x);
+	endfunction
+
+	logic [3:0] q;
+	always @(posedge clk)
+		q <= latch(v);
+
 	assert property (@(posedge clk) v == 4'd0 || with_static(v)[0]);
 	assert property (@(posedge clk) a |-> const'(ones(v)) == ones(v));
 	assert property (@(posedge twice({3'd0, clk})[0]) ones(v) <= 4);
+	assert property (@(posedge clk) latched_ones(q));
 endmodule
 EOF
-select -assert-count 7 t:$check
+select -assert-count 8 t:$check

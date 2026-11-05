@@ -108,7 +108,9 @@ is running are read as they are at the statement, which is the value they had wh
 attempt was queued (16.14.6.1). That value exists on the first tick of the attempt only,
 so reading one that is not constant on a later tick of the attempt is an error. Loop
 indices and other constant values can be read on any tick. A static variable of a function
-read from outside a call of that function, as in `f.k`, is a sampled value like any other.
+read from outside a call of that function, as in `f.k`, by the assertion or by a function
+it calls, is a sampled value like any other; no function of the assertion may assign it
+(see [Functions](#functions)).
 
 The sampled value functions `$past(e)`, `$past(e, n)`, `$rose`, `$fell`, `$stable` and
 `$changed` use registers on the clock of the assertion, or of the process for an immediate
@@ -334,11 +336,15 @@ call, so it is rejected if it
 
 - assigns a variable that is not its own, that is, other than its arguments, its return
   value and its local variables, also through a function it calls or an output argument;
+- assigns one of its own static variables, including an argument of a static function,
+  which a hierarchical name refers to anywhere in the design, as in `f.k`: that name would
+  read what the design left there, not what the call did;
 - reads one of its static variables, or its static return value or output argument,
   before every path through the call has assigned it, as that reads what an earlier call
-  left there.
+  left there. A read of the variable by a function the call runs, through a hierarchical
+  name, counts as the function's own read at that call.
 
-The second check follows paths, not values, so it can reject a static function that fills
+The last check follows paths, not values, so it can reject a static function that fills
 a variable bit by bit and then reads it whole. Declaring the function `automatic`, or
 assigning the variable whole first, avoids that. Immediate assertions are not checked
 this way.
@@ -428,6 +434,7 @@ first variable part. The tests are under `tests/`.
 | Sequence or property declared in an instance kept by `--keep-hierarchy`, or reading across its boundary | `hierarchical reference across preserved module boundary` | `sva/kept_hierarchy.ys` |
 | Function of a concurrent assertion assigning a variable not its own | `function called in a concurrent assertion assigns a variable not its own` | `sva/assertion_function_effects.ys` |
 | Function of a concurrent assertion reading state an earlier call left | `function called in a concurrent assertion may read state left by an earlier call` | `sva/assertion_function_effects.ys` |
+| Function of a concurrent assertion assigning a static variable a hierarchical name refers to | `function called in a concurrent assertion assigns a variable a hierarchical name refers to` | `sva/assertion_function_effects.ys` |
 | Action block with effects | `unsupported statement in assertion action block` | `sva/action_blocks.ys` |
 | Assertion in a `final` procedure, or in a function it calls | `assertions in final procedures are unsupported` | `sva/final_assertions.ys` |
 | Checker instance | `checker instances are unsupported` | `sva/checkers.ys` |

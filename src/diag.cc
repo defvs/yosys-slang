@@ -147,6 +147,7 @@ DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
 DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
 DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
 DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
+DiagCode SVACallAssignsNamedVariable(DiagSubsystem::Netlist, 1099);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -404,6 +405,9 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion may read state left by an earlier call");
 	engine.setSeverity(SVACallKeepsState, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallAssignsNamedVariable, "function called in a concurrent assertion assigns a variable a hierarchical name refers to");
+	engine.setSeverity(SVACallAssignsNamedVariable, DiagnosticSeverity::Error);
 	// clang-format on
 }
 }; // namespace diag
