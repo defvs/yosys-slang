@@ -355,6 +355,10 @@ the model that keeps every fairness constraint, and reports a failure with the
 witness of the property that failed, or a pass when all of them pass. A model
 with one justice property goes to suprove unchanged.
 
+suprove leaves temporary files behind in `TMPDIR`, or `/tmp` without it. Those
+of the runs the wrapper makes on the copies go with the copies; for the others,
+point `TMPDIR` at a directory of the proof's own, as the test scripts do.
+
 Before relying on a proof, also establish non-vacuity: cover the
 antecedent or request path in `mode cover`, inspect the generated `live` and
 `fair` checks, and keep a broken-design run that the liveness engine must
@@ -363,7 +367,8 @@ reject.
 ### Tests
 
 `tests/liveness/run_response_proof.sh PLUGIN SUPROVE` runs every
-solver-backed liveness test in an isolated temporary directory and requires
+solver-backed liveness test in a temporary directory of its own, which takes
+the temporary files of suprove as well and is removed at the end, and requires
 each expected `PASS` and each intentional `FAIL`. In `mode live`, most shapes
 with a failing variant next to the passing one:
 

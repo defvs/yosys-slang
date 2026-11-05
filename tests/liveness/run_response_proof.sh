@@ -372,6 +372,9 @@ yosys -q -m "${plugin}" -p "
 (
 	cd -- "${work_dir}"
 	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	# suprove leaves its temporary files behind, so they go where the cleanup
+	# removes them
+	export TMPDIR="${work_dir}"
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/raw_live" \
 		-f raw_live.sby
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/response" \

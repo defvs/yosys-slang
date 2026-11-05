@@ -51,6 +51,9 @@ build_variant "-DMUTATE_SAFETY" arbiter_safety_fail.il
 (
 	cd -- "${work_dir}"
 	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	# suprove leaves its temporary files behind, so they go where the cleanup
+	# removes them
+	export TMPDIR="${work_dir}"
 	sby --suprove "${suprove_driver}" --prefix "${work_dir}/live" \
 		-f arbiter_live.sby
 	sby --prefix "${work_dir}/safety" -f arbiter_safety.sby

@@ -172,10 +172,13 @@ def main() -> int:
         for index, model in enumerate(models):
             model_path = Path(work_dir) / f"justice{index}.aig"
             model_path.write_bytes(model)
+            # suprove leaves its temporary files behind, here they go with the
+            # directory of the copies
             completed = subprocess.run(
                 [real_solver, *sys.argv[1:-1], str(model_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=dict(os.environ, TMPDIR=work_dir),
                 check=False,
             )
             statuses = result_statuses(completed.stdout)

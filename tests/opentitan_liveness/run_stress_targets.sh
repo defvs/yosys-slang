@@ -51,6 +51,9 @@ done
 (
 	cd -- "${pattern_dir}"
 	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
+	# suprove leaves its temporary files behind, so they go where the cleanup
+	# removes them
+	export TMPDIR="${work_dir}"
 	sby --suprove "${suprove_driver}" --prefix "${pattern_dir}/live" \
 		-f target_patterns_live.sby
 	sby --prefix "${pattern_dir}/reach" -f target_patterns_reach.sby
