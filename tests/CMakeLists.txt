@@ -26,6 +26,7 @@ endif()
 set(ALL_TESTS
     sva/seqequiv.tcl
     sva/action_blocks.ys
+    sva/assume_early.ys
     sva/comb_default_clocking.ys
     sva/final_assertions.ys
     sva/frozen_past_first_tick.ys

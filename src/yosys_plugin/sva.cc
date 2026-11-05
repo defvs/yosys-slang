@@ -1571,12 +1571,13 @@ struct AssertionResult {
 
 // An assumption constrains a trace on the ticks it gets checked on only. Checked on the
 // last tick of an attempt, it leaves a trace that ends sooner unconstrained, even when no
-// way of going on would satisfy the property, which Annex F of IEEE Std 1800-2017 has
-// the property fail on. A bounded or inductive proof, or a cover, then gets to pick
-// traces the environment rules out. So an assumption gets checked as well on each tick
-// on which what has been sampled of an attempt so far can show it doomed. Each check
-// rules out traces the one on the last tick rules out on any way they go on, and those
-// of an attempt are folded into one cell with it.
+// way of going on would satisfy the property. A bounded or inductive proof, or a cover,
+// then gets to pick traces the environment rules out, where IEEE Std 1800-2017 section
+// 16.14.2 has the tools constrain the environment so that the property holds. So an
+// assumption gets checked as well on each tick on which what has been sampled of an
+// attempt so far can show it doomed. Each check rules out traces the one on the last
+// tick rules out on any way they go on, and those of an attempt are folded into one
+// cell with it.
 //
 // Over many ticks, prefixes can take more merging than the budget for them allows, in
 // proportion to the property, and then the earliest checkpoints are the ones to go. Those
