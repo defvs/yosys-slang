@@ -38,6 +38,14 @@ module static_functions(input logic clk_i, input logic a, input logic b, input l
 		return n;
 	endfunction
 
+	// Assigned whole by its parts
+	function logic [3:0] swap_halves(logic [3:0] x);
+		logic [3:0] t;
+		t[1:0] = x[3:2];
+		t[3:2] = x[1:0];
+		return t;
+	endfunction
+
 	logic state = 1'b0;
 
 	function logic with_state(logic x);
@@ -66,6 +74,7 @@ module static_functions(input logic clk_i, input logic a, input logic b, input l
 		package_ref: assert(a & b);
 		unit_ref: assert(a | b);
 		rose_ref: assert(!valid || (a && !a_q));
+		parts_ref: assert(v != 4'b0110);
 
 		// The function's body reads the sampled value of the module's variable
 		state = 1'b1;
@@ -93,4 +102,5 @@ module static_functions(input logic clk_i, input logic a, input logic b, input l
 	package_test: assert property(@(posedge clk_i) static_functions_pkg::both(a, b));
 	unit_test: assert property(@(posedge clk_i) static_functions_either(a, b));
 	rose_test: assert property(@(posedge clk_i) disable iff (!valid) $rose(same(a)));
+	parts_test: assert property(@(posedge clk_i) swap_halves(v) != 4'b1001);
 endmodule

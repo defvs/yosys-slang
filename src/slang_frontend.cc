@@ -35,6 +35,7 @@
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/ValuePath.h"
 #include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
 #include "slang/ast/expressions/CallExpression.h"
@@ -1339,15 +1340,17 @@ static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
 
 // Finds the first thing a piece of code does that can be seen from outside of it: an
 // assignment to a variable that isn't its own, or a call of something that can make one
-// or do more than report. In a subroutine it is also a read of one of its static
-// variables before the call has assigned it, as that reads state kept from an earlier
-// call. Every path through the code counts, conditions don't get evaluated.
+// or do more than report. In a subroutine it is also an assignment to one of its static
+// variables which some path reads before the call has assigned it, as a later call
+// would read what this one left there. Every path through the code counts, conditions
+// don't get evaluated.
 //
 // That is for an action block, which we leave out, and the subroutines it calls. For an
 // expression of a concurrent assertion, and the functions it calls, only assignments and
 // kept state are looked for: we lower those functions like any other, which reports any
-// system subroutine or statement there is no lowering for, and a read of a static
-// variable of a function the call runs in counts as well.
+// system subroutine or statement there is no lowering for. There the read of state an
+// earlier call left counts itself, as does a read of a static variable of a function the
+// call runs in.
 //
 // An assignment to a variable of our own which a hierarchical name refers to, as in
 // `blk.n` or `f.k`, counts in both: the name reads what the code leaves there, which
@@ -1368,6 +1371,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	struct Effect {
 		slang::SourceRange range;
 		EffectKind kind;
+		// For an effect of a call, where it is in the called subroutine
+		std::optional<slang::SourceRange> in_callee;
 	};
 
 	// What we know about a subroutine once its body has been looked into. A static
@@ -1387,9 +1392,10 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	};
 
 	// The static variables of the subroutine which every path so far has assigned,
-	// unless no path gets here
+	// unless no path gets here, and the bits of those with only some bits assigned
 	struct Flow {
 		hashlib::pool<const ast::Symbol *> assigned;
+		hashlib::dict<const ast::Symbol *, std::vector<bool>> bits;
 		bool unreachable = false;
 	};
 
@@ -1408,6 +1414,10 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	const ast::Statement *current_statement = nullptr;
 	std::optional<Effect> effect;
 	hashlib::dict<const ast::Symbol *, slang::SourceRange> foreign_reads;
+	// For an action block, the static variables of the subroutine read before every path
+	// had assigned them, and those it assigns anywhere
+	std::vector<std::pair<const ast::Symbol *, slang::SourceRange>> carried;
+	hashlib::dict<const ast::Symbol *, slang::SourceRange> written;
 
 	EffectFinder(NetlistContext &netlist, bool for_assertion)
 		: netlist(netlist), for_assertion(for_assertion), calls(own_calls) {}
@@ -1416,14 +1426,15 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				 const ast::SubroutineSymbol &subroutine)
 		: netlist(netlist), for_assertion(for_assertion), calls(calls), subroutine(&subroutine) {}
 
-	void found(slang::SourceRange range, EffectKind kind = EffectKind::Other)
+	void found(slang::SourceRange range, EffectKind kind = EffectKind::Other,
+			   std::optional<slang::SourceRange> in_callee = {})
 	{
 		if (effect)
 			return;
 		// What gets left out of an action block is a statement, point at that
 		if (!for_assertion && !subroutine && current_statement)
 			range = current_statement->sourceRange;
-		effect = Effect{range, kind};
+		effect = Effect{range, kind, in_callee};
 	}
 
 	static Flow meet(const Flow &a, const Flow &b)
@@ -1436,6 +1447,22 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		for (auto symbol : a.assigned)
 			if (b.assigned.count(symbol))
 				ret.assigned.insert(symbol);
+		// A variable has the bits assigned both ways, taking all of them for one
+		// assigned whole
+		for (auto &[symbol, bits] : a.bits) {
+			if (b.assigned.count(symbol)) {
+				ret.bits[symbol] = bits;
+			} else if (b.bits.count(symbol)) {
+				const auto &other = b.bits.at(symbol);
+				std::vector<bool> both(bits.size());
+				for (size_t i = 0; i < bits.size(); i++)
+					both[i] = bits[i] && other[i];
+				ret.bits[symbol] = both;
+			}
+		}
+		for (auto &[symbol, bits] : b.bits)
+			if (a.assigned.count(symbol))
+				ret.bits[symbol] = bits;
 		return ret;
 	}
 
@@ -1452,6 +1479,14 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		statement(subroutine->getBody());
 		leave(slang::SourceRange(subroutine->location,
 								 subroutine->location + subroutine->name.size()), false);
+
+		// Leaving out a call reads nothing, what matters is that it changes what a later
+		// call reads
+		for (auto &[symbol, range] : carried)
+			if (written.count(symbol)) {
+				found(written.at(symbol), EffectKind::KeepsState);
+				break;
+			}
 	}
 
 	// Leaving the subroutine reads its output arguments, and its return value unless a
@@ -1472,13 +1507,50 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			return;
 		auto owner = owning_subroutine(symbol);
 		if (owner == subroutine) {
-			if (!flow.assigned.count(&symbol))
+			// A call in an assertion we lower, there it matters what the read gives.
+			// Reading a static variable no call assigns would give its initial value,
+			// but slang skips those initializers where it folds a call with constant
+			// arguments.
+			if (flow.assigned.count(&symbol))
+				return;
+			if (for_assertion)
 				found(range, EffectKind::KeepsState);
+			else
+				carried.push_back({&symbol, range});
 		} else if (owner && for_assertion && !foreign_reads.count(&symbol)) {
 			// Whether a call of the owner runs around this one depends on the callers,
 			// which check the read at their calls. At the top of the assertion none
 			// runs, the read is of a sampled value there.
 			foreign_reads[&symbol] = range;
+		}
+	}
+
+	// An assignment to a part of a static variable of the subroutine, made on each path
+	// reaching it. Parts selected by constants add up, and once they cover the variable
+	// it is assigned whole.
+	void assign_part(const ast::Expression &expr)
+	{
+		if (!subroutine || flow.unreachable || effect)
+			return;
+		ast::ValuePath path(expr, netlist.eval.const_);
+		auto root = path.rootSymbol();
+		if (!root || !path.isFullyStatic() || !ast::VariableSymbol::isKind(root->kind) ||
+				root->as<ast::VariableSymbol>().lifetime != ast::VariableLifetime::Static ||
+				owning_subroutine(*root) != subroutine || flow.assigned.count(root) ||
+				!root->getType().isFixedSize())
+			return;
+		uint64_t width = root->getType().getSelectableWidth();
+		auto [low, high] = path.lspBounds;
+		if (low > high || high >= width)
+			return;
+		auto &bits = flow.bits[root];
+		if (bits.empty())
+			bits.resize(width);
+		for (uint64_t i = low; i <= high; i++)
+			bits[i] = true;
+		if (std::all_of(bits.begin(), bits.end(), [](bool bit) { return bit; })) {
+			flow.bits.erase(root);
+			flow.assigned.insert(root);
 		}
 	}
 
@@ -1497,23 +1569,35 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			const auto &symbol = expr.as<ast::ValueExpressionBase>().symbol;
 			if (reads)
 				read(symbol, expr.sourceRange);
-			if (!is_own(symbol))
+			if (!is_own(symbol)) {
 				found(expr.sourceRange);
-			else if (netlist.named_hierarchically(symbol))
+				break;
+			}
+			if (netlist.named_hierarchically(symbol))
 				found(expr.sourceRange, EffectKind::NamedVariable);
-			else if (whole && !flow.unreachable)
+			if (flow.unreachable)
+				break;
+			if (!written.count(&symbol))
+				written[&symbol] = expr.sourceRange;
+			if (whole) {
 				flow.assigned.insert(&symbol);
+				flow.bits.erase(&symbol);
+			}
 			break;
 		}
 		case ast::ExpressionKind::ElementSelect: {
 			const auto &select = expr.as<ast::ElementSelectExpression>();
 			assign_to(select.value(), reads, false);
+			if (whole)
+				assign_part(expr);
 			select.selector().visit(*this);
 			break;
 		}
 		case ast::ExpressionKind::RangeSelect: {
 			const auto &select = expr.as<ast::RangeSelectExpression>();
 			assign_to(select.value(), reads, false);
+			if (whole)
+				assign_part(expr);
 			select.left().visit(*this);
 			select.right().visit(*this);
 			break;
@@ -1527,6 +1611,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				found(expr.sourceRange);
 			} else {
 				assign_to(value, reads, false);
+				if (whole)
+					assign_part(expr);
 			}
 			break;
 		}
@@ -1560,7 +1646,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void handle(const ast::AssignmentExpression &assign)
 	{
-		bool whole = top_level;
+		// A nonblocking assignment is made later, reads after it still see the old value
+		bool whole = top_level && !assign.isNonBlocking();
 		top_level = false;
 		// The process waits for it, `x = @(e) y` or `x = #1 y`, like for a statement
 		if (assign.timingControl) {
@@ -1672,7 +1759,8 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			return;
 		auto summary = summary_of(callee);
 		if (summary.effect)
-			found(summary.effect->range, summary.effect->kind);
+			found(summary.effect->range, summary.effect->kind,
+				  summary.effect->in_callee.value_or(summary.effect->range));
 		for (auto &[symbol, range] : summary.foreign_reads)
 			read(*symbol, range);
 	}
@@ -1937,8 +2025,12 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 			continue;
 		EffectFinder finder(netlist, false);
 		finder.statement(*action);
-		if (finder.effect)
-			netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
+		if (!finder.effect)
+			continue;
+		auto &reported = netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
+		// The statement holds a call, point at what the called subroutine does
+		if (finder.effect->in_callee)
+			reported.addNote(diag::NoteActionBlockEffect, *finder.effect->in_callee);
 	}
 }
 

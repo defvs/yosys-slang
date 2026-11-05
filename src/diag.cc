@@ -148,6 +148,7 @@ DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
 DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
 DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
 DiagCode SVACallAssignsNamedVariable(DiagSubsystem::Netlist, 1099);
+DiagCode NoteActionBlockEffect(DiagSubsystem::Netlist, 1100);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -408,6 +409,8 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(SVACallAssignsNamedVariable, "function called in a concurrent assertion assigns a variable a hierarchical name refers to");
 	engine.setSeverity(SVACallAssignsNamedVariable, DiagnosticSeverity::Error);
+	engine.setMessage(NoteActionBlockEffect, "called subroutine does this");
+	engine.setSeverity(NoteActionBlockEffect, DiagnosticSeverity::Note);
 	// clang-format on
 }
 }; // namespace diag

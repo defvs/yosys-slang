@@ -514,3 +514,74 @@ module unnamed_variables(input logic clk, input logic a, input logic [7:0] v, ou
 endmodule
 EOF
 select -assert-count 1 t:$check
+
+design -reset
+
+# Leaving out a call matters only for what it assigns: reading a constant table, or a
+# variable the call has filled part by part first, keeps nothing between calls
+read_slang <<EOF
+module stateless_helpers(input logic clk, input logic [1:0] op, input logic [3:0] x);
+	function automatic string op_name(logic [1:0] o);
+		static string names[4] = '{"ADD", "SUB", "AND", "OR"};
+		return names[o];
+	endfunction
+	function automatic logic [7:0] masked(logic [7:0] y);
+		const static logic [7:0] mask = 8'h0f;
+		return y & mask;
+	endfunction
+	function [3:0] swap(input [3:0] y);
+		reg [3:0] t;
+		begin
+			t[1:0] = y[3:2];
+			t[3:2] = y[1:0];
+			swap = t;
+		end
+	endfunction
+	always @(posedge clk) begin
+		assert (op != 2'd3) else $error("unsupported op %s", op_name(op));
+		assert (x != 4'd0) else $error("%h %h", masked({4'd0, x}), swap(x));
+	end
+endmodule
+EOF
+select -assert-count 2 t:$check
+
+design -reset
+
+# What the call leaves in a static variable which it reads before assigning is
+# what the next call reads, also when the variable is assigned in parts on only
+# some paths or by a nonblocking assignment, made after the read
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module partial_fill(input logic clk, input logic a, input logic [3:0] x, output logic [3:0] y);
+	function [3:0] half(input s, input [3:0] v);
+		reg [3:0] t;
+		begin
+			t[1:0] = v[1:0];
+			if (s)
+				t[3:2] = v[3:2];
+			half = t;
+		end
+	endfunction
+	always @(posedge clk) begin
+		y <= half(a, x);
+		assert (a) else $error("%h", half(1'b0, x));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module nonblocking_state(input logic clk, input logic a, input logic [3:0] x, output logic [3:0] y);
+	function logic [3:0] delayed(logic [3:0] v);
+		logic [3:0] t;
+		t <= v;
+		return t;
+	endfunction
+	always @(posedge clk) begin
+		y <= delayed(x);
+		assert (a) else $error("%h", delayed(x));
+	end
+endmodule
+EOF

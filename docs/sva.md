@@ -339,15 +339,19 @@ call, so it is rejected if it
 - assigns one of its own static variables, including an argument of a static function,
   which a hierarchical name refers to anywhere in the design, as in `f.k`: that name would
   read what the design left there, not what the call did;
-- reads one of its static variables, or its static return value or output argument,
-  before every path through the call has assigned it, as that reads what an earlier call
-  left there. A read of the variable by a function the call runs, through a hierarchical
-  name, counts as the function's own read at that call.
+- reads one of its static variables, such as an output argument of a static function,
+  before every path through the call has assigned all of it, as that reads what an earlier
+  call left there. A read by a function the call runs, through a hierarchical name, counts
+  as the function's own read at that call. A static variable no call assigns is rejected
+  too: where a call with constant arguments is evaluated while compiling, its initial
+  value is lost.
 
-The last check follows paths, not values, so it can reject a static function that fills
-a variable bit by bit and then reads it whole. Declaring the function `automatic`, or
-assigning the variable whole first, avoids that. Immediate assertions are not checked
-this way.
+Parts of a variable assigned with constant selects, such as `t[1:0]` and `t[3:2]` or the
+fields of a packed structure, add up to the whole variable. A nonblocking assignment does
+not count, its value comes after the read. The last check follows paths, not values, so it
+can reject a static function that fills a variable in a loop and then reads it whole.
+Declaring the function `automatic`, or assigning the variable whole first, avoids that.
+Immediate assertions are not checked this way.
 
 ## Action blocks
 
@@ -363,7 +367,11 @@ accepted when nothing it does can be seen by the design or by another assertion:
 - system functions that compute a value, such as `$sformatf` or `$time`;
 - `$urandom` and `$urandom_range`; `$random` without a seed; `$random` and the `$dist_`
   functions with a seed that is a variable of the action block;
-- calls of functions that write only their own variables and keep no state;
+- calls of functions that write only their own variables and keep no state, that is,
+  assign none of their static variables that a path through the call reads before
+  assigning all of it (parts add up as for [functions](#functions) of concurrent
+  assertions); reading a static variable no call assigns, such as a constant table, is
+  fine;
 - calls of imported (DPI) subroutines not declared `context`, which can only access their
   arguments (IEEE 1800-2017 35.5.3);
 - blocks with variables of their own, `if`, `case` and loops, and `break` and `continue`

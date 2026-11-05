@@ -101,6 +101,7 @@ extern slang::DiagCode SVACallSideEffect;
 extern slang::DiagCode SVACallKeepsState;
 extern slang::DiagCode NoteAssertionInFunction;
 extern slang::DiagCode SVACallAssignsNamedVariable;
+extern slang::DiagCode NoteActionBlockEffect;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

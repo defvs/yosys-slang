@@ -395,6 +395,38 @@ EOF
 
 design -reset
 
+# Parts assigned on only some paths leave the rest to an earlier call, and a
+# nonblocking assignment is made only after the read
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module partial_fill(input logic clk, input logic a, input logic [3:0] v);
+	function logic [3:0] half(logic s, logic [3:0] x);
+		logic [3:0] t;
+		t[1:0] = x[1:0];
+		if (s)
+			t[3:2] = x[3:2];
+		return t;
+	endfunction
+	assert property (@(posedge clk) half(a, v) != 4'hf);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module nonblocking_state(input logic clk, input logic [3:0] v);
+	function logic [3:0] delayed(logic [3:0] x);
+		logic [3:0] t;
+		t <= x;
+		return t;
+	endfunction
+	assert property (@(posedge clk) delayed(v) == v);
+endmodule
+EOF
+
+design -reset
+
 # Immediate assertions run their expression in the enclosing process, where the
 # function's writes are ordinary procedural assignments
 read_slang <<EOF
@@ -485,10 +517,37 @@ module pure_functions(input logic clk, input logic [3:0] v, input logic [1:0] s,
 	always @(posedge clk)
 		q <= latch(v);
 
+	// Parts selected by constants add up to the whole variable
+	function logic [3:0] swap(logic [3:0] x);
+		logic [3:0] t;
+		t[1:0] = x[3:2];
+		if (x[0]) begin
+			t[3:2] = x[1:0];
+		end else begin
+			t[3] = x[1];
+			t[2] = x[0];
+		end
+		return t;
+	endfunction
+
+	typedef struct packed {
+		logic [1:0] hi;
+		logic [1:0] lo;
+	} halves_t;
+
+	function halves_t split(logic [3:0] x);
+		halves_t h;
+		h.hi = x[3:2];
+		h.lo = x[1:0];
+		return h;
+	endfunction
+
 	assert property (@(posedge clk) v == 4'd0 || with_static(v)[0]);
 	assert property (@(posedge clk) a |-> const'(ones(v)) == ones(v));
 	assert property (@(posedge twice({3'd0, clk})[0]) ones(v) <= 4);
 	assert property (@(posedge clk) latched_ones(q));
+	assert property (@(posedge clk) swap(swap(v)) == v);
+	assert property (@(posedge clk) split(v) == v);
 endmodule
 EOF
-select -assert-count 8 t:$check
+select -assert-count 10 t:$check
