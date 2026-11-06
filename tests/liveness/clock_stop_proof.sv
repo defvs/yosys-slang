@@ -264,3 +264,357 @@ module stop_assume_fail ((* gclk *) input logic clk, input logic en, a, b);
 
 	assert property (@(posedge clk) s_eventually en);
 endmodule
+
+// A strong operator over a bounded range waits on the ticks of its range as well: an
+// attempt it holds on them fails if they never come (IEEE Std 1800-2017 sections
+// 16.12.10, 16.12.11 and 16.12.13), where the weak operator, which the finite check
+// alone is, holds. Here the clock stops after the ticks with n = 0, 1 and 2.
+
+// The attempt of tick 2 has no next tick
+module stop_nexttime_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_nexttime 1'b1);
+endmodule
+
+module stop_nexttime_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_nexttime 1'b1);
+endmodule
+
+// The clock pauses on n = 3 and 4, the attempts of n = 1 and 2 get their ticks after
+module stop_nexttime_pause_pass ((* gclk *) input logic clk);
+	logic [2:0] n = 0;
+	always_ff @(posedge clk)
+		n <= n + 1'b1;
+	wire en = n != 3 && n != 4;
+	wire a = n == 1 || n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_nexttime [2] 1'b1);
+endmodule
+
+module stop_eventually_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_eventually [1:2] 1'b1);
+endmodule
+
+// Met on tick 2, ahead of the end of its range
+module stop_eventually_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_eventually [1:3] b);
+endmodule
+
+// b on tick 2 meets the attempt of tick 1, not the one of tick 2
+module stop_eventually_newer_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1 || n == 2;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_eventually [1:2] b);
+endmodule
+
+// The minimum of the range is no tick to wait on past, b on tick 2 meets the attempt
+// of tick 2 too
+module stop_eventually_zero_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1 || n == 2;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_eventually [0:2] b);
+endmodule
+
+module stop_strong_range_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1 || n == 2;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> strong(##[1:3] b));
+endmodule
+
+module stop_strong_range_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> strong(##[1:3] b));
+endmodule
+
+// The finite operand of the `and` needs tick 3
+module stop_strong_and_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> strong((##2 1'b1) and (##[1:$] b)));
+endmodule
+
+module stop_strong_and_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 0;
+	wire b = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> strong((##2 1'b1) and (##[1:$] b)));
+endmodule
+
+module stop_always_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_always [0:1] 1'b1);
+endmodule
+
+module stop_always_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_always [0:1] 1'b1);
+endmodule
+
+// The one tick of the interval of `s_always` never comes for the attempt of the
+// eventuality it would start, though that has a monitor of its own
+module stop_always_eventually_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> s_always [0:1] (s_eventually 1'b1));
+endmodule
+
+// `not always [1:2] b` is the strong `s_eventually [1:2] !b`
+module stop_not_always_bounded_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+	wire b = n != 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> not always [1:2] b);
+endmodule
+
+module stop_not_always_bounded_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire b = n != 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> not always [1:2] b);
+endmodule
+
+// Followed-by needs the match of its left side, and `#=#` the tick after it
+module stop_followed_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> (1'b1 ##1 1'b1 #-# 1'b1));
+endmodule
+
+module stop_followed_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+
+	always @(posedge clk iff en)
+		assert property (a |-> (1'b1 ##1 1'b1 #-# 1'b1));
+endmodule
+
+module stop_followed_next_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (a |-> (1'b1 #=# 1'b1));
+endmodule
+
+module stop_followed_next_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+
+	always @(posedge clk iff en)
+		assert property (a |-> (1'b1 #=# 1'b1));
+endmodule
+
+// A disable on tick 2 meets the attempt of tick 1 with its T letters
+module stop_disable_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire d = n == 2;
+
+	always @(posedge clk iff en)
+		assert property (disable iff (d) a |-> s_nexttime [2] 1'b1);
+endmodule
+
+module stop_disable_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire en = n != 3;
+	wire a = n == 1;
+	wire d = 1'b0;
+
+	always @(posedge clk iff en)
+		assert property (disable iff (d) a |-> s_nexttime [2] 1'b1);
+endmodule
+
+// Each assumption rules out a clock that stops with an attempt waiting, here for the
+// tick after the one of `a`
+module stop_assume_nexttime_pass ((* gclk *) input logic clk, input logic en, a, b);
+	logic pending = 0;
+	always_ff @(posedge clk)
+		if (en)
+			pending <= a;
+
+	always @(posedge clk iff en)
+		assume property (a |-> s_nexttime 1'b1);
+
+	assert property (@(posedge clk) pending |-> s_eventually en);
+endmodule
+
+module stop_assume_eventually_pass ((* gclk *) input logic clk, input logic en, a, b);
+	logic pending = 0;
+	always_ff @(posedge clk)
+		if (en)
+			pending <= a;
+
+	always @(posedge clk iff en)
+		assume property (a |-> s_eventually [1:2] b);
+
+	assert property (@(posedge clk) pending |-> s_eventually en);
+endmodule
+
+module stop_assume_strong_pass ((* gclk *) input logic clk, input logic en, a, b);
+	logic pending = 0;
+	always_ff @(posedge clk)
+		if (en)
+			pending <= a;
+
+	always @(posedge clk iff en)
+		assume property (a |-> strong(##[1:2] b));
+
+	assert property (@(posedge clk) pending |-> s_eventually en);
+endmodule
+
+module stop_assume_always_pass ((* gclk *) input logic clk, input logic en, a, b);
+	logic pending = 0;
+	always_ff @(posedge clk)
+		if (en)
+			pending <= a;
+
+	always @(posedge clk iff en)
+		assume property (a |-> s_always [0:1] 1'b1);
+
+	assert property (@(posedge clk) pending |-> s_eventually en);
+endmodule
+
+// An attempt the eventuality has met no longer keeps the clock going
+module stop_assume_bounded_fail ((* gclk *) input logic clk, input logic en, a, b);
+	logic met = 0;
+	always_ff @(posedge clk)
+		if (en)
+			met <= a && b;
+
+	always @(posedge clk iff en)
+		assume property (a |-> s_eventually [0:2] b);
+
+	assert property (@(posedge clk) met |-> s_eventually en);
+endmodule

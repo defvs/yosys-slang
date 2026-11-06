@@ -23,3 +23,29 @@ select -assert-count 1 liveness_labels/c:assumed$obligation r:FLAVOR=assume %i
 
 select -assert-count 1 liveness_labels/c:finite_and r:FLAVOR=assert %i
 select -assert-count 1 liveness_labels/c:finite_and$obligation r:FLAVOR=assert %i
+
+design -reset
+
+# In a process whose clock can stop, a strong operator over a bounded range gets an
+# obligation that its ticks come, which the label doesn't go to. Without the `iff` the
+# same property is the finite check alone.
+read_slang <<EOF
+module liveness_stop_labels(input logic clk, input logic en, input logic a, input logic b);
+	always @(posedge clk iff en) begin
+		stopping: assert property (a |-> s_nexttime b);
+		stopping_assumed: assume property (a |-> s_eventually [1:2] b);
+	end
+	always @(posedge clk)
+		ticking: assert property (a |-> s_nexttime b);
+endmodule
+EOF
+
+select -assert-count 5 liveness_stop_labels/t:$check
+
+select -assert-count 1 liveness_stop_labels/c:stopping r:FLAVOR=assert %i
+select -assert-count 1 liveness_stop_labels/c:stopping$obligation r:FLAVOR=live %i
+
+select -assert-count 1 liveness_stop_labels/c:stopping_assumed r:FLAVOR=assume %i
+select -assert-count 1 liveness_stop_labels/c:stopping_assumed$obligation r:FLAVOR=fair %i
+
+select -assert-count 1 liveness_stop_labels/c:ticking r:FLAVOR=assert %i

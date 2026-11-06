@@ -180,7 +180,34 @@ for top in \
 	stop_zero_pass \
 	pause_pass \
 	stop_assume_pass \
-	stop_assume_fail
+	stop_assume_fail \
+	stop_nexttime_fail \
+	stop_nexttime_pass \
+	stop_nexttime_pause_pass \
+	stop_eventually_fail \
+	stop_eventually_pass \
+	stop_eventually_newer_fail \
+	stop_eventually_zero_pass \
+	stop_strong_range_fail \
+	stop_strong_range_pass \
+	stop_strong_and_fail \
+	stop_strong_and_pass \
+	stop_always_fail \
+	stop_always_pass \
+	stop_always_eventually_fail \
+	stop_not_always_bounded_fail \
+	stop_not_always_bounded_pass \
+	stop_followed_fail \
+	stop_followed_pass \
+	stop_followed_next_fail \
+	stop_followed_next_pass \
+	stop_disable_pass \
+	stop_disable_fail \
+	stop_assume_nexttime_pass \
+	stop_assume_eventually_pass \
+	stop_assume_strong_pass \
+	stop_assume_always_pass \
+	stop_assume_bounded_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/clock_stop_proof.sv;

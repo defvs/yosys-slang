@@ -118,6 +118,7 @@ extern slang::DiagCode SVAWeakSequenceUnsupported;
 extern slang::DiagCode SVASequenceProductUnsupported;
 extern slang::DiagCode SVAFollowedByUnsupported;
 extern slang::DiagCode SVACompoundCoverUnsupported;
+extern slang::DiagCode SVAClockStopUnsupported;
 
 void setup_messages(slang::DiagnosticEngine &engine);
 }; // namespace diag

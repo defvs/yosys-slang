@@ -182,7 +182,10 @@ alike, and so are `eventually` and `s_eventually`: checks come at the end of an 
 (see [When checks fire](#when-checks-fire)), so an attempt cut short by the end of a trace,
 or by a clock that stops for good, is not reported either way. An assumption can rule out
 such an attempt before its end, but only once it has failed on the values sampled so far,
-see [Assumptions](#assumptions).
+see [Assumptions](#assumptions). Where the clock has an `iff`, so that it can stop for good,
+the strong forms also take a progress obligation that the clock tick again, for a liveness
+proof, and those that cannot take one are rejected, see [Clocks that
+stop](liveness.md#clocks-that-stop).
 
 Unbounded ranges and repetitions, and the property operators of chapter 16 not listed
 here, are lowered within the limits [liveness.md](liveness.md) gives. Local variables of
@@ -261,6 +264,8 @@ possible:
   is doomed on the tick of `a`, but rejected on its last tick only.
 - A strong operator over ticks still to come is taken like a weak one. `a |-> s_nexttime
   [2] 1'b0` fails whether or not the clock stops, but is rejected on its last tick only.
+  Where the clock has an `iff`, the progress obligation of the strong operator rules out
+  the clock stopping before then (see [Clocks that stop](liveness.md#clocks-that-stop)).
 - The analysis gets a budget in proportion to the size of the property. It is done for the
   first tick of the attempt, then for twice as many ticks at a time. Once a pass goes over
   the budget, the later ticks get checks that may come later than they could, or only the

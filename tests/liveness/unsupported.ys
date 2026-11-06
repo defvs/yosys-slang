@@ -745,3 +745,73 @@ module reject_finite(input logic clk, input logic r, input logic x, input logic 
 	assert property (@(posedge clk) x |-> reject_on (r) a ##1 b);
 endmodule
 EOF
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_not_nexttime(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> not nexttime b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_not_sequence(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (not (a ##1 b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_or(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> (s_nexttime b) or c);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_eventually_sequence(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> s_eventually [1:2] (b ##1 c));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_under_nexttime(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> nexttime (s_nexttime b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_nested(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> s_nexttime (s_nexttime b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not"
+read_slang <<EOF
+module clock_stop_followed_by(input logic clk, input logic en, input logic a, input logic b, input logic c, input logic d);
+	always @(posedge clk iff en)
+		assert property (a |-> (b ##[1:2] c #-# d));
+endmodule
+EOF
+
+design -reset

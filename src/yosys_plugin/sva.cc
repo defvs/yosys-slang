@@ -3073,6 +3073,9 @@ struct PropertyObligation {
 	// For a liveness obligation that answers for the attempts of all the ticks at once,
 	// whether any are held over from the ticks before (see lower_sva_obligations())
 	ir::Net held = ir::S0;
+	// Is it the obligation that a stopped clock tick again, which the label of the
+	// property doesn't go to (see add_stop_obligation())
+	bool stop = false;
 };
 
 struct PropertyResult {
@@ -3093,6 +3096,9 @@ struct PropertyAborts {
 	// Are the attempts those of an assumption, whose finite parts take the constants on
 	// later ticks for unknown, as eval_assertion() has them (see early_rejection())
 	bool assume = false;
+	// Or those of a cover, which a clock that stops can't fake a match for (see
+	// clock_can_stop())
+	bool cover = false;
 
 	ir::Net any(EvalContext& eval) const {
 		return eval.netlist.LogicOr(accept, cover_disable);
@@ -3371,9 +3377,11 @@ static std::vector<AssertionMatch> path_ends(std::vector<AssertionMatch> paths) 
 	return paths;
 }
 
+// The matches of `sequence` by the tick they end on, read past the first tick of an
+// attempt if `late` (see monitor_operand())
 static std::optional<std::vector<EventualCandidate>>
 finite_eventual_candidates(EvalContext& eval, const ast::AssertionExpr& sequence,
-						   uint32_t leading_delay = 0) {
+						   uint32_t leading_delay = 0, bool late = true) {
 	if (assertion_has_unbounded_sequence(sequence))
 		return std::nullopt;
 
@@ -3382,7 +3390,7 @@ finite_eventual_candidates(EvalContext& eval, const ast::AssertionExpr& sequence
 	// early rejection reads.
 	SvaFormulas f(eval, false);
 	AttemptContext ctx;
-	ctx.late = true;
+	ctx.late = late;
 	auto paths = property_paths(f, ctx, synthesize_assertion_expr(f, ctx, sequence, 0),
 								expr_loc(sequence), 0);
 
@@ -4147,6 +4155,211 @@ static PropertyResult lower_finite_property_from_trigger(
 	return result;
 }
 
+// Can the clock of the attempts stop for good, leaving a tick they wait on to never come?
+// The clock inferred from `always @(posedge clk iff en)` ticks only where `en` holds (IEEE
+// Std 1800-2017 section 16.14.6), and stays put should it stay low. The clock of any other
+// process or assertion becomes the global clock under `formalff -clk2ff`, which ticks on
+// every step.
+static bool clock_can_stop(EvalContext& eval) {
+	return eval.procedural && eval.procedural->timing.background_enable != ir::S1;
+}
+
+// The same for the attempts of a property in an assertion or an assumption. A cover only
+// sees a finite match, which a clock that stops can't make come.
+static bool clock_can_stop(EvalContext& eval, const PropertyAborts& aborts) {
+	return !aborts.cover && clock_can_stop(eval);
+}
+
+// Does a match of the sequence take more than the tick it starts on?
+static bool spans_ticks(const ast::AssertionExpr& sequence) {
+	auto length = sequence.computeSequenceLength();
+	return !length.has_value() || !length->max.has_value() || length->max.value() > 1;
+}
+
+// The first part of the finite property `expr` that waits on later ticks such that the
+// property fails should they never come, or null. That's a strong operator, or one under
+// an odd number of `not`s if `negated`, which `not` makes the dual of strong: a weak
+// operator, a sequence used as a property among them, holds if its ticks never come (IEEE
+// Std 1800-2017 sections 16.12.2, 16.12.10, 16.12.11, 16.12.13 and F.5). An antecedent cut
+// short has no match, which leaves the implication vacuous, but under `not` that makes it
+// fail, as `R #-# P` does.
+//
+// Unbounded operators are left to the monitors, which see the clock stop.
+static const ast::AssertionExpr* waits_on_ticks(const ast::AssertionExpr& expr, bool negated) {
+	if (!is_property(expr))
+		return negated && spans_ticks(expr) ? &expr : nullptr;
+
+	switch (expr.kind) {
+	case ast::AssertionExprKind::Simple:
+		{
+			const auto& instance = expr.as<ast::SimpleAssertionExpr>().expr.as<ast::AssertionInstanceExpression>();
+			return instance.isRecursiveProperty ? nullptr : waits_on_ticks(instance.body, negated);
+		}
+	case ast::AssertionExprKind::Unary:
+		{
+			const auto& unary = expr.as<ast::UnaryAssertionExpr>();
+			uint32_t last;
+			bool strong;
+			switch (unary.op) {
+			case ast::UnaryAssertionOperator::Not:
+				return waits_on_ticks(unary.expr, !negated);
+			case ast::UnaryAssertionOperator::NextTime:
+			case ast::UnaryAssertionOperator::SNextTime:
+				last = unary.range.has_value() ? unary.range->min : 1;
+				strong = unary.op == ast::UnaryAssertionOperator::SNextTime;
+				break;
+			default:
+				if (!unary.range.has_value() || !unary.range->max.has_value())
+					return nullptr;
+				last = unary.range->max.value();
+				strong = unary.op == ast::UnaryAssertionOperator::SEventually ||
+						 unary.op == ast::UnaryAssertionOperator::SAlways;
+				break;
+			}
+			if (last > 0 && strong != negated)
+				return &expr;
+			return waits_on_ticks(unary.expr, negated);
+		}
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = expr.as<ast::BinaryAssertionExpr>();
+			const ast::AssertionExpr* part = nullptr;
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::And:
+			case ast::BinaryAssertionOperator::Or:
+				part = waits_on_ticks(binary.left, negated);
+				break;
+			case ast::BinaryAssertionOperator::Implies:
+				part = waits_on_ticks(binary.left, !negated);
+				break;
+			case ast::BinaryAssertionOperator::Iff:
+				part = waits_on_ticks(binary.left, negated);
+				if (!part)
+					part = waits_on_ticks(binary.left, !negated);
+				if (!part)
+					part = waits_on_ticks(binary.right, !negated);
+				break;
+			case ast::BinaryAssertionOperator::OverlappedImplication:
+			case ast::BinaryAssertionOperator::NonOverlappedImplication:
+			case ast::BinaryAssertionOperator::OverlappedFollowedBy:
+			case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
+				{
+					bool followed_by = binary.op == ast::BinaryAssertionOperator::OverlappedFollowedBy ||
+									   binary.op == ast::BinaryAssertionOperator::NonOverlappedFollowedBy;
+					bool nonoverlapped = binary.op == ast::BinaryAssertionOperator::NonOverlappedImplication ||
+										 binary.op == ast::BinaryAssertionOperator::NonOverlappedFollowedBy;
+					// Followed-by needs its match, an implication only so under `not`
+					if (followed_by != negated && (nonoverlapped || spans_ticks(binary.left)))
+						return &expr;
+				}
+				break;
+			default:
+				return nullptr;
+			}
+			return part ? part : waits_on_ticks(binary.right, negated);
+		}
+	case ast::AssertionExprKind::StrongWeak:
+		{
+			const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
+			bool strong = strong_weak.strength == ast::StrongWeakAssertionExpr::Strong;
+			return strong != negated && spans_ticks(strong_weak.expr) ? &expr : nullptr;
+		}
+	case ast::AssertionExprKind::Conditional:
+		{
+			const auto& conditional = expr.as<ast::ConditionalAssertionExpr>();
+			if (auto part = waits_on_ticks(conditional.ifExpr, negated))
+				return part;
+			return conditional.elseExpr ? waits_on_ticks(*conditional.elseExpr, negated) : nullptr;
+		}
+	case ast::AssertionExprKind::Case:
+		{
+			const auto& case_expr = expr.as<ast::CaseAssertionExpr>();
+			for (const auto& item : case_expr.items)
+				if (auto part = waits_on_ticks(*item.body, negated))
+					return part;
+			return case_expr.defaultCase ? waits_on_ticks(*case_expr.defaultCase, negated) : nullptr;
+		}
+	case ast::AssertionExprKind::Clocking:
+		return waits_on_ticks(expr.as<ast::ClockingAssertionExpr>().expr, negated);
+	case ast::AssertionExprKind::DisableIff:
+		return waits_on_ticks(expr.as<ast::DisableIffAssertionExpr>().expr, negated);
+	case ast::AssertionExprKind::Abort:
+		return waits_on_ticks(expr.as<ast::AbortAssertionExpr>().expr, negated);
+	default:
+		return nullptr;
+	}
+}
+
+// Is `expr` lowered by its paths as a whole, see lowered_by_paths()? Not if a part of it
+// waits on ticks of a clock that can stop, as lower_property() takes it apart so that the
+// part gets an obligation for those ticks of its own.
+static bool lowered_whole(EvalContext& eval, const PropertyAborts& aborts, const ast::AssertionExpr& expr) {
+	return lowered_by_paths(expr) && !(clock_can_stop(eval, aborts) && waits_on_ticks(expr, false));
+}
+
+// lower_finite_property_from_trigger() of a property no part of which waits on ticks of a
+// clock that can stop, or else an error: its check comes on the last tick of the attempt,
+// and if the clock stops for good before, the attempt fails unseen.
+static PropertyResult lower_finite_property(EvalContext& eval, const ast::AssertionExpr& expr,
+											 ir::Net trigger, bool attempt_tick, const PropertyAborts& aborts,
+											 bool *admits_empty = nullptr) {
+	// The others raise errors of their own
+	if (clock_can_stop(eval, aborts) && lowered_by_paths(expr)) {
+		if (auto part = waits_on_ticks(expr, false)) {
+			eval.netlist.add_diag(diag::SVAClockStopUnsupported, expr_loc(*part));
+			return {{}, false};
+		}
+	}
+	return lower_finite_property_from_trigger(eval, expr, trigger, attempt_tick, aborts, admits_empty);
+}
+
+// An obligation that the clock tick again while one of the attempts started on `trigger`
+// waits on a tick, which fails if the clock stops for good. With the finite check of the
+// property on the last tick of the attempt, that's the strong form of an operator, while
+// the check alone is the weak one, which holds if its ticks never come.
+//
+// An attempt waits up to the `length`th tick after the one it started on, unless a disable
+// came upon it, whose T letters meet it, or a match did: `matches[age]` holds on the tick a
+// match ends on that started `age` ticks before. An attempt that has failed may wait all
+// the same, as it fails either way. The register of each age is set on the ticks only, so
+// between them the obligation is raised if one of them is, which lower_sva_obligations()
+// raises it by (see PropertyObligation::held).
+static void add_stop_obligation(PropertyResult& result, EvalContext& eval, ir::Net trigger, uint64_t length,
+								const std::vector<ir::Net>& matches, ir::Net disable, slang::SourceLocation loc) {
+	if (length == 0)
+		return;
+	ir::Net waiting = trigger, held = ir::S0;
+	for (uint64_t age = 0; age < length; age++) {
+		waiting = eval.netlist.LogicAnd(waiting, sva_not(eval, disable));
+		if (age < matches.size())
+			waiting = eval.netlist.LogicAnd(waiting, sva_not(eval, matches[age]));
+		waiting = delay_sva_sample(eval, waiting, 1, ir::S0, loc, "sva_stop").as_net();
+		held = eval.netlist.LogicOr(held, waiting);
+	}
+	result.obligations.push_back({PropertyObligationKind::Liveness, ir::S1, ir::S0, held});
+	result.obligations.back().held = held;
+	result.obligations.back().stop = true;
+}
+
+// add_stop_obligation() for the attempts of `strong(sequence)` of a bounded sequence, which
+// wait until it has a match. An empty match is none.
+static void add_match_stop_obligation(PropertyResult& result, EvalContext& eval, const ast::AssertionExpr& sequence,
+									  ir::Net trigger, bool attempt_tick, ir::Net disable) {
+	auto candidates = finite_eventual_candidates(eval, sequence, 0, !attempt_tick);
+	if (!candidates.has_value()) {
+		result.valid = false;
+		return;
+	}
+	uint64_t length = 0;
+	for (const auto& candidate : *candidates)
+		length = std::max(length, candidate.duration);
+	std::vector<ir::Net> matches(length, ir::S0);
+	for (const auto& candidate : *candidates)
+		if (candidate.duration < length)
+			matches[candidate.duration] = eval.netlist.LogicOr(matches[candidate.duration], candidate.match);
+	add_stop_obligation(result, eval, trigger, length, matches, disable, expr_loc(sequence));
+}
+
 static bool property_requires_temporal_obligations(const ast::AssertionExpr& expr) {
 	switch (expr.kind) {
 	case ast::AssertionExprKind::Simple:
@@ -4386,8 +4599,25 @@ static PropertyResult lower_eventual(EvalContext& eval,
 									 const PropertyAborts& aborts) {
 	PropertyResult result;
 	if (eventual.range.has_value() && eventual.range->max.has_value()) {
-		return lower_finite_property_from_trigger(
-			eval, eventual, trigger, attempt_tick, aborts);
+		uint32_t maximum = eventual.range->max.value();
+		if (eventual.op != ast::UnaryAssertionOperator::SEventually || maximum == 0 ||
+				!clock_can_stop(eval, aborts))
+			return lower_finite_property(eval, eventual, trigger, attempt_tick, aborts);
+
+		// An attempt is met on a tick from the minimum on where the operand holds, which
+		// tells it apart from one still waiting where it's a boolean. One of more ticks can
+		// hold where the clock stops on them, weak as it is.
+		auto operand = simple_property_signal(eval, eventual.expr, false);
+		if (!operand.has_value()) {
+			eval.netlist.add_diag(diag::SVAClockStopUnsupported, expr_loc(eventual));
+			return {{}, false};
+		}
+		result = lower_finite_property_from_trigger(eval, eventual, trigger, attempt_tick, aborts);
+		std::vector<ir::Net> matches(maximum, ir::S0);
+		for (uint32_t age = eventual.range->min; age < maximum; age++)
+			matches[age] = operand.value();
+		add_stop_obligation(result, eval, trigger, maximum, matches, aborts.any(eval), expr_loc(eventual));
+		return result;
 	}
 
 	ir::Net disable = aborts.any(eval);
@@ -4472,9 +4702,15 @@ static PropertyResult lower_always(EvalContext& eval,
 	if (condition.has_value()) {
 		add_safety_obligation(result, condition.value(),
 			eval.netlist.LogicAnd(window, sva_not(eval, disable)));
-		return result;
+	} else {
+		result = lower_property(eval, always_expr.expr, window, !late, aborts);
 	}
-	return lower_property(eval, always_expr.expr, window, !late, aborts);
+	// The strong form needs all the ticks of the interval to come (IEEE Std 1800-2017
+	// section 16.12.11)
+	if (always_expr.op == ast::UnaryAssertionOperator::SAlways && always_expr.range.has_value() &&
+			always_expr.range->max.has_value() && clock_can_stop(eval, aborts))
+		add_stop_obligation(result, eval, trigger, always_expr.range->max.value(), {}, disable, loc);
+	return result;
 }
 
 static PropertyResult lower_until(EvalContext& eval,
@@ -4545,6 +4781,19 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		if (unary.op == ast::UnaryAssertionOperator::Always ||
 			unary.op == ast::UnaryAssertionOperator::SAlways)
 			return lower_always(eval, unary, trigger, attempt_tick, aborts);
+		if (unary.op == ast::UnaryAssertionOperator::SNextTime && lowered_by_paths(unary) &&
+				clock_can_stop(eval, aborts)) {
+			// The attempt needs its nth tick to come (16.12.10), which the operand starts
+			// on. One of its own then holds where the clock stops, if it's weak.
+			if (auto part = waits_on_ticks(unary.expr, false)) {
+				eval.netlist.add_diag(diag::SVAClockStopUnsupported, expr_loc(*part));
+				return {{}, false};
+			}
+			PropertyResult result = lower_finite_property_from_trigger(eval, unary, trigger, attempt_tick, aborts);
+			add_stop_obligation(result, eval, trigger, unary.range.has_value() ? unary.range->min : 1, {},
+								disable, expr_loc(expr));
+			return result;
+		}
 		if (unary.op == ast::UnaryAssertionOperator::Not) {
 			const auto *nested = unary.expr.as_if<ast::UnaryAssertionExpr>();
 			if (nested &&
@@ -4605,6 +4854,14 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					PropertyResult result;
 					add_safety_obligation(result, seen,
 						eval.netlist.LogicAnd(enable, sva_not(eval, disable)));
+					// The dual of a weak `always` is a strong eventuality, which waits for
+					// the violation up to the last tick of the interval
+					if (clock_can_stop(eval, aborts)) {
+						std::vector<ir::Net> matches(maximum, ir::S0);
+						for (uint32_t age = minimum; age < maximum; age++)
+							matches[age] = violation.value();
+						add_stop_obligation(result, eval, trigger, maximum, matches, disable, expr_loc(expr));
+					}
 					return result;
 				}
 				PropertyResult result;
@@ -4618,9 +4875,11 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 	if (expr.kind == ast::AssertionExprKind::StrongWeak) {
 		const auto& strong_weak = expr.as<ast::StrongWeakAssertionExpr>();
+		// The finite check of a bounded sequence comes on the last tick of the attempt,
+		// which tells a match from a failure, and at the end of a trace neither form gets
+		// reported. A clock that stops for good fails the strong form of an attempt still
+		// waiting for its match, which takes an obligation of its own.
 		if (strong_weak.strength == ast::StrongWeakAssertionExpr::Weak) {
-			// Weak only changes end-of-simulation behavior.  For a finite
-			// sequence, the ordinary finite monitor is exact.
 			if (assertion_has_unbounded_sequence(strong_weak.expr)) {
 				eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(expr));
 				return {{}, false};
@@ -4630,8 +4889,11 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		}
 
 		if (!assertion_has_unbounded_sequence(strong_weak.expr)) {
-			return lower_finite_property_from_trigger(
+			PropertyResult result = lower_finite_property_from_trigger(
 				eval, strong_weak.expr, trigger, attempt_tick, aborts);
+			if (clock_can_stop(eval, aborts) && spans_ticks(strong_weak.expr))
+				add_match_stop_obligation(result, eval, strong_weak.expr, trigger, attempt_tick, disable);
+			return result;
 		}
 		if (strong_weak.expr.kind == ast::AssertionExprKind::Binary) {
 			const auto& binary =
@@ -4661,6 +4923,8 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						eval, binary.left, trigger, attempt_tick, aborts, &empty);
 					if (empty)
 						left.obligations.clear();
+					else if (clock_can_stop(eval, aborts) && spans_ticks(binary.left))
+						add_match_stop_obligation(left, eval, binary.left, trigger, attempt_tick, disable);
 				}
 				if (assertion_has_unbounded_sequence(binary.right)) {
 					auto candidates =
@@ -4675,6 +4939,8 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						eval, binary.right, trigger, attempt_tick, aborts, &empty);
 					if (empty)
 						right.obligations.clear();
+					else if (clock_can_stop(eval, aborts) && spans_ticks(binary.right))
+						add_match_stop_obligation(right, eval, binary.right, trigger, attempt_tick, disable);
 				}
 				left.valid = left.valid && right.valid;
 				left.obligations.insert(left.obligations.end(),
@@ -4871,7 +5137,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		case ast::BinaryAssertionOperator::OverlappedImplication:
 		case ast::BinaryAssertionOperator::NonOverlappedImplication:
 			{
-				if (lowered_by_paths(binary))
+				if (lowered_whole(eval, aborts, binary))
 					break;
 				bool nonoverlapped =
 					binary.op == ast::BinaryAssertionOperator::NonOverlappedImplication;
@@ -4890,7 +5156,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		case ast::BinaryAssertionOperator::OverlappedFollowedBy:
 		case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
 			{
-				if (lowered_by_paths(binary))
+				// Taken apart only where a part waits on ticks of a clock that can stop
+				bool whole = lowered_by_paths(binary);
+				if (lowered_whole(eval, aborts, binary))
 					break;
 				bool nonoverlapped =
 					binary.op ==
@@ -4907,7 +5175,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 						eval, binary.left, trigger, attempt_tick, nonoverlapped, disable,
 						&admits_empty, &one_tick);
 				if (!one_tick) {
-					eval.netlist.add_diag(diag::SVAFollowedByUnsupported,
+					eval.netlist.add_diag(whole ? diag::SVAClockStopUnsupported : diag::SVAFollowedByUnsupported,
 										  expr_loc(binary.left));
 					return {{}, false};
 				}
@@ -4919,6 +5187,14 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 					// `(R ##1 `true) #-# P`, which it matches on the attempt's tick
 					result = lower_finite_property_from_trigger(
 						eval, binary.left, trigger, attempt_tick, aborts);
+					// The attempt waits for the match of R, all of its matches end on one
+					// tick, and for `R #=# P` also for the tick after, which starts P
+					if (clock_can_stop(eval, aborts)) {
+						auto length = binary.left.computeSequenceLength();
+						if (length.has_value() && length->max.has_value() && length->max.value() > 0)
+							add_stop_obligation(result, eval, trigger, length->max.value() - 1 + nonoverlapped, {},
+												disable, expr_loc(binary.left));
+					}
 				}
 				bool consequent_attempt_tick =
 					attempt_tick && !nonoverlapped && is_boolean_sequence(binary.left);
@@ -4940,7 +5216,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 
 		case ast::BinaryAssertionOperator::And:
 			{
-				if (lowered_by_paths(binary))
+				if (lowered_whole(eval, aborts, binary))
 					break;
 				PropertyResult left =
 					lower_property(eval, binary.left, trigger, attempt_tick, aborts);
@@ -4981,8 +5257,7 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		}
 	}
 
-	return lower_finite_property_from_trigger(
-		eval, expr, trigger, attempt_tick, aborts);
+	return lower_finite_property(eval, expr, trigger, attempt_tick, aborts);
 }
 
 // Do the checks lower_property() makes for a cover of the property see each of its
@@ -5163,6 +5438,7 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 
 	PropertyAborts aborts;
 	aborts.assume = statement.assertionKind == ast::AssertionKind::Assume;
+	aborts.cover = statement.assertionKind == ast::AssertionKind::CoverProperty;
 	if (condition) {
 		ir::Net disable = abort_condition(procedural.eval, *condition);
 		if (statement.assertionKind == ast::AssertionKind::CoverProperty)
@@ -5206,6 +5482,8 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 	size_t labelled = result.obligations.size();
 	for (size_t index = 0; index < result.obligations.size(); index++) {
 		auto kind = result.obligations[index].kind;
+		if (result.obligations[index].stop)
+			continue;
 		if (kind == PropertyObligationKind::Liveness) {
 			labelled = index;
 			break;
@@ -5321,7 +5599,10 @@ static void lower_sva_property(const ast::ConcurrentAssertionStatement &statemen
 		expr = &clocking_expr->expr;
 	}
 
-	if (!lowered_by_paths(*expr)) {
+	// A property with a part that waits on ticks of a clock that can stop takes an
+	// obligation for them, which lower_property() adds
+	bool cover = statement.assertionKind == ast::AssertionKind::CoverProperty;
+	if (!lowered_by_paths(*expr) || (!cover && clock_can_stop(procedural.eval) && waits_on_ticks(*expr, false))) {
 		lower_sva_obligations(statement, block, procedural, *expr, attempt);
 		return;
 	}

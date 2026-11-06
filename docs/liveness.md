@@ -36,13 +36,13 @@ implications, and `p` and `q` for properties.
 | SVA form | Lowering |
 | --- | --- |
 | `s_eventually f`, `s_eventually [m:$] f` | response monitor plus `$live` or `$fair` |
-| `eventually [m:n] f`, `s_eventually [m:n] f`, `nexttime f`, `s_nexttime f`, `nexttime [n] f`, `s_nexttime [n] f` | finite safety monitor |
-| `always p`, `always [m:$] p`, `always [m:n] p`, `s_always [m:n] p` | one attempt of `p` per tick of the interval |
+| `eventually [m:n] f`, `s_eventually [m:n] f`, `nexttime f`, `s_nexttime f`, `nexttime [n] f`, `s_nexttime [n] f` | finite safety monitor, and for the strong forms under a clock that can stop a progress obligation, see [Clocks that stop](#clocks-that-stop) |
+| `always p`, `always [m:$] p`, `always [m:n] p`, `s_always [m:n] p` | one attempt of `p` per tick of the interval, and for `s_always` under a clock that can stop a progress obligation |
 | `not (s_eventually b)`, `not (s_eventually [m:$] b)` | safety monitor of the dual `always` |
 | `not (always b)`, `not (always [m:$] b)` | liveness of the dual eventuality |
 | `b until c`, `b until_with c` | weak-until safety monitor |
 | `b s_until c`, `b s_until_with c` | safety monitor plus progress obligation |
-| `strong(s)` | finite safety check of a bounded `s`, exact acceptance of an unbounded one |
+| `strong(s)` | finite safety check of a bounded `s`, with a progress obligation under a clock that can stop, exact acceptance of an unbounded one |
 | `weak(s)` | bounded `s` only, where it agrees with `strong(s)` |
 | `s \|-> p`, `s \|=> p` | one attempt of `p` per match of `s` |
 | `s #-# p`, `s #=# p` | a match of `s` plus `p` started on it, with the limits listed under rejected constructs |
@@ -179,6 +179,45 @@ high: a justice goal is met only on such a tick, not on the cycles between. An
 attempt still pending when the clock stops for good is never met, so it fails,
 even where the match ending on the last tick meets an older attempt.
 
+### Clocks that stop
+
+A strong operator over a bounded range waits on the ticks of its range too. If
+they never come, `s_nexttime`, `s_eventually [m:n]`, `s_always [m:n]`, a
+`strong` sequence and followed-by fail, where their weak forms hold (IEEE
+1800-2017 16.12.10, 16.12.11, 16.12.13 and 16.12.15). Their finite check alone
+is the weak form. After `formalff -clk2ff` every clock but one qualified with
+`iff` ticks with the global clock and cannot stop, and there that check is
+exact. The clock of a process `@(posedge clk iff en)`, or of a default
+clocking with an `iff`, stops for good where `en` stays low, so there an
+attempt of such an operator also takes a progress obligation: a `$live` check
+in an assertion, a `$fair` one in an assumption, named `label$obligation`.
+The obligation is raised on the cycles between two ticks while the attempt
+waits on ticks still to come, and met on the next tick. It is lifted once the
+attempt is decided: by a match of the eventuality, by the last tick of its
+range, or by a disable or an abort. An attempt still waiting when the clock
+stops for good then fails, and an assumption rules such a stop out, while it
+allows a pause of any length. A `cover` needs no obligation, as a match of it has had all its ticks.
+
+In such a process the strong operators of the table, `strong` of a bounded
+sequence, bounded `s_eventually` of a Boolean and followed-by whose left side
+ends on one tick are supported over properties with none of these, in a
+consequent and under property `and`, `if`, `case`, `implies` and `always`.
+Other places where an attempt waits on ticks that may never come are rejected,
+as is `not` of a weak operator or of a sequence over several ticks, which is
+strong:
+
+- `a |-> not nexttime b` and `not (a ##1 b)`;
+- `(s_nexttime b) or c`, `s_eventually [1:2] (b ##1 c)`, `nexttime (s_nexttime
+  b)` and `s_nexttime (s_nexttime b)`;
+- `b ##[1:2] c #-# d`.
+
+The flow of this document lowers with `formalff -clk2ff`. Under
+`multiclock on` in SymbiYosys every clock is a free input that may stop, which
+the lowering cannot tell from the design: neither a strong bounded operator
+nor an unbounded eventuality on a clock with no `iff` then fails when that
+clock stops for good, so the monitors are not exact in that flow and liveness
+proofs are not supported there.
+
 Overlapping triggers are preserved. For an eventual finite suffix of maximum
 duration `N`, the monitor keeps pending trigger ages `1..N-1` and a saturated
 older bucket. A suffix match of duration `D` can discharge only triggers whose
@@ -259,6 +298,7 @@ message, the tests are under `tests/`.
 | `reject_on` around a finite property, or around a liveness property with a safety part, with `always`, or with more than a Boolean antecedent ahead of its obligations | `reject_on` is supported around a liveness property ... | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
 | temporal operands of `until`, `s_until`, `until_with` and `s_until_with`, a repeated sequence as an operand of `until` or `implies` | unsupported assertion statement | `liveness/unsupported.ys` |
 | liveness under `not` (other than the dual forms), `nexttime` or `s_nexttime`, or under an eventuality other than as `strong(s)`; `not` of `until` or of an unbounded `strong` sequence | unsupported assertion statement | `liveness/unsupported.ys` |
+| in a process whose clock has an `iff`, a strong operator that waits on ticks other than as [Clocks that stop](#clocks-that-stop) lists: under `or`, `nexttime`, `s_nexttime` or an eventuality, bounded `s_eventually` of a sequence over several ticks, `not` of a weak operator or of a sequence over several ticks, followed-by whose left side ends on more than one tick | property waits on ticks that an `iff` qualified clock may never give | `liveness/unsupported.ys` |
 | recursive named properties | unsupported assertion statement | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
 | SVA match items, sequence local-variable assignments and action subroutines, also in an unbounded sequence | SVA match items and local-variable actions are not synthesizable | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
 | a `disable iff` nested in a property by way of instances, which IEEE 1800-2017 16.12 does not allow | unsupported assertion statement | `sva/nested_disable.ys` |

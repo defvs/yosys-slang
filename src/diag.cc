@@ -170,6 +170,7 @@ DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1216);
 DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1217);
 DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1218);
 DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1219);
+DiagCode SVAClockStopUnsupported(DiagSubsystem::Netlist, 1220);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -305,6 +306,10 @@ void setup_messages(slang::DiagnosticEngine &slang_engine)
 	engine.setMessage(SVACompoundCoverUnsupported,
 					  "cover of a property `and`, or of followed-by, with an `iff` or an abort in an operand is unsupported, as each part would be covered on its own");
 	engine.setSeverity(SVACompoundCoverUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAClockStopUnsupported,
+					  "property waits on ticks that an `iff` qualified clock may never give: in such a process `s_nexttime`, bounded `s_always`, bounded `s_eventually` of a boolean, `strong` of a bounded sequence and followed-by whose left side ends on one tick are supported over properties with none of these, in a consequent or under property `and`, `if`, `case`, `implies` or `always`, while `not` of a weak operator or of a sequence is not");
+	engine.setSeverity(SVAClockStopUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(LangFeatureUnsupported, "unsupported language feature");
 	engine.setSeverity(LangFeatureUnsupported, DiagnosticSeverity::Error);
