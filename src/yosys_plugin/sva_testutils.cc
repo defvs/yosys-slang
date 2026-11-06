@@ -78,8 +78,8 @@ struct TestSlangsvaPass : Pass
 				for (auto checks : {&ref_checks, &test_checks}) {
 					for (auto cell : *checks) {
 						if (cell->parameters != ref->parameters) {
-							log_error("Assertions '%s' and '%s' differ in parameters\n", log_id(cell),
-									log_id(ref));
+							log_error("Assertions '%s' and '%s' differ in parameters\n",
+									log_id(cell), log_id(ref));
 						}
 						if (cell->getPort(ID::TRG) != ref->getPort(ID::TRG)) {
 							log_error("Assertions '%s' and '%s' differ in TRG port\n", log_id(cell),
@@ -120,11 +120,13 @@ struct TestSlangsvaPass : Pass
 				} else if (flavor == "live" || flavor == "fair") {
 					// Justice goes by the goal and the enable over the whole trace, rather
 					// than by the ticks the check acts on, so both have to match
-					compare->setPort(ID::A, m->And(NEW_ID,
-						m->Eqx(NEW_ID, test->getPort(ID::A), ref->getPort(ID::A)),
-						m->Eqx(NEW_ID, test->getPort(ID::EN), ref->getPort(ID::EN))));
+					compare->setPort(ID::A,
+							m->And(NEW_ID,
+									m->Eqx(NEW_ID, test->getPort(ID::A), ref->getPort(ID::A)),
+									m->Eqx(NEW_ID, test->getPort(ID::EN), ref->getPort(ID::EN))));
 				} else {
-					compare->setPort(ID::A, m->Eqx(NEW_ID, acts_any(test_checks), acts_any(ref_checks)));
+					compare->setPort(
+							ID::A, m->Eqx(NEW_ID, acts_any(test_checks), acts_any(ref_checks)));
 				}
 
 				for (auto cell : ref_checks)
