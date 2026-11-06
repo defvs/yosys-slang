@@ -141,24 +141,27 @@ jobs:
         run: |
           git clone --depth 1 --branch "$YOSYS_VERSION" https://github.com/YosysHQ/sby.git sby
           sudo make -C sby install
-      - name: Read the pinned suprove archive
-        id: suprove-archive
-        shell: bash
-        run: |
-          grep '^archive_sha256=' tools/setup_liveness_tools.sh >> "$GITHUB_OUTPUT"
-      - name: Cache suprove
-        uses: actions/cache@v6
-        env:
-          cache-name: cache-suprove
+      # The script pins the archive and the members it extracts. Restored and
+      # saved apart, as actions/cache saves only after a job that succeeds, so
+      # that the install is kept when the proofs fail
+      - name: Restore suprove
+        id: suprove-cache
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/sv-elab-tools/oss-cad-suite
-          key: suprove-${{ runner.os }}-${{ steps.suprove-archive.outputs.archive_sha256 }}
+          key: suprove-${{ runner.os }}-${{ hashFiles('tools/setup_liveness_tools.sh') }}
       - name: Install suprove
         id: suprove
         shell: bash
         run: |
           YOSYS_SLANG_TOOL_ROOT="$HOME/.cache/sv-elab-tools" tools/setup_liveness_tools.sh | tee setup.log
           grep '^SUPROVE_EXECUTABLE=' setup.log >> "$GITHUB_OUTPUT"
+      - name: Save suprove
+        if: steps.suprove-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/sv-elab-tools/oss-cad-suite
+          key: ${{ steps.suprove-cache.outputs.cache-primary-key }}
       - name: Run liveness proofs
         run: |
           cd tests/liveness
