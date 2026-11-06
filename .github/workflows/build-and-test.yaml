@@ -111,7 +111,6 @@ jobs:
       - name: Print ccache statistics
         run: |
           ccache -s
-  # Unverified: written without a run on GitHub Actions
   test-liveness:
     runs-on: ubuntu-24.04
     needs: [build, define-matrix]
