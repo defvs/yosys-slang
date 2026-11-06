@@ -126,8 +126,6 @@ DiagCode UnsupportedSystemTask(DiagSubsystem::Netlist, 1074);
 DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
-DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1090);
-DiagCode SVAFrozenValueAfterFirstTick(DiagSubsystem::Netlist, 1091);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
@@ -140,23 +138,63 @@ DiagCode HighImpedanceUnsupported(DiagSubsystem::Netlist, 1086);
 DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
 DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
-DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
-DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
-DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
-DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
-DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
-DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
-DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
-DiagCode SVACallAssignsNamedVariable(DiagSubsystem::Netlist, 1099);
-DiagCode NoteActionBlockEffect(DiagSubsystem::Netlist, 1100);
+
+// The SVA codes start at 1200, apart from the ones above, which are taken in
+// sequence: codes added to the sequence on another branch in the meantime
+// cannot take their numbers. setup_messages() fails on a number used twice.
+DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1200);
+DiagCode SVAFrozenValueAfterFirstTick(DiagSubsystem::Netlist, 1201);
+DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1202);
+DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1203);
+DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1204);
+DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1205);
+DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1206);
+DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1207);
+DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1208);
+DiagCode SVACallAssignsNamedVariable(DiagSubsystem::Netlist, 1209);
+DiagCode NoteActionBlockEffect(DiagSubsystem::Netlist, 1210);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
 				IfElseAloadPolarity, IfElseAloadMismatch, UnsynthesizableFeature});
 DiagGroup sanity("sanity", {EdgeImplicitMixing});
 
-void setup_messages(slang::DiagnosticEngine &engine)
+namespace {
+
+// Two codes of a subsystem with the same number are one code to slang, and the
+// message and severity set last would apply to both. The numbers are picked by
+// hand, so check that each is set up once rather than issue the wrong text or
+// severity.
+class UniqueMessages
 {
+public:
+	UniqueMessages(DiagnosticEngine &engine) : engine(engine) {}
+
+	void setMessage(DiagCode code, const std::string &message)
+	{
+		if (!codes.insert(code).second) {
+			std::string condition =
+					"diagnostic code " + std::to_string(code.getCode()) + " set up once";
+			error_(__FILE__, __LINE__, condition.c_str());
+		}
+		engine.setMessage(code, message);
+	}
+
+	void setSeverity(DiagCode code, DiagnosticSeverity severity)
+	{
+		engine.setSeverity(code, severity);
+	}
+
+private:
+	DiagnosticEngine &engine;
+	std::set<DiagCode> codes;
+};
+
+} // namespace
+
+void setup_messages(slang::DiagnosticEngine &slang_engine)
+{
+	UniqueMessages engine(slang_engine);
 	// clang-format off
 	engine.setMessage(IffUnsupported, "iff qualifier not supported in combination with this event");
 	engine.setMessage(SignalSensitivityAmbiguous, "non-edge sensitivity on a signal will be synthesized as @* sensitivity");
