@@ -382,3 +382,103 @@ module guard_ranged_always_fail ((* gclk *) input logic clk);
 		if (first)
 			assert property (always [1:2] ((cnt == 1) |-> s_eventually first));
 endmodule
+
+// An initial procedure queues one attempt, which starts on the first tick of its clock
+// (IEEE Std 1800-2017 section 16.14.6)
+module initial_eventually_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire b = n == 2;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (s_eventually b);
+endmodule
+
+module initial_eventually_fail ((* gclk *) input logic clk, input logic b);
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (s_eventually b);
+endmodule
+
+// The antecedent is read on the first tick only, a later `a` starts no attempt
+module initial_single_pass ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire a = n == 2;
+	wire b = 1'b0;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (a |-> s_eventually b);
+endmodule
+
+module initial_single_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire a = n == 0;
+	wire b = 1'b0;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (a |-> s_eventually b);
+endmodule
+
+// `always` in the attempt starts the response on every tick
+module initial_always_fail ((* gclk *) input logic clk);
+	logic [1:0] n = 0;
+	always_ff @(posedge clk)
+		if (n != 3)
+			n <= n + 1'b1;
+	wire a = n == 2;
+	wire b = 1'b0;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (always (a |-> s_eventually b));
+endmodule
+
+module initial_always_pass ((* gclk *) input logic clk, input logic a);
+	logic b = 0;
+	always_ff @(posedge clk)
+		b <= a;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (always (a |-> s_eventually b));
+endmodule
+
+module initial_until_fail ((* gclk *) input logic clk, input logic b);
+	default clocking @(posedge clk); endclocking
+	initial
+		assert property (1'b1 s_until b);
+endmodule
+
+// The assumption keeps the response coming
+module initial_assume_pass ((* gclk *) input logic clk, input logic b);
+	logic seen = 0;
+	always_ff @(posedge clk)
+		seen <= seen || b;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assume property (s_eventually b);
+	assert property (s_eventually seen);
+endmodule
+
+module initial_assume_fail ((* gclk *) input logic clk, input logic b);
+	logic seen = 0;
+	always_ff @(posedge clk)
+		seen <= b;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		assume property (s_eventually b);
+	assert property (s_eventually seen);
+endmodule

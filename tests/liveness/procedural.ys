@@ -32,6 +32,31 @@ EOF
 
 design -reset
 
+# Nor in an initial procedure
+test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
+read_slang <<EOF
+module initial_unclocked(input logic a);
+	initial
+		assert property (s_eventually a);
+endmodule
+EOF
+
+design -reset
+
+# The one attempt of an initial procedure starts on the first tick of the default
+# clocking, whose response monitor takes no later trigger
+read_slang <<EOF
+module initial_response(input logic clk, input logic a, input logic b);
+	default clocking @(posedge clk); endclocking
+	initial
+		initial_chk: assert property (a |-> s_eventually b);
+endmodule
+EOF
+select -assert-count 1 t:$check
+select -assert-count 1 c:initial_chk r:FLAVOR=live %i
+
+design -reset
+
 # Nor in either branch of an asynchronous reset
 test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
 read_slang <<EOF

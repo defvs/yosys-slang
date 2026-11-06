@@ -174,7 +174,11 @@ An assertion in procedural code launches an attempt on the clock ticks where
 the code around it reaches the statement, the attempt then runs to completion
 whatever that code does on later ticks (IEEE 1800-2017 16.14.6). An assertion
 in `always_comb` or `always @*` runs on its own clock or else the default
-clocking. In `always @(posedge clk iff en)` the clock ticks only where `en` is
+clocking. So does one in an `initial` procedure, which queues the one attempt
+that [sva.md](sva.md#attempts) describes, on the first tick of
+that clock: `initial assert property (a |-> s_eventually b)` requires a `b`
+only if `a` holds on that tick, while `always (a |-> s_eventually b)` in the
+attempt answers every `a`. In `always @(posedge clk iff en)` the clock ticks only where `en` is
 high: a justice goal is met only on such a tick, not on the cycles between. An
 attempt still pending when the clock stops for good is never met, so it fails,
 even where the match ending on the last tick meets an older attempt.
@@ -304,7 +308,7 @@ message, the tests are under `tests/`.
 | a `disable iff` nested in a property by way of instances, which IEEE 1800-2017 16.12 does not allow | unsupported assertion statement | `sva/nested_disable.ys` |
 | an automatic variable or a const cast read on a later tick than the one the attempt was queued on (in the condition of a `disable iff` or an abort, in an operand of `always`, `until` or an eventuality, after a delay or an unbounded repetition, or in a consequent that starts on a later tick) | automatic variable or const cast of non-constant value used past the first tick of an assertion attempt | `liveness/frozen.ys`, `liveness/procedural.ys` |
 | several or incompatible clocks in one property, such as liveness on a second clock or a repeated sequence instance with a clock of its own, and a clock of the assertion other than that of its process | encountered unsupported SVA feature | `liveness/unsupported.ys`, `liveness/procedural.ys` |
-| a temporal monitor with no single clock edge to run on: in `always_comb` or `always @*` with neither a clock of the assertion's own nor a default clocking, or in a process with an asynchronous reset | SVA temporal delay requires exactly one clock edge | `liveness/procedural.ys` |
+| a temporal monitor with no single clock edge to run on: in `always_comb`, `always @*` or `initial` with neither a clock of the assertion's own nor a default clocking, or in a process with an asynchronous reset | SVA temporal delay requires exactly one clock edge | `liveness/procedural.ys` |
 | an action block with effects on a liveness assertion | unsupported statement in assertion action block | `liveness/procedural.ys` |
 
 An automatic variable or a const cast read on the first tick of the attempt,
@@ -421,8 +425,8 @@ with a failing variant next to the passing one:
   eventualities, minimum delays, fairness assumptions, suffix ages and
   overlapping requests;
 - `regular.sby`: the unbounded sequence operators;
-- `procedural.sby`: procedural assertions, guards, `iff` clocking and default
-  clocking;
+- `procedural.sby`: procedural assertions, guards, `iff` clocking, default
+  clocking and the one attempt of an `initial` procedure;
 - `clock_stop.sby`: an `iff` qualified clock that stops for good, or pauses,
   with attempts pending;
 - `sequence.sby`: named sequences, `nexttime` and empty matches;

@@ -148,7 +148,16 @@ for top in \
 	guard_always_pass \
 	guard_always_fail \
 	guard_ranged_always_pass \
-	guard_ranged_always_fail
+	guard_ranged_always_fail \
+	initial_eventually_pass \
+	initial_eventually_fail \
+	initial_single_pass \
+	initial_single_fail \
+	initial_always_fail \
+	initial_always_pass \
+	initial_until_fail \
+	initial_assume_pass \
+	initial_assume_fail
 do
 	yosys -q -m "${plugin}" -p "
 		read_slang ${test_dir}/procedural_proof.sv;

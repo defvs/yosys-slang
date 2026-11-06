@@ -25,6 +25,15 @@ guard_always_pass
 guard_always_fail
 guard_ranged_always_pass
 guard_ranged_always_fail
+initial_eventually_pass
+initial_eventually_fail
+initial_single_pass
+initial_single_fail
+initial_always_fail
+initial_always_pass
+initial_until_fail
+initial_assume_pass
+initial_assume_fail
 
 [options]
 mode live
@@ -41,6 +50,11 @@ iff_response_fail: expect fail
 iff_fair_fail: expect fail
 guard_always_fail: expect fail
 guard_ranged_always_fail: expect fail
+initial_eventually_fail: expect fail
+initial_single_fail: expect fail
+initial_always_fail: expect fail
+initial_until_fail: expect fail
+initial_assume_fail: expect fail
 
 [engines]
 aiger suprove
@@ -98,6 +112,24 @@ guard_ranged_always_pass: read_rtlil guard_ranged_always_pass.il
 guard_ranged_always_pass: prep -top guard_ranged_always_pass
 guard_ranged_always_fail: read_rtlil guard_ranged_always_fail.il
 guard_ranged_always_fail: prep -top guard_ranged_always_fail
+initial_eventually_pass: read_rtlil initial_eventually_pass.il
+initial_eventually_pass: prep -top initial_eventually_pass
+initial_eventually_fail: read_rtlil initial_eventually_fail.il
+initial_eventually_fail: prep -top initial_eventually_fail
+initial_single_pass: read_rtlil initial_single_pass.il
+initial_single_pass: prep -top initial_single_pass
+initial_single_fail: read_rtlil initial_single_fail.il
+initial_single_fail: prep -top initial_single_fail
+initial_always_fail: read_rtlil initial_always_fail.il
+initial_always_fail: prep -top initial_always_fail
+initial_always_pass: read_rtlil initial_always_pass.il
+initial_always_pass: prep -top initial_always_pass
+initial_until_fail: read_rtlil initial_until_fail.il
+initial_until_fail: prep -top initial_until_fail
+initial_assume_pass: read_rtlil initial_assume_pass.il
+initial_assume_pass: prep -top initial_assume_pass
+initial_assume_fail: read_rtlil initial_assume_fail.il
+initial_assume_fail: prep -top initial_assume_fail
 
 [files]
 guard_response_pass: guard_response_pass.il
@@ -126,3 +158,12 @@ guard_always_pass: guard_always_pass.il
 guard_always_fail: guard_always_fail.il
 guard_ranged_always_pass: guard_ranged_always_pass.il
 guard_ranged_always_fail: guard_ranged_always_fail.il
+initial_eventually_pass: initial_eventually_pass.il
+initial_eventually_fail: initial_eventually_fail.il
+initial_single_pass: initial_single_pass.il
+initial_single_fail: initial_single_fail.il
+initial_always_fail: initial_always_fail.il
+initial_always_pass: initial_always_pass.il
+initial_until_fail: initial_until_fail.il
+initial_assume_pass: initial_assume_pass.il
+initial_assume_fail: initial_assume_fail.il
