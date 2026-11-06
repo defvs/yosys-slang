@@ -243,10 +243,90 @@ EOF
 
 design -reset
 
+# $inferred_clock is not resolved to the clock it stands for (IEEE 1800-2017 16.14.7),
+# so it is a clock without an edge, also where the default clocking or the process has one
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module inferred_clock_default(input logic clk, input logic a);
+	default clocking @(posedge clk); endclocking
+	property p(x, ck = $inferred_clock);
+		@(ck) x;
+	endproperty
+	inferred_clock_test: assert property (p(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module inferred_clock_process(input logic clk, input logic a, input logic b);
+	property p(x, ck = $inferred_clock);
+		@(ck) x;
+	endproperty
+	always @(posedge clk)
+		if (b)
+			inferred_clock_test: assert property (p(a));
+endmodule
+EOF
+
+design -reset
+
 test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
 read_slang --allow-dual-edge-ff <<EOF
 module dual_edge_clock(input logic clk, input logic a, input logic b);
 	dual_edge_test: assert property (@(edge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+# A process on both edges of its clock queues attempts on both edges, also for an
+# assertion of a single tick or with a clock of its own
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process(input logic clk, input logic a, input logic b);
+	always @(edge clk)
+		dual_edge_process_test: assert property (a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_single_tick(input logic clk, input logic a);
+	always @(edge clk)
+		dual_edge_single_tick_test: assert property (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_own_clock(input logic clk, input logic en, input logic a,
+								   input logic b);
+	always @(edge clk)
+		if (en)
+			dual_edge_own_clock_test: assert property (@(negedge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
+read_slang --allow-dual-edge-ff <<EOF
+module dual_edge_process_reset(input logic clk, input logic rst, input logic a,
+							   output logic q);
+	always @(edge clk or posedge rst) begin
+		if (rst) begin
+			q <= 0;
+		end else begin
+			q <= a;
+			dual_edge_reset_test: assert property (a);
+		end
+	end
 endmodule
 EOF
 
@@ -285,9 +365,9 @@ design -reset
 
 test_slangdiag -expect "encountered unsupported SVA feature"
 read_slang <<EOF
-module explicit_clock_in_initial(input logic clk, input logic a, input logic b);
-	initial
-		initial_test: assert property (@(posedge clk) a |=> b);
+module explicit_clock_other_edge(input logic clk, input logic a, input logic b);
+	always @(posedge clk)
+		other_edge_test: assert property (@(negedge clk) a |=> b);
 endmodule
 EOF
 
@@ -339,10 +419,11 @@ EOF
 
 design -reset
 
+# An initial procedure has no clock to give, see initial_attempt.sv and
+# initial_own_clock.sv for assertions that take the default clocking or a clock of their own
 test_slangdiag -expect "SVA temporal delay requires exactly one clock edge"
 read_slang <<EOF
 module delay_in_initial(input logic clk, input logic a, input logic b);
-	default clocking @(posedge clk); endclocking
 	initial
 		initial_test: assert property (a |=> b);
 endmodule
@@ -431,5 +512,20 @@ read_slang <<EOF
 module global_clock_rose(input logic clk, input logic a, input logic b);
 	global clocking @(posedge clk); endclocking
 	rose_gclk_test: assert property (@(posedge clk) a |-> $rose_gclk(b));
+endmodule
+EOF
+
+design -reset
+
+# Nor is $inferred_disable resolved to the default disable condition (16.14.7)
+test_slangdiag -expect "unsupported system task '$inferred_disable'"
+read_slang <<EOF
+module inferred_disable(input logic clk, input logic rst, input logic a);
+	default clocking @(posedge clk); endclocking
+	default disable iff rst;
+	property p(x, d = $inferred_disable);
+		disable iff (d) x;
+	endproperty
+	inferred_disable_test: assert property (p(a));
 endmodule
 EOF

@@ -12,9 +12,7 @@ USING_YOSYS_NAMESPACE
 
 struct TestSlangsvaPass : Pass
 {
-	TestSlangsvaPass()
-		: Pass("test_slangsva", "helper pass used by sv-elab SVA support testing")
-	{}
+	TestSlangsvaPass() : Pass("test_slangsva", "helper pass used by sv-elab SVA support testing") {}
 
 	void help() override
 	{

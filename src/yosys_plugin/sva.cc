@@ -733,7 +733,11 @@ public:
 
 	EvalContext &eval;
 
-	explicit SvaFormulas(EvalContext &eval_): eval(eval_) {
+	// With `ticked_constants`, a constant sampled after the first tick of the attempt is
+	// kept as a value of its tick, not folded into the formulas reading it, so that a
+	// prefix takes it for unknown until that tick has come (see early_rejection()). The
+	// logic built for a formula has its constants folded in all the same, see folded().
+	SvaFormulas(EvalContext &eval_, bool ticked_constants_): eval(eval_), ticked_constants(ticked_constants_) {
 		ops.push_back({});
 		ops.push_back({});
 	}
@@ -753,9 +757,10 @@ public:
 		return it->second.first;
 	}
 
-	// The value of `bit` sampled on tick `tick` of the attempt
+	// The value of `bit` sampled on tick `tick` of the attempt. A constant is folded unless
+	// it's kept on its tick, and on the first tick it's known from the start anyway.
 	Node value(ir::Net bit, int64_t tick) {
-		if (bit.is_const())
+		if (bit.is_const() && (!ticked_constants || tick <= 0))
 			return bit == ir::S1 ? True : False;
 
 		auto [it, inserted] = values.emplace(std::make_pair(bit.raw(), tick), (Node) ops.size());
@@ -821,9 +826,60 @@ public:
 		return intern(Op::Mux, sel, a, b);
 	}
 
-	// The number of gates making up `root`, counted up to `limit`
-	size_t gates(Node root, size_t limit) const {
+	// `root` with the constants kept on their ticks folded in, as they are once the
+	// attempt has reached the ticks of the formula. It's the formula that folding them
+	// right away would have given.
+	Node folded(Node root) {
+		if (!ticked_constants)
+			return root;
+
 		std::vector<Node> stack = {root};
+		while (!stack.empty()) {
+			Node node = stack.back();
+			if (is_const(node) || folded_nodes.count(node)) {
+				stack.pop_back();
+				continue;
+			}
+
+			// Folding adds formulas, a reference would dangle
+			const Op op = ops[node];
+			if (op.kind == Op::Value) {
+				folded_nodes[node] = !op.sig.is_const() ? node : op.sig == ir::S1 ? True : False;
+				stack.pop_back();
+				continue;
+			}
+
+			bool ready = true;
+			for (Node operand : {op.a, op.b, op.c}) {
+				if (!is_const(operand) && !folded_nodes.count(operand)) {
+					stack.push_back(operand);
+					ready = false;
+				}
+			}
+			if (!ready)
+				continue;
+			stack.pop_back();
+
+			auto get = [&](Node operand) {
+				return is_const(operand) ? operand : folded_nodes.at(operand);
+			};
+			Node result;
+			switch (op.kind) {
+			case Op::And: result = conj(get(op.a), get(op.b)); break;
+			case Op::Or: result = disj(get(op.a), get(op.b)); break;
+			case Op::Not: result = neg(get(op.a)); break;
+			case Op::Mux: result = mux(get(op.a), get(op.b), get(op.c)); break;
+			case Op::Shifted: result = shifted(get(op.a), op.tick); break;
+			default: assert_invariant(false && "unreachable");
+			}
+			folded_nodes[node] = result;
+		}
+		return is_const(root) ? root : folded_nodes.at(root);
+	}
+
+	// The number of gates making up `root`, counted up to `limit`
+	size_t gates(Node root, size_t limit) {
+		std::vector<Node> stack = {folded(root)};
 		Yosys::pool<Node> seen;
 		size_t count = 0;
 		while (!stack.empty() && count <= limit) {
@@ -841,6 +897,7 @@ public:
 	// Logic for `root` on tick `tick` of the attempt, a tick none of the values it reads
 	// is sampled after
 	ir::Net materialize(Node root, int64_t tick, slang::SourceLocation loc) {
+		root = folded(root);
 		// Formulas get deep, a delay chained over a long range is as deep as the range
 		std::vector<Node> stack = {root};
 		while (!stack.empty()) {
@@ -1057,6 +1114,9 @@ public:
 	// before again on each tick. A formula that's been built on an earlier tick gets
 	// delayed from there instead.
 	std::optional<ir::Net> materialize_prefix(Node root, int64_t tick, slang::SourceLocation loc) {
+		// A prefix on a tick reads the values up to that tick, the constants among them
+		// are known
+		root = folded(root);
 		std::vector<std::pair<Node, int64_t>> stack = {{root, tick}};
 		while (!stack.empty()) {
 			auto [node, at] = stack.back();
@@ -1145,8 +1205,10 @@ private:
 		int64_t last = INT64_MIN;
 	};
 
+	bool ticked_constants;
 	std::vector<Op> ops;
 	Yosys::dict<std::pair<RTLIL::SigBit, int64_t>, Node> values;
+	Yosys::dict<Node, Node> folded_nodes;
 	Yosys::dict<std::tuple<int, Node, Node, Node>, Node> interned;
 	Yosys::dict<std::pair<Node, int64_t>, ir::Net> materialized;
 	std::map<const ast::Expression *, std::pair<ir::Net, bool>> evaluated;
@@ -1479,16 +1541,39 @@ struct AttemptContext {
 
 	// A path of the 1'b1s of a delay, `length` ticks long from tick `tick` of the attempt.
 	// Only the last one counts, as the next boolean in a path sees the disable over the
-	// ticks before it as well.
+	// ticks before it as well. It's sampled on its tick like any other boolean.
 	AssertionMatch true_path(SvaFormulas& f, int64_t tick, int64_t length, slang::SourceLocation loc) const {
-		AssertionMatch path = AssertionMatch(f, SvaFormulas::True, loc).shift(length);
-		if (!dual || (abort == nullptr && !settled))
-			return path;
 		if (settled)
-			return path && AssertionMatch(f, SvaFormulas::False, loc);
+			return AssertionMatch(f, dual ? SvaFormulas::False : SvaFormulas::True, loc).shift(length);
+		AssertionMatch path = AssertionMatch(f, f.value(ir::S1, tick + length), loc).shift(length);
+		if (!dual || abort == nullptr)
+			return path;
 		return path && !abort->span(tick + length, 0, length);
 	}
 };
+
+class HeldCondition;
+
+// Does an operand with these paths from its start never match empty, and match on one
+// tick only?
+static bool one_end(const std::vector<AssertionMatch>& paths) {
+	return !paths.empty() && std::all_of(paths.begin(), paths.end(), [&](const AssertionMatch& path) {
+		return !path.empty && path.start == paths[0].start;
+	});
+}
+
+// Do the paths other than an empty one end on more than one tick?
+static bool many_ends(const std::vector<AssertionMatch>& paths) {
+	std::optional<int64_t> end;
+	for (auto& path : paths) {
+		if (path.empty)
+			continue;
+		if (end.has_value() && *end != path.start)
+			return true;
+		end = path.start;
+	}
+	return false;
+}
 
 // Paths of an operand by the tick it starts on, counted from the start of the operand
 // whose part it is. If the disable came ahead of that tick, the operand gets settled to
@@ -1498,7 +1583,7 @@ class OperandPaths {
 public:
 	using Synthesize = std::function<std::vector<AssertionMatch>(const AttemptContext&, int64_t)>;
 	using SynthesizeAfter = std::function<std::optional<std::vector<AssertionMatch>>(
-			const AttemptContext&, int64_t, const std::vector<AssertionMatch>&)>;
+			const AttemptContext&, int64_t, const std::vector<AssertionMatch>&, HeldCondition*)>;
 
 	// `base` is the tick of the attempt the offsets count from. With `synthesize_after`,
 	// the operand can also be synthesized after paths, see after().
@@ -1511,12 +1596,19 @@ public:
 		return base;
 	}
 
-	// The operand placed on each tick one of `starts` ends on (counted from the base), as
-	// far as that path matched, if it can be synthesized for all these ticks at once
-	std::optional<std::vector<AssertionMatch>> after(const std::vector<AssertionMatch>& starts) {
+	// The matches of the operand other than an empty one, placed on each tick one of
+	// `starts` ends on (counted from the base), as far as that path matched, if they can be
+	// synthesized for all these ticks at once. With `held`, each tick of a match has to
+	// satisfy its condition as well.
+	std::optional<std::vector<AssertionMatch>> after(const std::vector<AssertionMatch>& starts,
+													 HeldCondition* held = nullptr) {
 		if (!synthesize_after)
 			return {};
-		return synthesize_after(ctx, base, starts);
+		return synthesize_after(ctx, base, starts, held);
+	}
+
+	bool can_be_empty() const {
+		return std::any_of(from_start.begin(), from_start.end(), [](const AssertionMatch& path) { return path.empty; });
 	}
 
 	const std::vector<AssertionMatch>& at(int64_t offset) {
@@ -1661,7 +1753,7 @@ static std::vector<AssertionMatch> property_paths(SvaFormulas& f, const AttemptC
 												  slang::SourceLocation loc, int64_t tick) {
 	std::erase_if(paths, [](const AssertionMatch& path) { return path.empty; });
 	if (paths.empty())
-		paths.push_back(ctx.atom(AssertionMatch(f, SvaFormulas::False, loc), tick));
+		paths.push_back(ctx.atom(AssertionMatch(f, f.value(ir::S0, tick), loc), tick));
 	return paths;
 }
 
@@ -1723,6 +1815,171 @@ private:
 	std::vector<AssertionMatch> to_block_end;
 };
 
+// Folds of an associative operation over windows of a width that slide along a run of
+// elements, one to a tick. As with EndWindows, the elements are cut in blocks the width
+// of the windows and folded from the start and from the end of each block, so that a
+// window is the end of a block and the start of the next one. That takes three
+// operations an element at most, however wide the windows.
+template <typename T>
+class SlidingFolds {
+public:
+	using Combine = std::function<T(const T&, const T&)>;
+
+	SlidingFolds(std::vector<T> elements, int64_t width_, Combine combine_): width(width_), combine(std::move(combine_)) {
+		assert_invariant(!elements.empty() && width > 0);
+		int64_t count = elements.size();
+		for (int64_t i = 0; i < count; i++)
+			from_block_start.push_back(i % width == 0 ? elements[i] : combine(from_block_start.back(), elements[i]));
+		std::vector<T> reversed;
+		for (int64_t i = count; i-- > 0;) {
+			bool block_end = i == count - 1 || (i + 1) % width == 0;
+			reversed.push_back(block_end ? elements[i] : combine(elements[i], reversed.back()));
+		}
+		to_block_end.assign(reversed.rbegin(), reversed.rend());
+	}
+
+	// The fold over elements `first` to `last`, a window as wide as the blocks, or cut
+	// short where it reaches past the elements
+	T get(int64_t first, int64_t last) const {
+		first = std::max<int64_t>(first, 0);
+		last = std::min<int64_t>(last, (int64_t) from_block_start.size() - 1);
+		assert_invariant(first <= last && last - first < width);
+		if (first / width != last / width)
+			return combine(to_block_end[first], from_block_start[last]);
+		if (first % width == 0)
+			return from_block_start[last];
+		assert_invariant(last == (int64_t) to_block_end.size() - 1 || (last + 1) % width == 0);
+		return to_block_end[first];
+	}
+
+private:
+	int64_t width;
+	Combine combine;
+	std::vector<T> from_block_start;
+	std::vector<T> to_block_end;
+};
+
+// Over a span of ticks: does one of the paths ending within it have a condition held from
+// there to the end of the span (`from_path`), and does the condition hold on all of it
+// (`held`)? Spans next to each other fold into one, the paths of the later span standing
+// as they are and those of the earlier one if the condition holds on all the later one,
+// so these fold by SlidingFolds. A path counts the condition from its own tick if that's
+// folded into it, or else from the tick after it.
+struct HeldFrom {
+	AssertionMatch from_path;
+	AssertionMatch held;
+
+	static HeldFrom then(const HeldFrom& earlier, const HeldFrom& later) {
+		return { later.from_path || (earlier.from_path && later.held), earlier.held && later.held };
+	}
+};
+
+// The boolean on the left of `throughout`, to be satisfied by every tick of a match of
+// the sequence on the right, together with that of any `throughout` around it. Ticks are
+// counted from the base of the condition's operand.
+class HeldCondition {
+public:
+	HeldCondition(OperandPaths& condition_, HeldCondition* outer_): condition(condition_), outer(outer_) {}
+
+	// The condition on tick `tick`, a path ending there
+	AssertionMatch at(int64_t tick) {
+		auto it = by_tick.find(tick);
+		if (it != by_tick.end())
+			return it->second;
+
+		AssertionMatch now = collapse_or(condition.at(tick)).shift(tick);
+		check_frozen_offset(now, tick);
+		if (outer != nullptr)
+			now = now && outer->at(tick);
+		return by_tick.emplace(tick, now).first->second;
+	}
+
+	// The condition held on each of the ticks `first` to `last`, a path ending on `last`,
+	// or none if there are no such ticks. Spans of a width are cut in blocks of that width
+	// and the condition is held up from the start and down from the end of each block, so
+	// that a span is the end of one block and the start of the next.
+	std::optional<AssertionMatch> over(int64_t first, int64_t last) {
+		if (first > last)
+			return {};
+		int64_t width = last - first + 1;
+		if (width == 1)
+			return at(first);
+
+		auto block = [&](int64_t tick) {
+			return tick >= 0 ? tick / width : -((-tick + width - 1) / width);
+		};
+		auto& from_block_start = blocks[width].first;
+		auto& to_block_end = blocks[width].second;
+		// Held from the start of the block of `tick` up to `tick`, worked out from the
+		// latest tick of the block it's known up to
+		auto up_to = [&](int64_t tick) {
+			int64_t start = block(tick) * width;
+			auto known = from_block_start.upper_bound(tick);
+			int64_t next = start;
+			if (known != from_block_start.begin() && std::prev(known)->first >= start)
+				next = std::prev(known)->first + 1;
+			for (; next <= tick; next++)
+				from_block_start.emplace(next, next == start ? at(next) : from_block_start.at(next - 1) && at(next));
+			return from_block_start.at(tick);
+		};
+		// Held from `tick` to the end of its block, the other way
+		auto down_to = [&](int64_t tick) {
+			int64_t end = block(tick) * width + width - 1;
+			auto known = to_block_end.lower_bound(tick);
+			int64_t next = end;
+			if (known != to_block_end.end() && known->first <= end)
+				next = known->first - 1;
+			for (; next >= tick; next--)
+				to_block_end.emplace(next, next == end ? at(next) : at(next) && to_block_end.at(next + 1));
+			return to_block_end.at(tick);
+		};
+
+		if (block(first) == block(last))
+			return up_to(last);
+		return down_to(first) && up_to(last);
+	}
+
+private:
+	OperandPaths& condition;
+	HeldCondition* outer;
+	std::map<int64_t, AssertionMatch> by_tick;
+	std::map<int64_t, std::pair<std::map<int64_t, AssertionMatch>, std::map<int64_t, AssertionMatch>>> blocks;
+};
+
+// The paths of `b` other than an empty one, placed after each of `starts` on its own, on
+// the tick that start ends on (counted from the base of `b`), each tick of a path
+// satisfying the condition of `held` if given
+static std::vector<AssertionMatch> place_each(const std::vector<AssertionMatch>& starts, OperandPaths& b,
+											  HeldCondition* held) {
+	std::vector<AssertionMatch> paths;
+	for (auto& before : starts) {
+		int64_t tick = before.start;
+		for (auto inner : b.at(tick)) {
+			if (inner.empty)
+				continue;
+			check_frozen_offset(inner, tick);
+			AssertionMatch path = before.shift(inner.start) && inner;
+			if (held != nullptr)
+				path = path && *held->over(tick, tick + inner.start);
+			paths.push_back(path);
+		}
+	}
+	return paths;
+}
+
+// The paths of `b` other than an empty one, placed `first` to `last` ticks after its base,
+// if it has paths ending on several ticks and can be placed after many paths at once.
+// Synthesized again on each of these ticks, `b` would take its gates again on each.
+static std::optional<std::vector<AssertionMatch>> prefix_after(SvaFormulas& f, OperandPaths& b, int64_t first,
+															   int64_t last, slang::SourceLocation loc) {
+	if (first >= last || !many_ends(b.at(0)))
+		return {};
+	std::vector<AssertionMatch> starts;
+	for (int64_t offset = first; offset <= last; offset++)
+		starts.push_back(AssertionMatch(f, SvaFormulas::True, loc).shift(offset));
+	return b.after(starts);
+}
+
 // `a` being synthesized in the context `ctx`
 static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vector<AssertionMatch> a,
 										   int64_t min, int64_t max, OperandPaths& b) {
@@ -1734,8 +1991,19 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 			continue;
 		}
 
-		for (int64_t offset = std::max<int64_t>(min, 1); offset <= max; offset++) {
-			// `empty ##0 seq` has no match
+		// `empty ##N seq` is `##(N-1) seq`, and `empty ##0 seq` has no match
+		int64_t first = std::max<int64_t>(min, 1);
+		if (auto after = prefix_after(path.f, b, first - 1, max - 1, path.loc); after.has_value()) {
+			new_own_paths.insert(new_own_paths.end(), after->begin(), after->end());
+			if (b.can_be_empty()) {
+				// `empty ##N empty` spans N - 1 ticks
+				for (int64_t offset = first; offset <= max; offset++)
+					new_own_paths.push_back(offset == 1 ? path : ctx.true_path(path.f, b.base_tick(), offset - 2, path.loc));
+			}
+			continue;
+		}
+
+		for (int64_t offset = first; offset <= max; offset++) {
 			for (auto inner : b.at(offset - 1)) {
 				if (inner.empty) {
 					// `empty ##N empty` spans N - 1 ticks
@@ -1745,7 +2013,6 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 						new_own_paths.push_back(ctx.true_path(path.f, b.base_tick(), offset - 2, path.loc));
 					continue;
 				}
-				// `empty ##N seq` is `##(N-1) seq`
 				check_frozen_offset(inner, offset - 1);
 				new_own_paths.push_back(AssertionMatch(path.f, SvaFormulas::True, path.loc).shift(offset - 1 + inner.start) && inner);
 			}
@@ -1768,8 +2035,19 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 			starts.push_back(before->shift(tick - before->start));
 	}
 
+	// `seq ##N empty` is `seq ##(N-1) 1'b1`, with no match for `##0`
+	auto empty_on = [&](int64_t tick) {
+		auto nonzero = windows.get(tick - max, tick - std::max<int64_t>(min, 1));
+		if (nonzero.has_value())
+			new_own_paths.push_back(nonzero->shift(tick - 1 - nonzero->start) && ctx.true_path(nonzero->f, b.base_tick(), tick - 1, nonzero->loc));
+	};
+
 	if (auto after = b.after(starts); after.has_value()) {
 		new_own_paths.insert(new_own_paths.end(), after->begin(), after->end());
+		if (b.can_be_empty()) {
+			for (auto& before : starts)
+				empty_on(before.start);
+		}
 		return compress_paths(new_own_paths);
 	}
 
@@ -1777,10 +2055,7 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 		int64_t tick = before.start;
 		for (auto inner : b.at(tick)) {
 			if (inner.empty) {
-				// `seq ##N empty` is `seq ##(N-1) 1'b1`, with no match for `##0`
-				auto nonzero = windows.get(tick - max, tick - std::max<int64_t>(min, 1));
-				if (nonzero.has_value())
-					new_own_paths.push_back(nonzero->shift(tick - 1 - nonzero->start) && ctx.true_path(nonzero->f, b.base_tick(), tick - 1, nonzero->loc));
+				empty_on(tick);
 				continue;
 			}
 			check_frozen_offset(inner, tick);
@@ -1790,9 +2065,61 @@ static std::vector<AssertionMatch> seq_vec(const AttemptContext& ctx, std::vecto
 	return compress_paths(new_own_paths);
 }
 
+// `a` followed by `b` as with seq_vec(), each tick from the end of a path of `a` to the
+// end of `b` satisfying the condition of `held`. None if either can match empty, or if
+// `b` has paths ending on several ticks and can't be placed after many paths at once.
+static std::optional<std::vector<AssertionMatch>> seq_vec_held(std::vector<AssertionMatch> a, int64_t min, int64_t max,
+															   OperandPaths& b, HeldCondition& held) {
+	if (std::any_of(a.begin(), a.end(), [](const AssertionMatch& path) { return path.empty; }) || b.can_be_empty())
+		return {};
+	if (a.empty())
+		return std::vector<AssertionMatch>{};
+
+	// The condition holds on the ticks between a path and the start of `b` as well, so
+	// the windows of paths ending in the range fold it in, from the tick after each path
+	auto ends = compress_paths(a);
+	std::reverse(ends.begin(), ends.end());
+	int64_t first = ends.front().start, last = ends.back().start;
+	std::vector<HeldFrom> elements;
+	size_t next = 0;
+	for (int64_t tick = first; tick <= last + max - min; tick++) {
+		bool ends_here = next < ends.size() && ends[next].start == tick;
+		AssertionMatch path = ends_here ? ends[next++] : AssertionMatch(ends[0].f, SvaFormulas::False, ends[0].loc).shift(tick);
+		elements.push_back({path, held.at(tick)});
+	}
+	SlidingFolds<HeldFrom> windows(elements, max - min + 1, HeldFrom::then);
+	auto by_end = [](const AssertionMatch& path, int64_t tick) { return path.start < tick; };
+	std::vector<AssertionMatch> starts;
+	for (int64_t tick = first + min; tick <= last + max; tick++) {
+		auto in_range = std::lower_bound(ends.begin(), ends.end(), tick - max, by_end);
+		if (in_range == ends.end() || in_range->start > tick - min)
+			continue;
+		AssertionMatch before = windows.get(tick - max - first, tick - min - first).from_path;
+		if (auto between = held.over(tick - min + 1, tick - 1); between.has_value())
+			before = before && *between;
+		starts.push_back(before.shift(tick - before.start));
+	}
+
+	if (auto after = b.after(starts, &held); after.has_value())
+		return compress_paths(*after);
+	if (many_ends(b.at(0)))
+		return {};
+	return compress_paths(place_each(starts, b, &held));
+}
+
 static std::vector<AssertionMatch> seq_prefix_vec(SvaFormulas& f, const AttemptContext& ctx, int64_t min, int64_t max,
 												  OperandPaths& b, slang::SourceLocation loc) {
 	std::vector<AssertionMatch> paths;
+	if (auto after = prefix_after(f, b, min, max, loc); after.has_value()) {
+		paths = *after;
+		if (b.can_be_empty()) {
+			// `##N empty` is `##(N-1) 1'b1`, for N = 0 there's no match
+			for (int64_t offset = std::max<int64_t>(min, 1); offset <= max; offset++)
+				paths.push_back(ctx.true_path(f, b.base_tick(), offset - 1, loc));
+		}
+		return compress_paths(paths);
+	}
+
 	for (int64_t offset = min; offset <= max; offset++) {
 		for (auto inner : b.at(offset)) {
 			if (inner.empty) {
@@ -1853,6 +2180,111 @@ static SvaFormulas::Node cover_disabled_first(SvaFormulas& f, ir::Net disable, i
 	return disabled;
 }
 
+// `operand[*min:max]` placed after `starts`, as with OperandPaths::after().
+//
+// Placed after many paths, a ranged repetition would be synthesized again on each tick,
+// with as many paths each time as its range is wide. For an operand that never matches
+// empty and matches on one tick only, `length` ticks after its start, its copies start
+// `length` ticks apart, so the repetitions starting on the ticks of a class by remainder
+// take the copies on these ticks only, each copy built once. A match whose last copy is
+// on a tick is then a start among a window of copies before it with the operand held on
+// each copy since, which HeldFrom folds over windows the width of the range, and the
+// operand held on the fewest copies after the window. That's a few gates a copy. Each
+// copy reads the disable from `base` on, which is how a repetition placed on its own tick
+// reads it, settled by the disable before that tick.
+//
+// An operand with paths ending on several ticks gets each count of copies placed after
+// the count before, as apply_repetition() does, but after all the starts at once, if it
+// can be placed after many paths at once and never matches empty. None otherwise, or for
+// an operand of one tick repeated a fixed count, which is one path a start.
+static std::optional<std::vector<AssertionMatch>> repetition_after(const AttemptContext& ctx, OperandPaths& operand,
+																   const ast::SequenceRepetition& repetition,
+																   const std::vector<AssertionMatch>& starts,
+																   HeldCondition* held) {
+	if (repetition.kind != ast::SequenceRepetition::Consecutive || !repetition.range.max.has_value())
+		return {};
+	// The fewest copies of a match that isn't empty, the empty match is the caller's
+	int64_t min = std::max<uint32_t>(repetition.range.min, 1), max = repetition.range.max.value();
+	const auto& paths = operand.at(0);
+	if (max < min)
+		return {};
+
+	if (!one_end(paths)) {
+		if (operand.can_be_empty())
+			return {};
+		auto count_paths = operand.after(starts, held);
+		std::vector<AssertionMatch> repeated;
+		for (int64_t count = 1; count_paths.has_value(); count++) {
+			if (count >= min)
+				repeated.insert(repeated.end(), count_paths->begin(), count_paths->end());
+			// No match for this count, none for the counts above
+			if (count == max || count_paths->empty())
+				return repeated;
+			if (held != nullptr)
+				count_paths = seq_vec_held(*count_paths, 1, 1, operand, *held);
+			else
+				count_paths = seq_vec(ctx, *count_paths, 1, 1, operand);
+		}
+		return {};
+	}
+
+	if (min == max)
+		return {};
+	int64_t length = paths[0].start + 1;
+
+	std::map<int64_t, AssertionMatch> by_tick;
+	for (auto& start : starts) {
+		auto [it, inserted] = by_tick.emplace(start.start, start);
+		if (!inserted)
+			it->second = it->second || start;
+	}
+	std::map<int64_t, std::vector<int64_t>> classes;
+	for (auto& [tick, start] : by_tick)
+		classes[(tick % length + length) % length].push_back(tick);
+
+	std::vector<AssertionMatch> matches;
+	for (auto& [remainder, ticks] : classes) {
+		// The copies from the earliest start on, up to the last one of the latest start
+		int64_t first = ticks.front();
+		int64_t count = (ticks.back() - first) / length + max;
+		std::vector<int64_t> start_copies;
+		std::vector<AssertionMatch> copies;
+		std::vector<HeldFrom> elements;
+		for (int64_t i = 0; i < count; i++) {
+			int64_t tick = first + i * length;
+			AssertionMatch copy = collapse_or(operand.at(tick)).shift(tick);
+			check_frozen_offset(copy, tick);
+			if (held != nullptr)
+				copy = copy && *held->over(tick, tick + length - 1);
+			auto start = by_tick.find(tick);
+			if (start != by_tick.end())
+				start_copies.push_back(i);
+			AssertionMatch path = start != by_tick.end() ? start->second && copy
+								  : AssertionMatch(copy.f, SvaFormulas::False, copy.loc).shift(copy.start);
+			elements.push_back({path, copy});
+			copies.push_back(copy);
+		}
+
+		SlidingFolds<HeldFrom> from_starts(elements, max - min + 1, HeldFrom::then);
+		std::optional<SlidingFolds<AssertionMatch>> fewest;
+		if (min > 1)
+			fewest.emplace(copies, min - 1, [](const AssertionMatch& x, const AssertionMatch& y) { return x && y; });
+		// A match with its last copy at `last` started `min` to `max` copies before
+		for (int64_t last = min - 1; last < count; last++) {
+			int64_t latest = last - (min - 1), earliest = last - (max - 1);
+			auto start = std::lower_bound(start_copies.begin(), start_copies.end(), earliest);
+			if (start == start_copies.end() || *start > latest)
+				continue;
+			AssertionMatch match = from_starts.get(earliest, latest).from_path;
+			if (fewest.has_value())
+				match = match && fewest->get(latest + 1, last);
+			int64_t end = first + last * length + length - 1;
+			matches.push_back(match.shift(end - match.start));
+		}
+	}
+	return matches;
+}
+
 // Is the expression a property proper? With `and` and `or` it's enough for one of the
 // operands to be, the other one is then used as a property even if it's a sequence.
 static bool is_property(const ast::AssertionExpr& expr) {
@@ -1874,28 +2306,41 @@ static bool is_property(const ast::AssertionExpr& expr) {
 static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, const AttemptContext& ctx,
 															 const ast::AssertionExpr& expr, int64_t base);
 static const ast::AssertionExpr &unwrap_property_instances(const ast::AssertionExpr &expr);
-static OperandPaths::SynthesizeAfter concat_after(SvaFormulas& f, const ast::AssertionExpr& expr);
+static OperandPaths::SynthesizeAfter sequence_after(SvaFormulas& f, const ast::AssertionExpr& expr);
 
-// The concatenation `sequence` starting on `base`, or else after the paths `starts`, on
-// each tick one of them ends on (counted from `base`), as far as that path matched.
+static OperandPaths::Synthesize synthesize_operand(SvaFormulas& f, const ast::AssertionExpr& expr) {
+	return [&f, &expr](const AttemptContext& at, int64_t tick) {
+		return synthesize_assertion_expr(f, at, expr, tick);
+	};
+}
+
+// The first `count` elements of the concatenation `sequence` starting on `base`, or else
+// after the paths `starts`, on each tick one of them ends on (counted from `base`), as far
+// as that path matched, and then with each tick satisfying the condition of `held` if
+// given.
 //
 // Placed after many paths, a concatenation of ranges would be synthesized again on each
 // tick, with as many paths each time as its ranges are wide. Its elements are placed after
 // the paths instead, as if part of the sequence before, which takes as many paths as there
 // are ticks. That's the same placement: the disable from `base` on settles an element
 // the same way, whether read by the concatenation from its start or by the element, and
-// an element can't be placed past the first tick if it couldn't be before. None if the
-// first element can be empty, as an empty match from a tick has nothing in common with a
-// path ending there.
+// an element can't be placed past the first tick if it couldn't be before.
+//
+// An empty match of a bare first element from a tick has nothing in common with a path
+// ending there, but `empty ##N seq` is `##(N-1) seq`, so the second element gets placed
+// after the starts themselves too, one tick sooner. None if the second element can be
+// empty as well, as the two empty matches leave an empty match where `starts` end, or if
+// an element can't be placed under the condition of `held`.
 static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas& f, const AttemptContext& ctx,
-																	const ast::SequenceConcatExpr& sequence, int64_t base,
-																	const std::vector<AssertionMatch>* starts) {
+																	const ast::SequenceConcatExpr& sequence, size_t count,
+																	int64_t base, const std::vector<AssertionMatch>* starts,
+																	HeldCondition* held) {
+	assert_invariant(held == nullptr || starts != nullptr);
 	std::vector<AssertionMatch> own_paths;
-	for (size_t i = 0; i < sequence.elements.size(); i++) {
+	bool empty_first = false;
+	for (size_t i = 0; i < count; i++) {
 		const auto& element = sequence.elements[i];
-		OperandPaths inner_paths(ctx, base, [&](const AttemptContext& at, int64_t tick) {
-			return synthesize_assertion_expr(f, at, *element.sequence, tick);
-		}, concat_after(f, *element.sequence));
+		OperandPaths inner_paths(ctx, base, synthesize_operand(f, *element.sequence), sequence_after(f, *element.sequence));
 
 		auto delay = element.delay;
 		if (!delay.max.has_value()) {
@@ -1906,12 +2351,38 @@ static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas&
 		// slang gives a bare first element a delay of zero too, which is
 		// not the same as an explicit `##0` if the element can be empty
 		bool bare = !element.delayRange.start().valid();
-		if (i != 0) {
+		if (i == 0 && starts != nullptr && bare && inner_paths.can_be_empty()) {
+			if (held != nullptr || count < 2)
+				return {};
+			empty_first = true;
+		}
+		if (empty_first && i == 1) {
+			if (inner_paths.can_be_empty())
+				return {};
+			own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
+			// `empty ##0 seq` has no match
+			if (delay.max.value() > 0) {
+				auto sooner = seq_vec(ctx, *starts, std::max<int64_t>(delay.min, 1) - 1, delay.max.value() - 1, inner_paths);
+				own_paths.insert(own_paths.end(), sooner.begin(), sooner.end());
+				own_paths = compress_paths(own_paths);
+			}
+			continue;
+		}
+		if (held != nullptr) {
+			std::vector<AssertionMatch> before = own_paths;
+			if (i == 0) {
+				// The tick a start ends on is the first tick of the concatenation
+				before.clear();
+				for (auto& start : *starts)
+					before.push_back(start && held->at(start.start));
+			}
+			auto placed = seq_vec_held(before, delay.min, delay.max.value(), inner_paths, *held);
+			if (!placed.has_value())
+				return {};
+			own_paths = *placed;
+		} else if (i != 0) {
 			own_paths = seq_vec(ctx, own_paths, delay.min, delay.max.value(), inner_paths);
 		} else if (starts != nullptr) {
-			const auto& first = inner_paths.at(0);
-			if (bare && std::any_of(first.begin(), first.end(), [](const AssertionMatch& path) { return path.empty; }))
-				return {};
 			own_paths = seq_vec(ctx, *starts, delay.min, delay.max.value(), inner_paths);
 		} else if (!bare) {
 			own_paths = seq_prefix_vec(f, ctx, delay.min, delay.max.value(), inner_paths, expr_loc(sequence));
@@ -1922,17 +2393,220 @@ static std::optional<std::vector<AssertionMatch>> synthesize_concat(SvaFormulas&
 	return own_paths;
 }
 
-// Synthesis of `expr` after paths, if it's a concatenation, seen through instances of
-// named sequences
-static OperandPaths::SynthesizeAfter concat_after(SvaFormulas& f, const ast::AssertionExpr& expr) {
-	const auto& unwrapped = unwrap_property_instances(expr);
-	if (unwrapped.kind != ast::AssertionExprKind::SequenceConcat)
-		return nullptr;
+// `first_match` of the concatenation `sequence` placed after `starts`, as with
+// OperandPaths::after(), if its last element matches on one tick only, after a range, and
+// those before it end on one tick only, with fixed delays between them. None otherwise.
+//
+// Placed after many paths, it would be synthesized again on each tick, with as many paths
+// each time as the range is wide. Instead, as the elements before the last end once a
+// start, the first match from a start is the first tick within the range from that end
+// that the last element matches on. A match is then an end in a window before it with the
+// last element not matching on any tick since the range began, which HeldFrom folds over
+// windows the width of the range, a few gates a tick. Under the condition of `held`, the
+// condition holds on those ticks too, and on those of the last element. Each element
+// reads the disable from `base` on, which is how `first_match` placed on its own tick
+// reads it, settled by the disable before that tick.
+static std::optional<std::vector<AssertionMatch>> first_match_after(SvaFormulas& f, const AttemptContext& ctx,
+																	const ast::SequenceConcatExpr& sequence, int64_t base,
+																	const std::vector<AssertionMatch>& starts,
+																	HeldCondition* held) {
+	const auto& elements = sequence.elements;
+	const auto& last = elements.back();
+	bool bare = !last.delayRange.start().valid();
+	if (!last.delay.max.has_value() || last.delay.min >= last.delay.max.value() || (elements.size() == 1 && bare))
+		return {};
+	int64_t min = last.delay.min, max = last.delay.max.value();
+	for (size_t i = 0; i + 1 < elements.size(); i++) {
+		const auto& delay = elements[i].delay;
+		if (!delay.max.has_value() || delay.min != delay.max.value())
+			return {};
+		OperandPaths before(ctx, base, synthesize_operand(f, *elements[i].sequence));
+		if (!one_end(before.at(0)))
+			return {};
+	}
+	OperandPaths second(ctx, base, synthesize_operand(f, *last.sequence));
+	if (!one_end(second.at(0)))
+		return {};
+	int64_t length = second.at(0)[0].start + 1;
 
-	const auto& sequence = unwrapped.as<ast::SequenceConcatExpr>();
-	return [&f, &sequence](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts) {
-		return synthesize_concat(f, at, sequence, base, &starts);
+	// The one end of the elements before the last after each start, or the start itself
+	// for a range ahead of the only element
+	std::vector<AssertionMatch> ends = starts;
+	if (elements.size() > 1) {
+		auto placed = synthesize_concat(f, ctx, sequence, elements.size() - 1, base, &starts, held);
+		if (!placed.has_value())
+			return {};
+		ends = *placed;
+	}
+	if (ends.empty())
+		return std::vector<AssertionMatch>{};
+	ends = compress_paths(ends);
+	std::reverse(ends.begin(), ends.end());
+	int64_t first = ends.front().start, latest = ends.back().start;
+	auto by_end = [](const AssertionMatch& path, int64_t tick) { return path.start < tick; };
+
+	// By the first tick of the range from an end: that end, with the condition held since
+	std::vector<AssertionMatch> range_starts;
+	for (int64_t tick = first + min; tick <= latest + max; tick++) {
+		auto end = std::lower_bound(ends.begin(), ends.end(), tick - min, by_end);
+		AssertionMatch range_start = end != ends.end() && end->start == tick - min ? *end
+									 : AssertionMatch(f, SvaFormulas::False, ends[0].loc).shift(tick - min);
+		if (held != nullptr) {
+			if (auto since = held->over(tick - min, tick - 1); since.has_value())
+				range_start = range_start && *since;
+		}
+		range_starts.push_back(range_start);
+	}
+
+	// The last element by the tick it starts on, and the ranges it leaves pending there
+	std::vector<AssertionMatch> matches;
+	std::vector<HeldFrom> pending;
+	for (int64_t tick = first + min; tick <= latest + max; tick++) {
+		AssertionMatch match = collapse_or(second.at(tick)).shift(tick);
+		check_frozen_offset(match, tick);
+		matches.push_back(match);
+		if (tick < latest + max) {
+			AssertionMatch no_match = !match;
+			if (held != nullptr)
+				no_match = no_match && held->at(tick);
+			pending.push_back({range_starts[tick - first - min] && no_match, no_match});
+		}
+	}
+	SlidingFolds<HeldFrom> since_range_start(pending, max - min, HeldFrom::then);
+
+	std::vector<AssertionMatch> results;
+	for (int64_t tick = first + min; tick <= latest + max; tick++) {
+		auto end = std::lower_bound(ends.begin(), ends.end(), tick - max, by_end);
+		if (end == ends.end() || end->start > tick - min)
+			continue;
+		int64_t i = tick - first - min;
+		AssertionMatch earliest = range_starts[i];
+		if (i > 0)
+			earliest = earliest || since_range_start.get(i - (max - min), i - 1).from_path;
+		AssertionMatch match = matches[i];
+		if (held != nullptr)
+			match = match && *held->over(tick, tick + length - 1);
+		AssertionMatch result = match && earliest;
+		results.push_back(result.shift(tick + length - 1 - result.start));
+	}
+	return results;
+}
+
+// The operand of `simple`, a boolean or an instance of a named sequence or property
+static OperandPaths::Synthesize synthesize_simple_operand(SvaFormulas& f, const ast::SimpleAssertionExpr& simple) {
+	return [&f, &simple](const AttemptContext& at, int64_t tick) -> std::vector<AssertionMatch> {
+		if (simple.expr.kind == ast::ExpressionKind::AssertionInstance) {
+			const auto& instance = simple.expr.as<ast::AssertionInstanceExpression>();
+			if (instance.isRecursiveProperty) {
+				f.eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
+				return {};
+			}
+			return synthesize_assertion_expr(f, at, instance.body, tick);
+		}
+		return { at.atom(simple.isNullExpr ? AssertionMatch(f, f.value(ir::S0, tick), expr_loc(simple))
+										   : AssertionMatch::Operand(f, simple.expr, tick, expr_loc(simple)), tick) };
 	};
+}
+
+// Synthesis of `expr` after paths, if it can be placed after many paths at once (see
+// OperandPaths::after()), seen through instances of named sequences. Each of these places
+// an operand once a tick after all the paths ending there, where synthesizing it again on
+// each tick would take its paths again on each.
+static OperandPaths::SynthesizeAfter sequence_after(SvaFormulas& f, const ast::AssertionExpr& expr) {
+	const auto& unwrapped = unwrap_property_instances(expr);
+	switch (unwrapped.kind) {
+	case ast::AssertionExprKind::SequenceConcat: {
+		const auto& sequence = unwrapped.as<ast::SequenceConcatExpr>();
+		return [&f, &sequence](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+							   HeldCondition* held) {
+			return synthesize_concat(f, at, sequence, sequence.elements.size(), base, &starts, held);
+		};
+	}
+	case ast::AssertionExprKind::Simple: {
+		// An instance without a repetition has been seen through
+		const auto& simple = unwrapped.as<ast::SimpleAssertionExpr>();
+		if (!simple.repetition.has_value())
+			return nullptr;
+		return [&f, &simple](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+							 HeldCondition* held) {
+			const ast::AssertionInstanceExpression *instance = nullptr;
+			if (simple.expr.kind == ast::ExpressionKind::AssertionInstance)
+				instance = &simple.expr.as<ast::AssertionInstanceExpression>();
+			OperandPaths operand(at, base, synthesize_simple_operand(f, simple),
+								 instance && !instance->isRecursiveProperty ? sequence_after(f, instance->body) : nullptr);
+			return repetition_after(at, operand, *simple.repetition, starts, held);
+		};
+	}
+	case ast::AssertionExprKind::SequenceWithMatch: {
+		const auto& with_match = unwrapped.as<ast::SequenceWithMatchExpr>();
+		if (!with_match.matchItems.empty())
+			return nullptr;
+		if (!with_match.repetition.has_value())
+			return sequence_after(f, with_match.expr);
+		return [&f, &with_match](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+								 HeldCondition* held) {
+			OperandPaths operand(at, base, synthesize_operand(f, with_match.expr), sequence_after(f, with_match.expr));
+			return repetition_after(at, operand, *with_match.repetition, starts, held);
+		};
+	}
+	case ast::AssertionExprKind::FirstMatch: {
+		const auto& first_match = unwrapped.as<ast::FirstMatchAssertionExpr>();
+		const auto& operand = unwrap_property_instances(first_match.seq);
+		if (!first_match.matchItems.empty() || operand.kind != ast::AssertionExprKind::SequenceConcat)
+			return nullptr;
+		const auto& sequence = operand.as<ast::SequenceConcatExpr>();
+		return [&f, &sequence](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+							   HeldCondition* held) {
+			return first_match_after(f, at, sequence, base, starts, held);
+		};
+	}
+	case ast::AssertionExprKind::Binary: {
+		const auto& biop = unwrapped.as<ast::BinaryAssertionExpr>();
+		if (biop.op == ast::BinaryAssertionOperator::Or && !is_property(biop)) {
+			// Each operand placed after the paths, at once or on each tick if it ends on
+			// one tick only
+			return [&f, &biop](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+							   HeldCondition* held) -> std::optional<std::vector<AssertionMatch>> {
+				OperandPaths left(at, base, synthesize_operand(f, biop.left), sequence_after(f, biop.left));
+				OperandPaths right(at, base, synthesize_operand(f, biop.right), sequence_after(f, biop.right));
+				std::vector<AssertionMatch> both = left.at(0);
+				both.insert(both.end(), right.at(0).begin(), right.at(0).end());
+				if (!many_ends(both))
+					return {};
+
+				std::vector<AssertionMatch> placed;
+				for (auto operand : {&left, &right}) {
+					auto paths = operand->after(starts, held);
+					if (!paths.has_value()) {
+						if (many_ends(operand->at(0)))
+							return {};
+						paths = place_each(starts, *operand, held);
+					}
+					placed.insert(placed.end(), paths->begin(), paths->end());
+				}
+				return placed;
+			};
+		}
+		if (biop.op == ast::BinaryAssertionOperator::Throughout) {
+			// The sequence on the right placed with each tick under the condition
+			return [&f, &biop](const AttemptContext& at, int64_t base, const std::vector<AssertionMatch>& starts,
+							   HeldCondition* held) -> std::optional<std::vector<AssertionMatch>> {
+				OperandPaths condition(at, base, synthesize_operand(f, biop.left));
+				const auto& now = condition.at(0);
+				if (now.empty() || collapse_or(now).start != 0)
+					return {};
+				OperandPaths operand(at, base, synthesize_operand(f, biop.right), sequence_after(f, biop.right));
+				if (!many_ends(operand.at(0)))
+					return {};
+				HeldCondition inner(condition, held);
+				return operand.after(starts, &inner);
+			};
+		}
+		return nullptr;
+	}
+	default:
+		return nullptr;
+	}
 }
 
 // An empty result stands for a sequence with no possible match. Constructs we
@@ -1951,21 +2625,15 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 				const ast::AssertionInstanceExpression *instance = nullptr;
 				if (simple.expr.kind == ast::ExpressionKind::AssertionInstance)
 					instance = &simple.expr.as<ast::AssertionInstanceExpression>();
-				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) -> std::vector<AssertionMatch> {
-					if (instance) {
-						if (instance->isRecursiveProperty) {
-							f.eval.netlist.add_diag(diag::AssertionUnsupported, simple.expr.sourceRange);
-							return {};
-						}
-						return synthesize_assertion_expr(f, at, instance->body, tick);
-					}
-					return { at.atom(simple.isNullExpr ? AssertionMatch(f, SvaFormulas::False, expr_loc(expr))
-													   : AssertionMatch::Operand(f, simple.expr, tick, expr_loc(expr)), tick) };
-				}, instance && !instance->isRecursiveProperty ? concat_after(f, instance->body) : nullptr);
+				OperandPaths operand(ctx, base, synthesize_simple_operand(f, simple),
+									 instance && !instance->isRecursiveProperty ? sequence_after(f, instance->body) : nullptr);
 				return apply_repetition(f, ctx, expr, simple.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::SequenceConcat:
-			return *synthesize_concat(f, ctx, expr.as<ast::SequenceConcatExpr>(), base, nullptr);
+			{
+				const auto& sequence = expr.as<ast::SequenceConcatExpr>();
+				return *synthesize_concat(f, ctx, sequence, sequence.elements.size(), base, nullptr, nullptr);
+			}
 		case slang::ast::AssertionExprKind::Unary:
 			{
 				const auto& uop = expr.as<ast::UnaryAssertionExpr>();
@@ -2204,9 +2872,7 @@ static std::vector<AssertionMatch> synthesize_assertion_expr(SvaFormulas& f, con
 					return {};
 				}
 
-				OperandPaths operand(ctx, base, [&](const AttemptContext& at, int64_t tick) {
-					return synthesize_assertion_expr(f, at, with_match.expr, tick);
-				}, concat_after(f, with_match.expr));
+				OperandPaths operand(ctx, base, synthesize_operand(f, with_match.expr), sequence_after(f, with_match.expr));
 				return apply_repetition(f, ctx, expr, with_match.repetition, operand);
 			}
 		case slang::ast::AssertionExprKind::FirstMatch:
@@ -2267,9 +2933,18 @@ struct AssertionResult {
 // then gets to pick traces the environment rules out, where IEEE Std 1800-2017 section
 // 16.14.2 has the tools constrain the environment so that the property holds. So an
 // assumption gets checked as well on each tick on which what has been sampled of an
-// attempt so far can show it doomed. Each check rules out traces the one on the last
-// tick rules out on any way they go on, and those of an attempt are folded into one
-// cell with it.
+// attempt so far can show it doomed, and those checks are folded into one cell with the
+// one on the last tick.
+//
+// Doomed means no way of going on satisfies the property, and one way is the clock
+// stopping for good: a process clock gated by `iff` can tick no more, and so can any
+// clock in a flow with several clocks. A weak operator whose ticks never come then holds
+// (sections 16.12.10 and 16.12.13), and a weak sequence holds if it can match once the
+// missing ticks are padded with T letters (Annex F.5.3.1), which satisfy every boolean,
+// 1'b0 included. So the prefixes take whatever is sampled on a later tick for unknown,
+// constants too (see SvaFormulas::value()). An unknown stands for T and its dual as well
+// as for any value, so an attempt shown doomed fails whichever way the trace goes on, the
+// clock stopping included, and if it keeps ticking, the check on the last tick fails too.
 //
 // Over many ticks, prefixes can take more merging than the budget for them allows, in
 // proportion to the property, and then the earliest checkpoints are the ones to go. Those
@@ -2292,7 +2967,7 @@ static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net a
 			int64_t tick = std::max<int64_t>(f.prefix_tick(p), 0);
 			if (tick <= exact)
 				break;
-			SvaFormulas::Node value = f.prefix_value(p);
+			SvaFormulas::Node value = f.folded(f.prefix_value(p));
 			if (tick < sig.start && value != SvaFormulas::True)
 				checks.emplace(tick, value);
 			if (tick == 0)
@@ -2309,7 +2984,13 @@ static void early_rejection(SvaFormulas& f, const AssertionMatch& sig, ir::Net a
 	std::optional<ir::Net> a;
 	f.limit_prefix_logic(budget);
 	// The earliest first, those are the ones a check on the last tick misses most
+	Yosys::pool<SvaFormulas::Node> checked;
 	for (auto [tick, value] : checks) {
+		// The same formula on a later tick reads the same samples of the attempt, it can
+		// only fail where the earlier check has failed already. Constants on their ticks
+		// make for many of these.
+		if (!checked.insert(value).second)
+			continue;
 		auto holds = f.materialize_prefix(value, tick, sig.loc);
 		if (!holds.has_value())
 			break;
@@ -2409,6 +3090,9 @@ struct PropertyAborts {
 	// The disable iff of a cover, from which the letters are the dual of T instead (see
 	// eval_assertion())
 	ir::Net cover_disable = ir::S0;
+	// Are the attempts those of an assumption, whose finite parts take the constants on
+	// later ticks for unknown, as eval_assertion() has them (see early_rejection())
+	bool assume = false;
 
 	ir::Net any(EvalContext& eval) const {
 		return eval.netlist.LogicOr(accept, cover_disable);
@@ -2694,8 +3378,9 @@ finite_eventual_candidates(EvalContext& eval, const ast::AssertionExpr& sequence
 		return std::nullopt;
 
 	// The disable is up to the monitor. The operand is used as a property, so an
-	// empty match of it meets nothing. Its matches are those of any attempt.
-	SvaFormulas f(eval);
+	// empty match of it meets nothing. Its matches are those of any attempt, which no
+	// early rejection reads.
+	SvaFormulas f(eval, false);
 	AttemptContext ctx;
 	ctx.late = true;
 	auto paths = property_paths(f, ctx, synthesize_assertion_expr(f, ctx, sequence, 0),
@@ -2764,8 +3449,9 @@ suffix_eventual_candidates(EvalContext& eval,
 		concat.elements[0].delay.max.has_value())
 		return std::nullopt;
 
-	// The disable is up to the monitor. The matches are those of any attempt.
-	SvaFormulas f(eval);
+	// The disable is up to the monitor. The matches are those of any attempt, which no
+	// early rejection reads.
+	SvaFormulas f(eval, false);
 	AttemptContext ctx;
 	ctx.late = true;
 	auto paths = synthesize_assertion_expr(
@@ -2775,9 +3461,8 @@ suffix_eventual_candidates(EvalContext& eval,
 		if (!element.delay.max.has_value() ||
 			assertion_has_unbounded_sequence(*element.sequence))
 			return std::nullopt;
-		OperandPaths element_paths(ctx, 0, [&](const AttemptContext& at, int64_t tick) {
-			return synthesize_assertion_expr(f, at, *element.sequence, tick);
-		}, concat_after(f, *element.sequence));
+		OperandPaths element_paths(ctx, 0, synthesize_operand(f, *element.sequence),
+								   sequence_after(f, *element.sequence));
 		paths = seq_vec(ctx, paths, element.delay.min, element.delay.max.value(),
 						element_paths);
 	}
@@ -2923,7 +3608,8 @@ antecedent_match_event(EvalContext& eval, const ast::AssertionExpr& sequence,
 			return std::nullopt;
 		result = match.value();
 	} else {
-		SvaFormulas f(eval);
+		// The matches start a consequent, they have no early rejection of their own
+		SvaFormulas f(eval, false);
 		AttemptContext ctx;
 		ctx.dual = true;
 		ctx.late = !attempt_tick;
@@ -3424,7 +4110,7 @@ static PropertyResult lower_finite_property_from_trigger(
 	PropertyResult result;
 	slang::SourceLocation loc = expr_loc(expr);
 	// Kept for the early rejection of an assumption, which goes by the formulas
-	auto f = std::make_shared<SvaFormulas>(eval);
+	auto f = std::make_shared<SvaFormulas>(eval, aborts.assume);
 	ir::Net abort = aborts.any(eval);
 	DisableSpans spans(AssertionMatch(*f, f->value(abort, 0), loc), abort);
 	if (admits_empty)
@@ -4365,7 +5051,7 @@ static AssertionResult eval_assertion(EvalContext& eval, const ast::AssertionExp
 		condition = scope->getCompilation().getDefaultDisable(*scope);
 	}
 
-	SvaFormulas f(eval);
+	SvaFormulas f(eval, assume);
 	AttemptContext ctx;
 	std::optional<DisableSpans> spans;
 	if (condition) {
@@ -4476,6 +5162,7 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 	}
 
 	PropertyAborts aborts;
+	aborts.assume = statement.assertionKind == ast::AssertionKind::Assume;
 	if (condition) {
 		ir::Net disable = abort_condition(procedural.eval, *condition);
 		if (statement.assertionKind == ast::AssertionKind::CoverProperty)
@@ -4739,6 +5426,74 @@ static const ast::TimingControl *assertion_clocking(NetlistContext &netlist,
 	return default_clocking ? &default_clocking->as<ast::ClockingBlockSymbol>().getEvent() : nullptr;
 }
 
+// Can the one attempt an initial procedure queues be placed on the first tick of the
+// assertion's clock? Not if the procedure gets to the assertion in a branch it can't tell
+// is taken, or after a timing control that --ignore-timing has it run through.
+static bool initial_attempt_exact(NetlistContext &netlist, const ast::ConcurrentAssertionStatement &statement,
+								  const ProceduralContext &process)
+{
+	bool conditional = false;
+#ifdef SLANG_MUX_LOWERING
+	conditional = process.enabled != ir::S1;
+#else
+	// An `if` on a constant takes its branch right away. The switches left are those of
+	// conditions on unknown values and of `case` statements, and the enable of an initial
+	// procedure doesn't follow them.
+	std::vector<std::pair<const Case *, bool>> stack = {{process.root_case.get(), false}};
+	while (!stack.empty()) {
+		auto [node, switched] = stack.back();
+		stack.pop_back();
+		if (node == process.current_case) {
+			conditional = switched;
+			break;
+		}
+		for (auto switch_ : node->switches)
+			for (auto case_ : switch_->cases)
+				stack.push_back({case_, switched || !switch_->signal.empty()});
+	}
+#endif
+
+	// Any timing control in the procedure, or in a task it calls, as one in a loop can
+	// come before the assertion for all that it's written after it
+	bool timed = false;
+	if (netlist.settings.ignore_timing.value_or(false)) {
+		for (auto &procedure : netlist.process_scope->membersOfType<ast::ProceduralBlockSymbol>()) {
+			if (procedure.procedureKind != ast::ProceduralBlockKind::Initial)
+				continue;
+			bool found = false, has_timing = false;
+			Yosys::pool<const ast::SubroutineSymbol *> called;
+			auto visitor = ast::makeVisitor([&](auto &visitor, const ast::TimedStatement &timed_statement) {
+				has_timing = true;
+				visitor.visitDefault(timed_statement);
+			}, [&](auto &visitor, const ast::AssignmentExpression &assignment) {
+				if (assignment.timingControl)
+					has_timing = true;
+				visitor.visitDefault(assignment);
+			}, [&](auto &visitor, const ast::CallExpression &call) {
+				if (!call.isSystemCall()) {
+					auto subroutine = std::get<const ast::SubroutineSymbol *>(call.subroutine);
+					if (called.insert(subroutine).second)
+						subroutine->getBody().visit(visitor);
+				}
+				visitor.visitDefault(call);
+			}, [&](auto &, const ast::ConcurrentAssertionStatement &assertion) {
+				if (&assertion == &statement)
+					found = true;
+			});
+			procedure.getBody().visit(visitor);
+			// A function with the assertion can be called from more than one procedure
+			if (found && has_timing)
+				timed = true;
+		}
+	}
+
+	if (conditional || timed) {
+		netlist.add_diag(diag::UnsupportedSVAFeature, statement.sourceRange);
+		return false;
+	}
+	return true;
+}
+
 // Lower a concurrent assertion on a clock of its own. In a process the attempts are
 // queued by the code around the assertion, as of the clock tick, outside of one there's
 // an attempt on each tick.
@@ -4760,6 +5515,18 @@ static void process_clocked_sva_property(NetlistContext &netlist,
 		procedure.eval.scope_nest_level = process->eval.scope_nest_level;
 		procedure.inherit_state(*process);
 		attempt = process->case_enable();
+
+		if (process->timing.kind == ProcessTiming::Initial) {
+			// The procedure runs once, at time 0, and queues one attempt, which starts on
+			// the first tick of the clock (16.14.6). Its automatic variables hold
+			// constants, which it keeps on the side.
+			if (!initial_attempt_exact(netlist, statement, *process))
+				return;
+			for (auto [bit, value] : process->initial_locals_state)
+				procedure.vstate.set(VariableBits(bit), ir::Value(value));
+			ir::Value ticked = delay_sva_sample(procedure.eval, ir::S1, 1, ir::S0, expr_loc(expr), "sva_ticked");
+			attempt = netlist.LogicAnd(attempt, netlist.LogicNot(ticked.as_net()));
+		}
 	} else {
 		attempt = procedure.case_enable();
 	}
@@ -4782,9 +5549,22 @@ void process_sva_property(const ast::ConcurrentAssertionStatement &statement,
 	if (!check_instance_realms(netlist, top_expr))
 		return;
 
-	// No clock gets inferred from a process with no edge in its event control. The
-	// branches of an asynchronous reset have none either, but belong to one with an edge.
-	if (procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) {
+	// The clock inferred from `always @(edge clk)`, which --allow-dual-edge-ff lets through,
+	// ticks on both edges (16.14.6), and the registers and checks here take one edge
+	for (auto &trigger : procedural.timing.triggers) {
+		if (trigger.ast_node && ast::SignalEventControl::isKind(trigger.ast_node->kind) &&
+				trigger.ast_node->as<ast::SignalEventControl>().edge == ast::EdgeKind::BothEdges) {
+			auto &diag = netlist.add_diag(diag::BothEdgesUnsupported, statement.sourceRange);
+			diag.addNote(diag::NoteSignalEvent, trigger.ast_node->sourceRange);
+			return;
+		}
+	}
+
+	// No clock gets inferred from a process with no edge in its event control, nor from an
+	// initial procedure. The branches of an asynchronous reset have none either, but belong
+	// to one with an edge.
+	if ((procedural.timing.kind == ProcessTiming::Implicit && procedural.timing_matches_process) ||
+			procedural.timing.kind == ProcessTiming::Initial) {
 		const ast::AssertionExpr *expr = &top_expr;
 		if (auto clocking = assertion_clocking(netlist, expr)) {
 			process_clocked_sva_property(netlist, statement, block, *clocking, *expr, &procedural);

@@ -199,18 +199,6 @@ design -reset
 
 test_slangdiag -expect "unsupported statement in assertion action block"
 read_slang <<EOF
-module task_call(input logic clk, input logic a);
-	task report(input string msg);
-		$error(msg);
-	endtask
-	assert property (@(posedge clk) a) else report("a low");
-endmodule
-EOF
-
-design -reset
-
-test_slangdiag -expect "unsupported statement in assertion action block"
-read_slang <<EOF
 module impure_function(input logic clk, input logic a, output logic [7:0] fails);
 	initial fails = 8'd0;
 	function automatic logic [7:0] count_fail();
@@ -373,5 +361,352 @@ module event_control_action(input logic clk, input logic a);
 	assert property (@(posedge clk) a) else begin
 		@(posedge clk) $display("a low a tick ago");
 	end
+endmodule
+EOF
+
+design -reset
+
+# A hierarchical name reads what the action block leaves in a variable
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_block_variable(input logic clk, input logic a, output logic [7:0] fails);
+	always @(posedge clk) begin : proc
+		assert (a) else begin : on_fail
+			static logic [7:0] n = 8'd0;
+			n = n + 8'd1;
+		end
+	end
+	assign fails = proc.on_fail.n;
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_function_variable(input logic clk, input logic [7:0] a, output logic [7:0] last_bad);
+	function automatic void note(logic [7:0] v);
+		static logic [7:0] last = 8'd0;
+		last = v;
+	endfunction
+	always @(posedge clk)
+		assert (a != 8'd0) else note(a);
+	assign last_bad = note.last;
+endmodule
+EOF
+
+design -reset
+
+# The arguments of a static function are assigned by each call
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module named_function_argument(input logic clk, input logic [7:0] a, output logic [7:0] code);
+	function void report(logic [7:0] v);
+		$error("bad %h", v);
+	endfunction
+	always @(posedge clk) begin
+		assert (a != 8'd0) else report(a);
+		code <= report.v;
+	end
+endmodule
+EOF
+
+design -reset
+
+# Through a handle the assignment is to what the handle points at
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+interface flag_if;
+	logic err;
+endinterface
+
+module virtual_interface_write(input logic clk, input logic a, output logic e);
+	flag_if flags();
+	initial flags.err = 1'b0;
+	always @(posedge clk)
+		assert (a) else begin
+			virtual flag_if vif;
+			vif = flags;
+			vif.err = 1'b1;
+		end
+	assign e = flags.err;
+endmodule
+EOF
+
+design -reset
+
+# A context import can call an exported function assigning the design
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module context_import(input logic clk, input logic a, output logic flag);
+	initial flag = 1'b0;
+	function void set_flag();
+		flag = 1'b1;
+	endfunction
+	export "DPI-C" function set_flag;
+	import "DPI-C" context function void on_error();
+	always @(posedge clk)
+		assert (a) else on_error();
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module intra_assignment_event(input logic clk, input logic a, input logic [7:0] v);
+	always @(posedge clk)
+		assert (a) else begin
+			logic [7:0] x;
+			x = @(negedge clk) v;
+			$error("%h", x);
+		end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module intra_assignment_delay(input logic clk, input logic a, input logic [7:0] v);
+	assert property (@(posedge clk) a) else begin
+		logic [7:0] x;
+		x = #1 v;
+		$error("%h", x);
+	end
+endmodule
+EOF
+
+design -reset
+
+# Variables no hierarchical name refers to are the action block's own, and an import
+# that isn't `context` accesses only its arguments
+read_slang <<EOF
+module unnamed_variables(input logic clk, input logic a, input logic [7:0] v, output logic [7:0] q);
+	import "DPI-C" function int c_hash(input int x, output int y);
+	function automatic void note(logic [7:0] x);
+		static logic [7:0] last = 8'd0;
+		last = x;
+		$error("%h", last);
+	endfunction
+	always @(posedge clk) begin : proc
+		assert (a) else begin : on_fail
+			static logic [7:0] n = 8'd0;
+			int y;
+			n = n + 8'd1;
+			note(v);
+			$error("%0d %0d %0d", n, c_hash(n, y), y);
+		end
+		q <= v;
+	end
+endmodule
+EOF
+select -assert-count 1 t:$check
+
+design -reset
+
+# Leaving out a call matters only for what it assigns: reading a constant table, or a
+# variable the call has filled part by part first, keeps nothing between calls
+read_slang <<EOF
+module stateless_helpers(input logic clk, input logic [1:0] op, input logic [3:0] x);
+	function automatic string op_name(logic [1:0] o);
+		static string names[4] = '{"ADD", "SUB", "AND", "OR"};
+		return names[o];
+	endfunction
+	function automatic logic [7:0] masked(logic [7:0] y);
+		const static logic [7:0] mask = 8'h0f;
+		return y & mask;
+	endfunction
+	function [3:0] swap(input [3:0] y);
+		reg [3:0] t;
+		begin
+			t[1:0] = y[3:2];
+			t[3:2] = y[1:0];
+			swap = t;
+		end
+	endfunction
+	always @(posedge clk) begin
+		assert (op != 2'd3) else $error("unsupported op %s", op_name(op));
+		assert (x != 4'd0) else $error("%h %h", masked({4'd0, x}), swap(x));
+	end
+endmodule
+EOF
+select -assert-count 2 t:$check
+
+design -reset
+
+# What the call leaves in a static variable which it reads before assigning is
+# what the next call reads, also when the variable is assigned in parts on only
+# some paths or by a nonblocking assignment, made after the read
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module partial_fill(input logic clk, input logic a, input logic [3:0] x, output logic [3:0] y);
+	function [3:0] half(input s, input [3:0] v);
+		reg [3:0] t;
+		begin
+			t[1:0] = v[1:0];
+			if (s)
+				t[3:2] = v[3:2];
+			half = t;
+		end
+	endfunction
+	always @(posedge clk) begin
+		y <= half(a, x);
+		assert (a) else $error("%h", half(1'b0, x));
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module nonblocking_state(input logic clk, input logic a, input logic [3:0] x, output logic [3:0] y);
+	function logic [3:0] delayed(logic [3:0] v);
+		logic [3:0] t;
+		t <= v;
+		return t;
+	endfunction
+	always @(posedge clk) begin
+		y <= delayed(x);
+		assert (a) else $error("%h", delayed(x));
+	end
+endmodule
+EOF
+
+design -reset
+
+# Tasks are looked into like functions, and formatting into a string of the action's
+# own or picking a report at random is reporting too
+read_slang <<EOF
+module reporting_tasks(input logic clk, input logic a, input logic [7:0] v);
+	task automatic say(input string msg, input logic [7:0] x);
+		$display("%s %h", msg, x);
+	endtask
+
+	task report(input logic [7:0] x);
+		string s;
+		$sformat(s, "v=%h", x);
+		$error(s);
+	endtask
+
+	task automatic countdown(input int n);
+		if (n > 0) begin
+			$display("%0d", n);
+			countdown(n - 1);
+		end
+	endtask
+
+	task automatic describe(input logic [7:0] x, output string s);
+		s.itoa(x);
+		s.putc(0, "v");
+		$swriteh(s, "%s %h", s, x);
+	endtask
+
+	function automatic int seeded_draw();
+		int seed = 1;
+		return $dist_normal(seed, 0, 3);
+	endfunction
+
+	always @(posedge clk) begin
+		assert (a) else say("a low", v);
+		assert (a) else report(v);
+		assert (a) else countdown(3);
+		assert (a) else begin
+			string s;
+			describe(v, s);
+			$swrite(s, "%s!", s);
+			$error(s);
+		end
+		assert (a) else randcase
+			1: $error("a low");
+			2: $display("a low again");
+		endcase
+		assert (a) else begin
+			int seed;
+			seed = 1;
+			$error("%0d %0d %0d", $dist_uniform(seed, 0, 3), $dist_poisson(seed, 2),
+				   seeded_draw());
+		end
+	end
+
+	always_comb
+		assert #0 (a) else say("a low", v);
+	assert final (a) else say("a low", v);
+	assert property (@(posedge clk) a) else report(v);
+	cover property (@(posedge clk) a) countdown(2);
+endmodule
+EOF
+
+select -assert-count 10 t:$check
+
+design -reset
+
+# A task is still left out with the action block: it may not wait, nor assign
+# anything the design sees
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module waiting_task(input logic clk, input logic a);
+	task automatic later(input string msg);
+		@(negedge clk);
+		$display(msg);
+	endtask
+	always @(posedge clk)
+		assert (a) else later("a low");
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_intra_assignment(input logic clk, input logic a, input logic [7:0] v);
+	task automatic later(input logic [7:0] x);
+		logic [7:0] y;
+		y = #1 x;
+		$display("%h", y);
+	endtask
+	always @(posedge clk)
+		assert (a) else later(v);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_assigns(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	task flag();
+		err = 1'b1;
+	endtask
+	assert property (@(posedge clk) a) else flag();
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module task_output(input logic clk, input logic a, output logic [7:0] n);
+	task automatic give(output logic [7:0] x);
+		x = 8'd1;
+	endtask
+	always @(posedge clk)
+		assert (a) else give(n);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "unsupported statement in assertion action block"
+read_slang <<EOF
+module randcase_assigns(input logic clk, input logic a, output logic err);
+	initial err = 1'b0;
+	always @(posedge clk)
+		assert (a) else randcase
+			1: $error("a low");
+			1: err <= 1'b1;
+		endcase
 endmodule
 EOF

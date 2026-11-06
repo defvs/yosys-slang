@@ -1,0 +1,123 @@
+# The one attempt of an initial procedure starts on the first tick of the assertion's
+# clock, see initial_attempt.sv. With clocks that tick apart, that need not be the
+# first step: here `clk2` can clear `a` before `clk` ticks, and the attempt then fails.
+read_slang <<EOF
+module initial_multiclock(input logic clk, input logic clk2);
+	logic a = 1;
+	always @(posedge clk2)
+		a <= 0;
+
+	default clocking @(posedge clk); endclocking
+	initial
+		first_tick_chk: assert property (a);
+endmodule
+EOF
+
+prep -top initial_multiclock
+clk2fflogic
+chformal -lower
+sat -seq 6 -prove-asserts -set-init-undef -set-def-inputs -falsify
+
+design -reset
+
+# The automatic variables of the procedure are read as they are at the statement, on any
+# tick of the attempt
+read_slang <<EOF
+module initial_automatic(input logic clk, input logic a);
+	default clocking @(posedge clk); endclocking
+	initial begin
+		automatic logic l = 0;
+		l = 1;
+		automatic_chk: assert property (##1 l);
+	end
+endmodule
+EOF
+
+async2sync
+chformal -lower
+prep -top initial_automatic
+sat -tempinduct -prove-asserts -set-init-undef -set-def-inputs -seq 1 -maxsteps 4 -verify
+
+design -reset
+
+# With no clock at all, a single tick is checked once, on the initial values
+read_slang <<EOF
+module initial_no_clock(input logic a);
+	initial
+		no_clock_chk: assert property (a);
+endmodule
+EOF
+
+select -assert-count 1 t:$check r:TRG_WIDTH=0
+
+design -reset
+
+# The enable of an initial procedure doesn't follow a condition on an unknown value, nor
+# a `case` statement
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module initial_unknown_condition(input logic clk, input logic a);
+	logic v;
+	default clocking @(posedge clk); endclocking
+	initial
+		if (v)
+			unknown_condition_chk: assert property (a);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
+module initial_case(input logic clk, input logic a);
+	logic [1:0] m = 1;
+	default clocking @(posedge clk); endclocking
+	initial
+		case (m)
+			1: case_chk: assert property (a);
+			default: ;
+		endcase
+endmodule
+EOF
+
+design -reset
+
+# With --ignore-timing, an initial procedure runs through its timing controls, which
+# would have the attempt start on the wrong tick
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang --ignore-timing <<EOF
+module initial_delay(input logic clk, input logic a);
+	default clocking @(posedge clk); endclocking
+	initial begin
+		@(posedge clk);
+		delay_chk: assert property (a);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang --ignore-timing <<EOF
+module initial_task_delay(input logic clk, input logic a);
+	default clocking @(posedge clk); endclocking
+	task automatic later;
+		#1;
+	endtask
+	initial begin
+		later();
+		task_delay_chk: assert property (a);
+	end
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "iff qualifier not supported in combination with this event"
+read_slang <<EOF
+module initial_default_clocking_iff(input logic clk, input logic en, input logic a);
+	default clocking @(posedge clk iff en); endclocking
+	initial
+		default_iff_chk: assert property (a);
+endmodule
+EOF

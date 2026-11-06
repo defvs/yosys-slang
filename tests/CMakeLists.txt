@@ -43,6 +43,7 @@ set(ALL_TESTS
     sva/comb_default_clocking.ys
     sva/final_assertions.ys
     sva/frozen_past_first_tick.ys
+    sva/initial_attempt.ys
     sva/kept_hierarchy.ys
     sva/large_ranges.ys
     sva/local_variables.ys
@@ -94,6 +95,7 @@ set(ALL_TESTS
     various/readmem.ys
     various/readmem_diag.ys
     various/regress.ys
+    various/specify.ys
     various/stringattrs.ys
     various/stringparams.ys
     various/timescale.ys

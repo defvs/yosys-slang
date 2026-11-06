@@ -34,6 +34,7 @@
 #include "slang/text/SourceLocation.h"
 #include "slang/text/SourceSnippet.h"
 
+#include "driver.h"
 #include "backend_builder.h"
 #include "diag.h"
 #include "slang_frontend.h"
@@ -111,12 +112,6 @@ const std::optional<RTLIL::Const> convert_const_rtlil(
 	if (constval.bad()) {
 		// no diagnostic in this case as we assume one has been raised upstream
 		return {};
-	} else if (constval.isReal()) {
-		netlist.add_diag(diag::UnsupportedBitConversion, loc) << "real"sv;
-		return {};
-	} else if (constval.isShortReal()) {
-		netlist.add_diag(diag::UnsupportedBitConversion, loc) << "shortreal"sv;
-		return {};
 	} else if (constval.isUnbounded()) {
 		netlist.add_diag(diag::UnsupportedBitConversion, loc) << "unbounded symbol"sv;
 		return {};
@@ -152,6 +147,19 @@ const std::optional<RTLIL::Const> convert_const_rtlil(
 		RTLIL::Const ret = convert_svint_rtlil(constval.convertToInt().integer());
 		ret.flags |= RTLIL::CONST_FLAG_STRING;
 		return ret;
+	} else if (constval.isReal()) {
+		slang::real_t real = constval.convertToReal().real();
+		std::string str = std::to_string(real.v);
+		// see https://github.com/YosysHQ/yosys/blob/b8d84f8235d3f04af7ad669fac111740612fe7ba/frontends/verific/verific.cc#L314
+		RTLIL::Const c(str);
+		c.flags |= RTLIL::CONST_FLAG_REAL;
+		return c;
+	} else if (constval.isShortReal()) {
+		slang::shortreal_t shortreal = constval.convertToShortReal().shortReal();
+		std::string str = std::to_string(shortreal.v);
+		RTLIL::Const c(str);
+		c.flags |= RTLIL::CONST_FLAG_REAL;
+		return c;
 	} else if (constval.isNullHandle()) {
 		return {};
 	}
@@ -612,10 +620,11 @@ struct SlangFrontend : Frontend
 
 			global_compilation = &*compilation;
 			HierarchyQueue hqueue;
+			// Checked against the expected diagnostic like those of the netlists
+			slang::Diagnostics program_diags;
 			for (auto instance : compilation->getRoot().topInstances) {
 				if (instance->getDefinition().definitionKind == ast::DefinitionKind::Program) {
-					slang::Diagnostic program_diag(diag::ProgramUnsupported, instance->location);
-					driver.diagEngine.issue(program_diag);
+					program_diags.emplace_back(diag::ProgramUnsupported, instance->location);
 					continue;
 				}
 
@@ -630,6 +639,11 @@ struct SlangFrontend : Frontend
 				log_assert(new_);
 				netlist.backend->canvas->attributes[ID::top] = 1;
 			}
+
+			if (check_diagnostics(driver.diagEngine, program_diags, /*last=*/false))
+				in_succesful_failtest = true;
+			for (auto &program_diag : program_diags)
+				driver.diagEngine.issue(program_diag);
 
 			for (int i = 0; i < (int)hqueue.queue.size(); i++) {
 				NetlistContext &netlist = *hqueue.queue[i];
@@ -762,6 +776,11 @@ struct TestSlangDiagPass : Pass
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-expect" && argidx + 1 < args.size()) {
+				// The next read_slang checks the expectation, one still pending was never
+				// checked
+				if (!expected_diagnostic.empty())
+					log_cmd_error("Expected diagnostic `%s' not checked by any read_slang\n",
+							expected_diagnostic.c_str());
 				std::string message = args[++argidx];
 				if (message.front() == '\"' && message.back() == '\"')
 					message = message.substr(1, message.size() - 2);
@@ -771,6 +790,14 @@ struct TestSlangDiagPass : Pass
 			break;
 		}
 		extra_args(args, argidx, design, false);
+	}
+
+	// Also at the end of the script, which test_slangdiag may not end
+	void on_shutdown() override
+	{
+		if (!expected_diagnostic.empty())
+			log_error("Expected diagnostic `%s' not checked by any read_slang\n",
+					expected_diagnostic.c_str());
 	}
 } TestSlangDiagPass;
 

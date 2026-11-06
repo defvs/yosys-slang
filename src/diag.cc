@@ -126,8 +126,6 @@ DiagCode UnsupportedSystemTask(DiagSubsystem::Netlist, 1074);
 DiagCode UnsupportedSVAFeature(DiagSubsystem::Netlist, 1075);
 DiagCode RepetitionsUnsupported(DiagSubsystem::Netlist, 1076);
 DiagCode SVAClockingRequiresEdge(DiagSubsystem::Netlist, 1077);
-DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1090);
-DiagCode SVAFrozenValueAfterFirstTick(DiagSubsystem::Netlist, 1091);
 DiagCode ErrorNonconstantArgument(DiagSubsystem::Netlist, 1078);
 DiagCode ReadmemFileNotFound(DiagSubsystem::Netlist, 1079);
 DiagCode ReadmemInvalidAddress(DiagSubsystem::Netlist, 1080);
@@ -140,30 +138,80 @@ DiagCode HighImpedanceUnsupported(DiagSubsystem::Netlist, 1086);
 DiagCode IfacePortUnsupported(DiagSubsystem::Netlist, 1087);
 DiagCode OptionRequiresStandaloneSlang(DiagSubsystem::Netlist, 1088);
 DiagCode NoteModuleNotDissolvedBecauseInOut(DiagSubsystem::Netlist, 1089);
-DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1092);
-DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1093);
-DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1094);
-DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1095);
-DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1096);
-DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1097);
-DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1098);
-DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1099);
-DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1100);
-DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1101);
-DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1102);
-DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1103);
-DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1104);
-DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1105);
-DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1106);
-DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1107);
+DiagCode InvalidSpecifyTimingLimit(DiagSubsystem::Netlist, 1090);
+DiagCode InvalidSpecifyDelayCount(DiagSubsystem::Netlist, 1091);
+DiagCode SpecifyExtraDelaysIgnored(DiagSubsystem::Netlist, 1092);
+DiagCode SpecifyParallelWidthMismatch(DiagSubsystem::Netlist, 1093);
+DiagCode SpecifyRuleUnsupported(DiagSubsystem::Netlist, 1094);
+DiagCode SpecifyRuleArgumentsUnsupported(DiagSubsystem::Netlist, 1095);
+DiagCode SpecifyRuleMissingArgument(DiagSubsystem::Netlist, 1096);
+DiagCode SpecifyRuleEdgeUnsupported(DiagSubsystem::Netlist, 1097);
+
+// The SVA codes start at 1200, apart from the ones above, which are taken in
+// sequence: codes added to the sequence on another branch in the meantime
+// cannot take their numbers. setup_messages() fails on a number used twice.
+DiagCode SVATemporalDelayRequiresClock(DiagSubsystem::Netlist, 1200);
+DiagCode SVAFrozenValueAfterFirstTick(DiagSubsystem::Netlist, 1201);
+DiagCode ClockVarUnsupported(DiagSubsystem::Netlist, 1202);
+DiagCode ActionBlockUnsupported(DiagSubsystem::Netlist, 1203);
+DiagCode FinalAssertionUnsupported(DiagSubsystem::Netlist, 1204);
+DiagCode CheckerUnsupported(DiagSubsystem::Netlist, 1205);
+DiagCode SVACallSideEffect(DiagSubsystem::Netlist, 1206);
+DiagCode SVACallKeepsState(DiagSubsystem::Netlist, 1207);
+DiagCode NoteAssertionInFunction(DiagSubsystem::Netlist, 1208);
+DiagCode SVACallAssignsNamedVariable(DiagSubsystem::Netlist, 1209);
+DiagCode NoteActionBlockEffect(DiagSubsystem::Netlist, 1210);
+DiagCode SVALivenessAcceptanceUnsupported(DiagSubsystem::Netlist, 1211);
+DiagCode SVAMatchItemsUnsupported(DiagSubsystem::Netlist, 1212);
+DiagCode SVATemporalCoverUnsupported(DiagSubsystem::Netlist, 1213);
+DiagCode SVARejectOnUnsupported(DiagSubsystem::Netlist, 1214);
+DiagCode SVAVacuousCoverUnsupported(DiagSubsystem::Netlist, 1215);
+DiagCode SVAWeakSequenceUnsupported(DiagSubsystem::Netlist, 1216);
+DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1217);
+DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1218);
+DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1219);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
 				IfElseAloadPolarity, IfElseAloadMismatch, UnsynthesizableFeature});
 DiagGroup sanity("sanity", {EdgeImplicitMixing});
 
-void setup_messages(slang::DiagnosticEngine &engine)
+namespace {
+
+// Two codes of a subsystem with the same number are one code to slang, and the
+// message and severity set last would apply to both. The numbers are picked by
+// hand, so check that each is set up once rather than issue the wrong text or
+// severity.
+class UniqueMessages
 {
+public:
+	UniqueMessages(DiagnosticEngine &engine) : engine(engine) {}
+
+	void setMessage(DiagCode code, const std::string &message)
+	{
+		if (!codes.insert(code).second) {
+			std::string condition =
+					"diagnostic code " + std::to_string(code.getCode()) + " set up once";
+			error_(__FILE__, __LINE__, condition.c_str());
+		}
+		engine.setMessage(code, message);
+	}
+
+	void setSeverity(DiagCode code, DiagnosticSeverity severity)
+	{
+		engine.setSeverity(code, severity);
+	}
+
+private:
+	DiagnosticEngine &engine;
+	std::set<DiagCode> codes;
+};
+
+} // namespace
+
+void setup_messages(slang::DiagnosticEngine &slang_engine)
+{
+	UniqueMessages engine(slang_engine);
 	// clang-format off
 	engine.setMessage(IffUnsupported, "iff qualifier not supported in combination with this event");
 	engine.setMessage(SignalSensitivityAmbiguous, "non-edge sensitivity on a signal will be synthesized as @* sensitivity");
@@ -430,6 +478,30 @@ void setup_messages(slang::DiagnosticEngine &engine)
 	engine.setMessage(OptionRequiresStandaloneSlang, "option '{}' unsupported; please use standalone slang instead");
 	engine.setSeverity(OptionRequiresStandaloneSlang, DiagnosticSeverity::Error);
 
+	engine.setMessage(InvalidSpecifyTimingLimit, "invalid specify timing limit");
+	engine.setSeverity(InvalidSpecifyTimingLimit, DiagnosticSeverity::Error);
+	
+	engine.setMessage(InvalidSpecifyDelayCount, "specify delays require 1, 2, 3, 6, or 12 elements; got {}");
+	engine.setSeverity(InvalidSpecifyDelayCount, DiagnosticSeverity::Error);
+	
+	engine.setMessage(SpecifyExtraDelaysIgnored, "path delay expressions beyond rise/fall are not supported and will be ignored");
+	engine.setSeverity(SpecifyExtraDelaysIgnored, DiagnosticSeverity::Warning);
+	
+	engine.setMessage(SpecifyParallelWidthMismatch, "parallel specify source width ({}) does not match destination width ({})");
+	engine.setSeverity(SpecifyParallelWidthMismatch, DiagnosticSeverity::Error);
+	
+	engine.setMessage(SpecifyRuleUnsupported, "unsupported specify rule type '{}'");
+	engine.setSeverity(SpecifyRuleUnsupported, DiagnosticSeverity::Error);
+	
+	engine.setMessage(SpecifyRuleArgumentsUnsupported, "unsupported arguments for specify rule '{}'");
+	engine.setSeverity(SpecifyRuleArgumentsUnsupported, DiagnosticSeverity::Error);
+	
+	engine.setMessage(SpecifyRuleMissingArgument, "missing argument for specify rule '{}'");
+	engine.setSeverity(SpecifyRuleMissingArgument, DiagnosticSeverity::Error);
+	
+	engine.setMessage(SpecifyRuleEdgeUnsupported, "unsupported edge for specify rule '{}'");
+	engine.setSeverity(SpecifyRuleEdgeUnsupported, DiagnosticSeverity::Error);
+
 	engine.setMessage(ClockVarUnsupported, "clocking block signals unsupported");
 	engine.setSeverity(ClockVarUnsupported, DiagnosticSeverity::Error);
 
@@ -449,6 +521,11 @@ void setup_messages(slang::DiagnosticEngine &engine)
 
 	engine.setMessage(SVACallKeepsState, "function called in a concurrent assertion may read state left by an earlier call");
 	engine.setSeverity(SVACallKeepsState, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVACallAssignsNamedVariable, "function called in a concurrent assertion assigns a variable a hierarchical name refers to");
+	engine.setSeverity(SVACallAssignsNamedVariable, DiagnosticSeverity::Error);
+	engine.setMessage(NoteActionBlockEffect, "called subroutine does this");
+	engine.setSeverity(NoteActionBlockEffect, DiagnosticSeverity::Note);
 	// clang-format on
 }
 }; // namespace diag

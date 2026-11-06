@@ -731,6 +731,11 @@ struct NetlistContext : GraphBuilder, public DiagnosticIssuer {
 	bool is_inferred_memory(const ast::Symbol &symbol);
 	bool is_inferred_memory(const ast::Expression &expr);
 
+	// Is the symbol named by a hierarchical reference anywhere in `realm`? The
+	// references get collected on the first call.
+	std::optional<hashlib::pool<const ast::Symbol *>> hierarchical_targets;
+	bool named_hierarchically(const ast::Symbol &symbol);
+
 	bool is_blackbox(const ast::DefinitionSymbol &sym, slang::Diagnostic *why_blackbox=nullptr);
 	bool should_dissolve(const ast::InstanceSymbol &sym, slang::Diagnostic *why_not_dissolved=nullptr);
 	std::vector<const ast::InstanceSymbol *> collect_nondissolved_instances();

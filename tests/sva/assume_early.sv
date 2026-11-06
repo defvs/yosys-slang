@@ -74,11 +74,17 @@ module assume_early(input clk_i, input logic a, input logic b, input logic c, in
 		// The negated implication fails without `a`, but with `a` it waits for `c`
 		not_implication_ref: assume(a && !(gate1 && !(a_d1 && !(b_d1 && c))));
 
-		// A consequent with no match rejects on the tick of the antecedent, before the
-		// tick the attempt ends on
-		no_match_ref: assume(!a && !(gate1 && a_d1));
-		only_empty_ref: assume(!a && !(gate1 && a_d1));
-		constant_ref: assume(!a && !(gate2 && a_d2));
+		// A constant, or a sequence with no match, is read on its tick like any other
+		// boolean. The clock can stop for good before that tick, and the property then
+		// holds, so an attempt is rejected on that tick at the earliest.
+		no_match_ref: assume(!(gate1 && a_d1));
+		only_empty_ref: assume(!(gate1 && a_d1));
+		constant_ref: assume(!(gate2 && a_d2));
+		nexttime_constant_ref: assume(!(gate2 && a_d2));
+		not_strong_ref: assume(!(gate2 && a_d2));
+		or_constant_ref: assume(!(gate2 && a_d2 && !b_d1));
+		// A failure on a value sampled already is rejected on its tick still
+		real_then_constant_ref: assume(!(a && !b) && !(gate2 && a_d2));
 
 		gate1 <= 1;
 		gate2 <= gate1;
@@ -122,4 +128,26 @@ module assume_early(input clk_i, input logic a, input logic b, input logic c, in
 	no_match_test: assume property (@(posedge clk_i) a |=> 1'b0[*0:1]);
 	only_empty_test: assume property (@(posedge clk_i) a ##1 1'b1 |-> 1'b0[*0]);
 	constant_test: assume property (@(posedge clk_i) a |-> ##2 1'b0);
+	nexttime_constant_test: assume property (@(posedge clk_i) a |-> nexttime [2] 1'b0);
+	not_strong_test: assume property (@(posedge clk_i) a |-> not s_nexttime [2] 1'b1);
+	or_constant_test: assume property (@(posedge clk_i) a |-> (nexttime b) or (nexttime [2] 1'b0));
+	real_then_constant_test: assume property (@(posedge clk_i) a |-> b ##2 1'b0);
+
+	// The ticks of a process with an `iff` guard are those with the guard high, and the
+	// guard can stay low for good
+	reg iff_gate1 = 0, iff_gate2 = 0;
+	reg iff_a_d1, iff_a_d2, iff_b_d1;
+	always @(posedge clk_i iff en) begin
+		iff_constant_ref: assume(!(iff_gate2 && iff_a_d2));
+		iff_real_ref: assume(!(a && !b) && !(iff_gate1 && iff_a_d1 && !(iff_b_d1 && c)));
+
+		iff_gate1 <= 1;
+		iff_gate2 <= iff_gate1;
+		iff_a_d1 <= a;
+		iff_a_d2 <= iff_a_d1;
+		iff_b_d1 <= b;
+
+		iff_constant_test: assume property (a |-> nexttime [2] 1'b0);
+		iff_real_test: assume property (a |-> b ##1 c);
+	end
 endmodule

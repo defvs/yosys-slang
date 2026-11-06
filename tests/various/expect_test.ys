@@ -1,3 +1,4 @@
+test_slangdiag -expect "expect statement will not be synthesized"
 read_slang <<EOF
 module expect_test(input logic clk, input logic a, input logic b, input logic c, output logic q);
     logic i;
@@ -8,5 +9,3 @@ module expect_test(input logic clk, input logic a, input logic b, input logic c,
     end
 endmodule
 EOF
-
-test_slangdiag -expect "expect statement will not be synthesized"

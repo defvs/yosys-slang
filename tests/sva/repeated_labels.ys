@@ -55,3 +55,57 @@ EOF
 select -assert-count 2 t:$check
 select -assert-count 1 t:$check n:f.function_label %i
 select -assert-count 1 t:$check n:f.function_label_1 %i
+
+design -reset
+
+# A name has the path of the scopes the statement is in, an unnamed scope with
+# declarations of its own showing as an internal $N
+read_slang <<EOF
+package pkg;
+	function automatic logic pf(logic x);
+		package_label: assert (x);
+		return x;
+	endfunction
+endpackage
+
+module scope_sub(input logic clk, input logic a);
+	sub_label: assert property (@(posedge clk) a);
+endmodule
+
+module scope_prefixes(input logic clk, input logic a, output logic p);
+	always_ff @(posedge clk) begin : blk
+		block_label: assert property (a);
+	end
+	always_ff @(posedge clk)
+		for (int i = 0; i < 2; i++)
+			loop_scope_label: assert property (a);
+	always_ff @(posedge clk) begin
+		logic t;
+		t = a;
+		declaring_label: assert (t);
+	end
+	always_ff @(posedge clk) begin
+		plain_block_label: assert property (a);
+	end
+	always_ff @(posedge clk) begin : sole
+		assert property (a);
+	end
+	for (genvar g = 0; g < 2; g++) begin : gen
+		generate_label: assert property (@(posedge clk) a);
+	end
+	scope_sub u(.clk, .a);
+	assign p = pkg::pf(a);
+endmodule
+EOF
+
+select -assert-count 10 t:$check
+select -assert-count 1 t:$check n:blk.block_label %i
+select -assert-count 1 t:$check n:$*.loop_scope_label %i
+select -assert-count 1 t:$check n:$*.loop_scope_label_1 %i
+select -assert-count 1 t:$check n:$*.declaring_label %i
+select -assert-count 1 t:$check n:plain_block_label %i
+select -assert-count 1 t:$check n:sole %i
+select -assert-count 1 t:$check n:gen[0].generate_label %i
+select -assert-count 1 t:$check n:gen[1].generate_label %i
+select -assert-count 1 t:$check n:u.sub_label %i
+select -assert-count 1 t:$check n:$root.pkg.pf.package_label %i

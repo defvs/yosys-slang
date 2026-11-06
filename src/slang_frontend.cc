@@ -35,6 +35,7 @@
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/ValuePath.h"
 #include "slang/ast/expressions/AssertionExpr.h"
 #include "slang/ast/expressions/AssignmentExpressions.h"
 #include "slang/ast/expressions/CallExpression.h"
@@ -69,6 +70,8 @@
 #include "slang/util/Util.h"
 
 #ifndef SLANG_NO_YOSYS
+#include "yosys_plugin/driver.h"
+
 #include "kernel/yosys_common.h"
 #include "kernel/log.h"
 #include "kernel/bitpattern.h"
@@ -1312,6 +1315,25 @@ static bool is_random_function(std::string_view name)
 	return functions.count(name);
 }
 
+// System tasks formatting into their first argument (IEEE Std 1800-2017 section 21.3.3)
+static bool is_string_output_task(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> tasks = {
+		"$sformat", "$swrite", "$swriteb", "$swriteh", "$swriteo",
+	};
+	return tasks.count(name);
+}
+
+// Methods of the string type changing the string (section 6.16), all of it except
+// for putc
+static bool is_string_mutator(std::string_view name)
+{
+	static const std::unordered_set<std::string_view> methods = {
+		"putc", "itoa", "hextoa", "octtoa", "bintoa", "realtoa",
+	};
+	return methods.count(name);
+}
+
 // System functions and methods that only compute a value. Some of the names are also
 // those of associative array methods writing their index argument, slang marks those
 // as having output arguments.
@@ -1339,32 +1361,62 @@ static bool is_pure_function(const ast::CallExpression::SystemCallInfo &info)
 
 // Finds the first thing a piece of code does that can be seen from outside of it: an
 // assignment to a variable that isn't its own, or a call of something that can make one
-// or do more than report. In a subroutine it is also a read of one of its static
-// variables before the call has assigned it, as that reads state kept from an earlier
-// call. Every path through the code counts, conditions don't get evaluated.
+// or do more than report. In a subroutine it is also an assignment to one of its static
+// variables which some path reads before the call has assigned it, as a later call
+// would read what this one left there. Every path through the code counts, conditions
+// don't get evaluated.
 //
 // That is for an action block, which we leave out, and the subroutines it calls. For an
 // expression of a concurrent assertion, and the functions it calls, only assignments and
 // kept state are looked for: we lower those functions like any other, which reports any
-// system subroutine or statement there is no lowering for.
+// system subroutine or statement there is no lowering for. There the read of state an
+// earlier call left counts itself, as does a read of a static variable of a function the
+// call runs in.
+//
+// An assignment to a variable of our own which a hierarchical name refers to, as in
+// `blk.n` or `f.k`, counts in both: the name reads what the code leaves there, which
+// goes missing with an action block, and which a function lowered as part of an
+// assertion doesn't leave where the design looks.
 struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		ast::VisitFlags::Statements | ast::VisitFlags::Expressions>
 {
+	enum class EffectKind {
+		// An assignment to a variable that isn't own, or anything else
+		Other,
+		// A read of what an earlier call left in a static variable
+		KeepsState,
+		// An assignment to an own variable which a hierarchical name refers to
+		NamedVariable,
+	};
+
 	struct Effect {
 		slang::SourceRange range;
-		bool keeps_state;
+		EffectKind kind;
+		// For an effect of a call, where it is in the called subroutine
+		std::optional<slang::SourceRange> in_callee;
+	};
+
+	// What we know about a subroutine once its body has been looked into. A static
+	// variable of another subroutine read in it, as in `f.k`, holds what the last call of
+	// that subroutine left there. Whether that was a call this one runs in depends on
+	// who calls it, so those reads go to the callers: the one owning the variable checks
+	// the read like one of its own, at the call.
+	struct Summary {
+		std::optional<Effect> effect;
+		hashlib::dict<const ast::Symbol *, slang::SourceRange> foreign_reads;
 	};
 
 	// The subroutines being looked into, and what was found in those done
 	struct Calls {
 		std::vector<const ast::SubroutineSymbol *> stack;
-		hashlib::dict<const ast::SubroutineSymbol *, std::optional<Effect>> done;
+		hashlib::dict<const ast::SubroutineSymbol *, Summary> done;
 	};
 
 	// The static variables of the subroutine which every path so far has assigned,
-	// unless no path gets here
+	// unless no path gets here, and the bits of those with only some bits assigned
 	struct Flow {
 		hashlib::pool<const ast::Symbol *> assigned;
+		hashlib::dict<const ast::Symbol *, std::vector<bool>> bits;
 		bool unreachable = false;
 	};
 
@@ -1382,6 +1434,11 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	bool top_level = false;
 	const ast::Statement *current_statement = nullptr;
 	std::optional<Effect> effect;
+	hashlib::dict<const ast::Symbol *, slang::SourceRange> foreign_reads;
+	// For an action block, the static variables of the subroutine read before every path
+	// had assigned them, and those it assigns anywhere
+	std::vector<std::pair<const ast::Symbol *, slang::SourceRange>> carried;
+	hashlib::dict<const ast::Symbol *, slang::SourceRange> written;
 
 	EffectFinder(NetlistContext &netlist, bool for_assertion)
 		: netlist(netlist), for_assertion(for_assertion), calls(own_calls) {}
@@ -1390,14 +1447,15 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				 const ast::SubroutineSymbol &subroutine)
 		: netlist(netlist), for_assertion(for_assertion), calls(calls), subroutine(&subroutine) {}
 
-	void found(slang::SourceRange range, bool keeps_state = false)
+	void found(slang::SourceRange range, EffectKind kind = EffectKind::Other,
+			   std::optional<slang::SourceRange> in_callee = {})
 	{
 		if (effect)
 			return;
 		// What gets left out of an action block is a statement, point at that
 		if (!for_assertion && !subroutine && current_statement)
 			range = current_statement->sourceRange;
-		effect = Effect{range, keeps_state};
+		effect = Effect{range, kind, in_callee};
 	}
 
 	static Flow meet(const Flow &a, const Flow &b)
@@ -1410,6 +1468,22 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		for (auto symbol : a.assigned)
 			if (b.assigned.count(symbol))
 				ret.assigned.insert(symbol);
+		// A variable has the bits assigned both ways, taking all of them for one
+		// assigned whole
+		for (auto &[symbol, bits] : a.bits) {
+			if (b.assigned.count(symbol)) {
+				ret.bits[symbol] = bits;
+			} else if (b.bits.count(symbol)) {
+				const auto &other = b.bits.at(symbol);
+				std::vector<bool> both(bits.size());
+				for (size_t i = 0; i < bits.size(); i++)
+					both[i] = bits[i] && other[i];
+				ret.bits[symbol] = both;
+			}
+		}
+		for (auto &[symbol, bits] : b.bits)
+			if (a.assigned.count(symbol))
+				ret.bits[symbol] = bits;
 		return ret;
 	}
 
@@ -1417,11 +1491,23 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 	{
 		// The call assigns the arguments passed in before it runs the body
 		for (auto arg : subroutine->getArguments())
-			if (arg->direction != ast::ArgumentDirection::Out)
+			if (arg->direction != ast::ArgumentDirection::Out) {
+				if (netlist.named_hierarchically(*arg))
+					found(slang::SourceRange(arg->location, arg->location + arg->name.size()),
+						  EffectKind::NamedVariable);
 				flow.assigned.insert(arg);
+			}
 		statement(subroutine->getBody());
 		leave(slang::SourceRange(subroutine->location,
 								 subroutine->location + subroutine->name.size()), false);
+
+		// Leaving out a call reads nothing, what matters is that it changes what a later
+		// call reads
+		for (auto &[symbol, range] : carried)
+			if (written.count(symbol)) {
+				found(written.at(symbol), EffectKind::KeepsState);
+				break;
+			}
 	}
 
 	// Leaving the subroutine reads its output arguments, and its return value unless a
@@ -1437,11 +1523,56 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void read(const ast::Symbol &symbol, slang::SourceRange range)
 	{
-		if (!subroutine || flow.unreachable || !ast::VariableSymbol::isKind(symbol.kind))
+		if (!subroutine || flow.unreachable || !ast::VariableSymbol::isKind(symbol.kind) ||
+				symbol.as<ast::VariableSymbol>().lifetime != ast::VariableLifetime::Static)
 			return;
-		if (symbol.as<ast::VariableSymbol>().lifetime == ast::VariableLifetime::Static &&
-				owning_subroutine(symbol) == subroutine && !flow.assigned.count(&symbol))
-			found(range, true);
+		auto owner = owning_subroutine(symbol);
+		if (owner == subroutine) {
+			// A call in an assertion we lower, there it matters what the read gives.
+			// Reading a static variable no call assigns would give its initial value,
+			// but slang skips those initializers where it folds a call with constant
+			// arguments.
+			if (flow.assigned.count(&symbol))
+				return;
+			if (for_assertion)
+				found(range, EffectKind::KeepsState);
+			else
+				carried.push_back({&symbol, range});
+		} else if (owner && for_assertion && !foreign_reads.count(&symbol)) {
+			// Whether a call of the owner runs around this one depends on the callers,
+			// which check the read at their calls. At the top of the assertion none
+			// runs, the read is of a sampled value there.
+			foreign_reads[&symbol] = range;
+		}
+	}
+
+	// An assignment to a part of a static variable of the subroutine, made on each path
+	// reaching it. Parts selected by constants add up, and once they cover the variable
+	// it is assigned whole.
+	void assign_part(const ast::Expression &expr)
+	{
+		if (!subroutine || flow.unreachable || effect)
+			return;
+		ast::ValuePath path(expr, netlist.eval.const_);
+		auto root = path.rootSymbol();
+		if (!root || !path.isFullyStatic() || !ast::VariableSymbol::isKind(root->kind) ||
+				root->as<ast::VariableSymbol>().lifetime != ast::VariableLifetime::Static ||
+				owning_subroutine(*root) != subroutine || flow.assigned.count(root) ||
+				!root->getType().isFixedSize())
+			return;
+		uint64_t width = root->getType().getSelectableWidth();
+		auto [low, high] = path.lspBounds;
+		if (low > high || high >= width)
+			return;
+		auto &bits = flow.bits[root];
+		if (bits.empty())
+			bits.resize(width);
+		for (uint64_t i = low; i <= high; i++)
+			bits[i] = true;
+		if (std::all_of(bits.begin(), bits.end(), [](bool bit) { return bit; })) {
+			flow.bits.erase(root);
+			flow.assigned.insert(root);
+		}
 	}
 
 	bool is_own(const ast::Symbol &symbol)
@@ -1459,28 +1590,53 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			const auto &symbol = expr.as<ast::ValueExpressionBase>().symbol;
 			if (reads)
 				read(symbol, expr.sourceRange);
-			if (!is_own(symbol))
+			if (!is_own(symbol)) {
 				found(expr.sourceRange);
-			else if (whole && !flow.unreachable)
+				break;
+			}
+			if (netlist.named_hierarchically(symbol))
+				found(expr.sourceRange, EffectKind::NamedVariable);
+			if (flow.unreachable)
+				break;
+			if (!written.count(&symbol))
+				written[&symbol] = expr.sourceRange;
+			if (whole) {
 				flow.assigned.insert(&symbol);
+				flow.bits.erase(&symbol);
+			}
 			break;
 		}
 		case ast::ExpressionKind::ElementSelect: {
 			const auto &select = expr.as<ast::ElementSelectExpression>();
 			assign_to(select.value(), reads, false);
+			if (whole)
+				assign_part(expr);
 			select.selector().visit(*this);
 			break;
 		}
 		case ast::ExpressionKind::RangeSelect: {
 			const auto &select = expr.as<ast::RangeSelectExpression>();
 			assign_to(select.value(), reads, false);
+			if (whole)
+				assign_part(expr);
 			select.left().visit(*this);
 			select.right().visit(*this);
 			break;
 		}
-		case ast::ExpressionKind::MemberAccess:
-			assign_to(expr.as<ast::MemberAccessExpression>().value(), reads, false);
+		case ast::ExpressionKind::MemberAccess: {
+			const auto &value = expr.as<ast::MemberAccessExpression>().value();
+			// Through a class or virtual interface handle the assignment is to an object
+			// or interface outside, whichever variable holds the handle
+			if (value.type->isObjectHandleType()) {
+				value.visit(*this);
+				found(expr.sourceRange);
+			} else {
+				assign_to(value, reads, false);
+				if (whole)
+					assign_part(expr);
+			}
 			break;
+		}
 		case ast::ExpressionKind::Concatenation:
 			for (auto operand : expr.as<ast::ConcatenationExpression>().operands())
 				assign_to(*operand, reads, whole);
@@ -1511,8 +1667,14 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void handle(const ast::AssignmentExpression &assign)
 	{
-		bool whole = top_level;
+		// A nonblocking assignment is made later, reads after it still see the old value
+		bool whole = top_level && !assign.isNonBlocking();
 		top_level = false;
+		// The process waits for it, `x = @(e) y` or `x = #1 y`, like for a statement
+		if (assign.timingControl) {
+			found(assign.sourceRange);
+			return;
+		}
 		// A compound assignment reads the left-hand side, the right-hand side only
 		// stands in for it
 		if (assign.isCompound())
@@ -1539,14 +1701,17 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 
 	void handle(const ast::CallExpression &call)
 	{
+		bool whole_statement = top_level;
 		top_level = false;
 		if (call.isSystemCall()) {
 			const auto &info = std::get<1>(call.subroutine);
 			auto name = info.subroutine->name;
 			auto args = call.arguments();
-			// The argument the system subroutine assigns, and if it reads it first
+			// The argument the system subroutine assigns, if it reads it first, and if it
+			// assigns all of it
 			std::optional<size_t> written;
 			bool reads_written = false;
+			bool writes_whole = false;
 			if (for_assertion) {
 				// Of the system subroutines we lower, only $readmem assigns a variable
 				if ((name == "$readmemb" || name == "$readmemh") && args.size() >= 2)
@@ -1559,6 +1724,13 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 					written = 0;
 					reads_written = true;
 				}
+			} else if (is_string_output_task(name) && !args.empty()) {
+				written = 0;
+				writes_whole = true;
+			} else if (is_string_mutator(name) && !args.empty() && args[0]->type->isString()) {
+				written = 0;
+				reads_written = name == "putc";
+				writes_whole = !reads_written;
 			} else if (!is_reporting_task(name) && !is_pure_function(info)) {
 				found(call.sourceRange);
 				return;
@@ -1569,17 +1741,35 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 				return;
 			}
 			for (size_t i = 0; i < args.size(); i++) {
-				if (i == *written)
-					assign_to(*args[i], reads_written, false);
-				else
+				if (i != *written) {
 					args[i]->visit(*this);
+					continue;
+				}
+				// slang binds an argument some system subroutines assign as an assignment
+				// from an empty argument, as for $sformat, $readmem or the seed of the
+				// $dist functions
+				const ast::Expression *target = args[i];
+				if (ast::AssignmentExpression::isKind(target->kind) &&
+						target->as<ast::AssignmentExpression>().isLValueArg())
+					target = &target->as<ast::AssignmentExpression>().left();
+				assign_to(*target, reads_written, whole_statement && writes_whole);
 			}
 			return;
 		}
 
 		const auto &callee = *std::get<0>(call.subroutine);
-		if (callee.subroutineKind == ast::SubroutineKind::Task) {
-			// Tasks can wait, which no assertion can
+		// Tasks can wait, which no assertion can. In an action block a task is looked
+		// into like a function, which finds any delay or event control in it.
+		if (callee.subroutineKind == ast::SubroutineKind::Task && for_assertion) {
+			found(call.sourceRange);
+			return;
+		}
+		// An imported subroutine has no body to look into. One that isn't `context` can
+		// only access its arguments (IEEE Std 1800-2017 section 35.5.3), which we look
+		// at below, a `context` one can call exported subroutines which assign the
+		// design.
+		bool imported = !for_assertion && callee.flags.has(ast::MethodFlags::DPIImport);
+		if (imported && callee.flags.has(ast::MethodFlags::DPIContext)) {
 			found(call.sourceRange);
 			return;
 		}
@@ -1605,11 +1795,17 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			}
 		}
 
-		if (auto callee_effect = effect_of(callee))
-			found(callee_effect->range, callee_effect->keeps_state);
+		if (imported)
+			return;
+		auto summary = summary_of(callee);
+		if (summary.effect)
+			found(summary.effect->range, summary.effect->kind,
+				  summary.effect->in_callee.value_or(summary.effect->range));
+		for (auto &[symbol, range] : summary.foreign_reads)
+			read(*symbol, range);
 	}
 
-	std::optional<Effect> effect_of(const ast::SubroutineSymbol &callee)
+	Summary summary_of(const ast::SubroutineSymbol &callee)
 	{
 		// A recursive call has its effects found in the call already being looked into
 		if (std::find(calls.stack.begin(), calls.stack.end(), &callee) != calls.stack.end())
@@ -1621,15 +1817,16 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 		EffectFinder finder(netlist, for_assertion, calls, callee);
 		finder.body_of_subroutine();
 		calls.stack.pop_back();
-		calls.done[&callee] = finder.effect;
-		return finder.effect;
+		calls.done[&callee] = Summary{finder.effect, finder.foreign_reads};
+		return calls.done.at(&callee);
 	}
 
 	void expression(const ast::Expression &expr, bool whole_statement = false)
 	{
 		if (effect)
 			return;
-		top_level = whole_statement && ast::AssignmentExpression::isKind(expr.kind);
+		top_level = whole_statement && (ast::AssignmentExpression::isKind(expr.kind) ||
+										ast::CallExpression::isKind(expr.kind));
 		expr.visit(*this);
 		top_level = false;
 	}
@@ -1788,6 +1985,21 @@ struct EffectFinder : public ast::ASTVisitor<EffectFinder,
 			flow = *after;
 			break;
 		}
+		case ast::StatementKind::RandCase: {
+			// With all weights zero no branch is taken (IEEE Std 1800-2017 section 18.16)
+			const auto &randcase = stmt.as<ast::RandCaseStatement>();
+			for (auto &item : randcase.items)
+				expression(*item.expr);
+			Flow before = flow;
+			Flow after = before;
+			for (auto &item : randcase.items) {
+				flow = before;
+				statement(*item.stmt);
+				after = meet(after, flow);
+			}
+			flow = after;
+			break;
+		}
 		case ast::StatementKind::ForLoop: {
 			const auto &loop = stmt.as<ast::ForLoopStatement>();
 			for (auto var : loop.loopVars) {
@@ -1869,8 +2081,12 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 			continue;
 		EffectFinder finder(netlist, false);
 		finder.statement(*action);
-		if (finder.effect)
-			netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
+		if (!finder.effect)
+			continue;
+		auto &reported = netlist.add_diag(diag::ActionBlockUnsupported, finder.effect->range);
+		// The statement holds a call, point at what the called subroutine does
+		if (finder.effect->in_callee)
+			reported.addNote(diag::NoteActionBlockEffect, *finder.effect->in_callee);
 	}
 }
 
@@ -1879,7 +2095,9 @@ void check_action_blocks(NetlistContext &netlist, const ast::Statement *pass, co
 // that of any other, so an assignment to a variable of the design would drive it from
 // the process around the assertion, or go missing outside of one, and a read of a static
 // variable of the function before the call assigns it would see what the design's calls
-// of the function left there.
+// of the function left there. A static variable the call assigns is the call's own, so
+// one a hierarchical name refers to would read the design's value there instead, also
+// when the name is in another function of the same assertion.
 void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 {
 	EffectFinder finder(netlist, true);
@@ -1887,7 +2105,11 @@ void check_assertion_calls(NetlistContext &netlist, const ast::Expression &expr)
 	if (!finder.effect)
 		return;
 
-	auto code = finder.effect->keeps_state ? diag::SVACallKeepsState : diag::SVACallSideEffect;
+	slang::DiagCode code = diag::SVACallSideEffect;
+	if (finder.effect->kind == EffectFinder::EffectKind::KeepsState)
+		code = diag::SVACallKeepsState;
+	else if (finder.effect->kind == EffectFinder::EffectKind::NamedVariable)
+		code = diag::SVACallAssignsNamedVariable;
 	// The same function comes up again in other operands and assertions
 	for (auto &diag : netlist.issued_diagnostics)
 		if (diag.code == code && diag.location == finder.effect->range.start())
@@ -3531,7 +3753,191 @@ public:
 	void handle(const ast::LetDeclSymbol&) {}
 	void handle(const ast::SpecparamSymbol&) {}
 	void handle(const ast::DefParamSymbol&) {}
-	void handle(const ast::SpecifyBlockSymbol&) {}
+	void handle(const ast::SpecifyBlockSymbol &sym) {
+		visitDefault(sym);
+	}
+
+	#ifndef SLANG_NO_YOSYS
+		struct SpecifyTriple {
+			RTLIL::Const t_min, t_avg, t_max;
+		};
+	
+		SpecifyTriple eval_specify_triple(const ast::Expression &expr)
+		{
+			auto eval = [&](const ast::Expression &part) -> std::optional<RTLIL::Const> {
+				auto value = part.eval(netlist.eval.const_);
+				std::optional<RTLIL::Const> result_opt = convert_const_rtlil(netlist, value, part.sourceRange.start());
+				ast_invariant(part, result_opt);
+				RTLIL::Const result = *result_opt;
+				if (value.isInteger() && value.integer().isSigned())
+					result.flags |= RTLIL::CONST_FLAG_SIGNED;
+				return result;
+			};
+	
+			if (expr.kind == ast::ExpressionKind::MinTypMax) {
+				auto &triple = expr.as<ast::MinTypMaxExpression>();
+				auto min = eval(triple.min());
+				auto typ = eval(triple.typ());
+				auto max = eval(triple.max());
+				ast_invariant(expr, min && typ && max);
+				return SpecifyTriple{*min, *typ, *max};
+			}
+			auto value = eval(expr);
+			ast_invariant(expr, value);
+			return SpecifyTriple{*value, *value, *value};
+		}
+	#endif
+	
+	void handle(const ast::TimingPathSymbol &path)
+	{
+	#ifndef SLANG_NO_YOSYS
+		using Path = ast::TimingPathSymbol;
+
+		auto en_expr = path.getConditionExpr();
+		auto src_exprs = path.getInputs();
+		auto dest_exprs = path.getOutputs();
+		auto oper = path.connectionKind;
+		auto delays = path.getDelays();
+		auto dat_expr = path.getEdgeSourceExpr();
+
+		auto count = delays.size();
+		ast_invariant(path, count == 1 || count == 2 || count == 3 || count == 6 || count == 12);
+		
+		if (count > 2)
+			netlist.add_diag(diag::SpecifyExtraDelaysIgnored, path.location);
+
+		SpecifyTriple rise_triple = eval_specify_triple(*delays[0]);
+		int fall_idx = delays.size() == 1 ? 0 : 1;
+		SpecifyTriple fall_triple = eval_specify_triple(*delays[fall_idx]);
+		
+		RTLIL::IdString type = dat_expr ? ID($specify3) : ID($specify2);
+
+		auto en = en_expr ? netlist.eval(*en_expr) : ir::Value(ir::S1);
+		auto dat = dat_expr ? std::optional(netlist.eval(*dat_expr)) : std::nullopt;
+		bool full = oper == Path::ConnectionKind::Full;	
+
+		auto src_dst_pen = path.polarity != Path::Polarity::Unknown;
+		auto src_dst_pol = path.polarity == Path::Polarity::Positive;
+
+		auto edge_en = path.edgeIdentifier != ast::EdgeKind::None;
+		auto edge_pol = path.edgeIdentifier == ast::EdgeKind::PosEdge;
+
+		auto dat_dst_pen = path.edgePolarity != Path::Polarity::Unknown;
+		auto dat_dst_pol = path.edgePolarity == Path::Polarity::Positive;
+		
+		for (auto &src_e : src_exprs) {
+			for (auto &dst_e : dest_exprs) {
+
+				auto src = netlist.eval(*src_e);
+				auto dst = netlist.eval(*dst_e);			
+				if (!full && src.size() != dst.size()) {
+					netlist.add_diag(diag::SpecifyParallelWidthMismatch, slang::SourceRange(src_e->sourceRange.start(), dst_e->sourceRange.end()))
+							<< src.size() << dst.size();
+					return;
+				}
+				
+				auto cell = netlist.backend->canvas->addCell(
+							netlist.backend->new_id(), type);
+				transfer_attrs(netlist, path, cell);
+				
+				cell->setPort(ID::SRC, src);
+				cell->setPort(ID::DST, dst);
+				cell->setPort(ID::EN, en);
+				cell->setParam(ID::SRC_WIDTH, int(src.size()));
+				cell->setParam(ID::DST_WIDTH, int(dst.size()));
+				cell->setParam(ID::FULL, RTLIL::Const(full, 1));
+				cell->setParam(ID::SRC_DST_PEN, RTLIL::Const(src_dst_pen, 1));
+				cell->setParam(ID::SRC_DST_POL, RTLIL::Const(src_dst_pol, 1));
+				if (dat) {
+					cell->setPort(ID::DAT, *dat);
+					cell->setParam(ID::DAT_DST_PEN, RTLIL::Const(dat_dst_pen, 1));
+					cell->setParam(ID::DAT_DST_POL, RTLIL::Const(dat_dst_pol, 1));
+					cell->setParam(ID::EDGE_EN, RTLIL::Const(edge_en, 1));
+					cell->setParam(ID::EDGE_POL, RTLIL::Const(edge_pol, 1));
+				}
+				cell->setParam(ID::T_RISE_MIN, rise_triple.t_min);
+				cell->setParam(ID::T_RISE_TYP, rise_triple.t_avg);
+				cell->setParam(ID::T_RISE_MAX, rise_triple.t_max);
+				cell->setParam(ID::T_FALL_MIN, fall_triple.t_min);
+				cell->setParam(ID::T_FALL_TYP, fall_triple.t_avg);
+				cell->setParam(ID::T_FALL_MAX, fall_triple.t_max);
+			}
+		}
+	#endif
+	}
+
+	void handle(const ast::SystemTimingCheckSymbol &check)
+	{
+#ifndef SLANG_NO_YOSYS
+		auto &syntax = check.getSyntax()
+				->as<slang::syntax::SystemTimingCheckSyntax>();
+		std::string rule_name(syntax.name.valueText());
+		if (rule_name != "$setup" && rule_name != "$hold" && rule_name != "$setuphold" &&
+				rule_name != "$removal" && rule_name != "$recovery" && rule_name != "$recrem" &&
+				rule_name != "$skew" && rule_name != "$timeskew" && rule_name != "$fullskew" &&
+				rule_name != "$nochange") {
+			netlist.add_diag(diag::SpecifyRuleUnsupported, check.location) << rule_name;
+			return;
+		}
+
+		auto args = check.getArguments();
+		if (args.size() != 3 && args.size() != 4) {
+			netlist.add_diag(diag::SpecifyRuleArgumentsUnsupported, check.location) << rule_name;
+			return;
+		}
+		for (const auto &arg : args) {
+			if (!arg.expr) {
+				netlist.add_diag(diag::SpecifyRuleMissingArgument, check.location) << rule_name;
+				return;
+			}
+			if (!arg.edgeDescriptors.empty() || arg.edge == ast::EdgeKind::BothEdges) {
+				netlist.add_diag(diag::SpecifyRuleEdgeUnsupported, arg.expr->sourceRange) << rule_name;
+				return;
+			}
+		}
+
+		auto src_pen = RTLIL::Const(args[0].edge != ast::EdgeKind::None, 1);
+		auto src_pol = RTLIL::Const(args[0].edge == ast::EdgeKind::PosEdge, 1);
+		auto src_expr = netlist.eval(*args[0].expr);
+		auto src_en = args[0].condition
+				? netlist.eval(*args[0].condition) : ir::Value(ir::S1);
+
+		auto dst_pen = RTLIL::Const(args[1].edge != ast::EdgeKind::None, 1);
+		auto dst_pol = RTLIL::Const(args[1].edge == ast::EdgeKind::PosEdge, 1);
+		auto dst_expr = netlist.eval(*args[1].expr);
+		auto dst_en = args[1].condition
+				? netlist.eval(*args[1].condition) : ir::Value(ir::S1);
+
+		SpecifyTriple limit = eval_specify_triple(*args[2].expr);
+		std::optional<SpecifyTriple> limit2 = std::nullopt;
+		if (args.size() == 4) {
+			limit2 = eval_specify_triple(*args[3].expr);
+		}
+		RTLIL::Const zero(0);
+		zero.flags |= RTLIL::CONST_FLAG_SIGNED;
+
+		auto cell = netlist.backend->canvas->addCell(netlist.backend->new_id(), ID($specrule));
+		transfer_attrs(netlist, check, cell);
+
+		cell->setParam(ID::TYPE, RTLIL::Const(rule_name));
+		cell->setParam(ID::T_LIMIT_MIN, limit.t_min);
+		cell->setParam(ID::T_LIMIT_TYP, limit.t_avg);
+		cell->setParam(ID::T_LIMIT_MAX, limit.t_max);
+		cell->setParam(ID::T_LIMIT2_MIN, limit2 ? limit2->t_min : zero);
+		cell->setParam(ID::T_LIMIT2_TYP, limit2 ? limit2->t_avg : zero);
+		cell->setParam(ID::T_LIMIT2_MAX, limit2 ? limit2->t_max : zero);
+		cell->setParam(ID::SRC_PEN, src_pen);
+		cell->setParam(ID::SRC_POL, src_pol);
+		cell->setParam(ID::DST_PEN, dst_pen);
+		cell->setParam(ID::DST_POL, dst_pol);
+		cell->setPort(ID::SRC_EN, src_en);
+		cell->setPort(ID::SRC, src_expr);
+		cell->setPort(ID::DST_EN, dst_en);
+		cell->setPort(ID::DST, dst_expr);
+		cell->setParam(ID::SRC_WIDTH, int(src_expr.size()));
+		cell->setParam(ID::DST_WIDTH, int(dst_expr.size()));
+#endif
+	}
 
 	void handle(const ast::StatementBlockSymbol &sym)
 	{
@@ -4174,6 +4580,31 @@ std::vector<const ast::InstanceSymbol *> NetlistContext::collect_nondissolved_in
 			}));
 
 	return instances;
+}
+
+bool NetlistContext::named_hierarchically(const ast::Symbol &symbol)
+{
+	if (!hierarchical_targets) {
+		// A reference from outside of the realm crosses a kept module boundary, which
+		// check_hier_ref rejects, so those inside it are all there is to find
+		hierarchical_targets.emplace();
+		realm.visit(ast::makeVisitor(
+				[&](auto &visitor, const ast::HierarchicalValueExpression &expr) {
+					hierarchical_targets->insert(&expr.symbol);
+					visitor.visitDefault(expr);
+				},
+				[&](auto &visitor, const ast::InstanceSymbol &sym) {
+					if (should_dissolve(sym))
+						visitor.visitDefault(sym);
+				},
+				[&](auto &visitor, const ast::GenerateBlockSymbol &sym) {
+					/* stop at uninstantiated generate blocks */
+					if (sym.isUninstantiated)
+						return;
+					visitor.visitDefault(sym);
+				}));
+	}
+	return hierarchical_targets->count(&symbol);
 }
 // clang-format off
 
