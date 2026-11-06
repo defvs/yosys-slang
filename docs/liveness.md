@@ -175,52 +175,17 @@ the code around it reaches the statement, the attempt then runs to completion
 whatever that code does on later ticks (IEEE 1800-2017 16.14.6). An assertion
 in `always_comb` or `always @*` runs on its own clock or else the default
 clocking. So does one in an `initial` procedure, which queues the one attempt
-that [sva.md](sva.md#attempts) describes, on the first tick of
-that clock: `initial assert property (a |-> s_eventually b)` requires a `b`
-only if `a` holds on that tick, while `always (a |-> s_eventually b)` in the
-attempt answers every `a`. In `always @(posedge clk iff en)` the clock ticks only where `en` is
-high: a justice goal is met only on such a tick, not on the cycles between. An
-attempt still pending when the clock stops for good is never met, so it fails,
-even where the match ending on the last tick meets an older attempt.
+that [sva.md](sva.md#attempts) describes, on the first tick of that clock:
+`initial assert property (a |-> s_eventually b)` requires a `b` only if `a`
+holds on that tick, while `always (a |-> s_eventually b)` in the attempt
+answers every `a`.
 
-### Clocks that stop
-
-A strong operator over a bounded range waits on the ticks of its range too. If
-they never come, `s_nexttime`, `s_eventually [m:n]`, `s_always [m:n]`, a
-`strong` sequence and followed-by fail, where their weak forms hold (IEEE
-1800-2017 16.12.10, 16.12.11, 16.12.13 and 16.12.15). Their finite check alone
-is the weak form. After `formalff -clk2ff` every clock but one qualified with
-`iff` ticks with the global clock and cannot stop, and there that check is
-exact. The clock of a process `@(posedge clk iff en)`, or of a default
-clocking with an `iff`, stops for good where `en` stays low, so there an
-attempt of such an operator also takes a progress obligation: a `$live` check
-in an assertion, a `$fair` one in an assumption, named `label$obligation`.
-The obligation is raised on the cycles between two ticks while the attempt
-waits on ticks still to come, and met on the next tick. It is lifted once the
-attempt is decided: by a match of the eventuality, by the last tick of its
-range, or by a disable or an abort. An attempt still waiting when the clock
-stops for good then fails, and an assumption rules such a stop out, while it
-allows a pause of any length. A `cover` needs no obligation, as a match of it has had all its ticks.
-
-In such a process the strong operators of the table, `strong` of a bounded
-sequence, bounded `s_eventually` of a Boolean and followed-by whose left side
-ends on one tick are supported over properties with none of these, in a
-consequent and under property `and`, `if`, `case`, `implies` and `always`.
-Other places where an attempt waits on ticks that may never come are rejected,
-as is `not` of a weak operator or of a sequence over several ticks, which is
-strong:
-
-- `a |-> not nexttime b` and `not (a ##1 b)`;
-- `(s_nexttime b) or c`, `s_eventually [1:2] (b ##1 c)`, `nexttime (s_nexttime
-  b)` and `s_nexttime (s_nexttime b)`;
-- `b ##[1:2] c #-# d`.
-
-The flow of this document lowers with `formalff -clk2ff`. Under
-`multiclock on` in SymbiYosys every clock is a free input that may stop, which
-the lowering cannot tell from the design: neither a strong bounded operator
-nor an unbounded eventuality on a clock with no `iff` then fails when that
-clock stops for good, so the monitors are not exact in that flow and liveness
-proofs are not supported there.
+In `always @(posedge clk iff en)` the clock ticks only where `en` is high: a
+justice goal is met only on such a tick, not on the cycles between. An attempt
+still pending when the clock stops for good is never met, so it fails, even
+where the match ending on the last tick meets an older attempt, and so does
+one of a strong operator over a bounded range, see [Clocks that
+stop](#clocks-that-stop).
 
 Overlapping triggers are preserved. For an eventual finite suffix of maximum
 duration `N`, the monitor keeps pending trigger ages `1..N-1` and a saturated
@@ -274,6 +239,46 @@ settles the failure.
 Monitor state and finite-history enables are initialized explicitly. A finite
 check is disabled until every required historical sample exists, including
 paths involving empty repetitions.
+
+### Clocks that stop
+
+A strong operator over a bounded range waits on the ticks of its range too. If
+they never come, `s_nexttime`, `s_eventually [m:n]`, `s_always [m:n]`, a
+`strong` sequence and followed-by fail, where their weak forms hold (IEEE
+1800-2017 16.12.10, 16.12.11, 16.12.13 and 16.12.15). Their finite check alone
+is the weak form. After `formalff -clk2ff` every clock but one qualified with
+`iff` ticks with the global clock and cannot stop, and there that check is
+exact. The clock of a process `@(posedge clk iff en)` stops for good where
+`en` stays low (an `iff` on the clock of an assertion or of a default clocking
+is rejected), so there an attempt of such an operator also takes a progress
+obligation: a `$live` check in an assertion, a `$fair` one in an assumption,
+named `label$obligation`. The obligation is raised on the cycles between two
+ticks while the attempt waits on ticks still to come, and met on the next
+tick. It is lifted once the attempt is decided: by a match of the eventuality,
+by the last tick of its range, or by a disable or an abort. An attempt still
+waiting when the clock stops for good then fails, and an assumption rules such
+a stop out, while it allows a pause of any length. A `cover` needs no
+obligation, as a match of it has had all its ticks.
+
+In such a process the strong operators of the table, `strong` of a bounded
+sequence, bounded `s_eventually` of a Boolean and followed-by whose left side
+ends on one tick are supported over properties with none of these, in a
+consequent and under property `and`, `if`, `case`, `implies` and `always`.
+Other places where an attempt waits on ticks that may never come are rejected,
+as is `not` of a weak operator or of a sequence over several ticks, which is
+strong:
+
+- `a |-> not nexttime b` and `not (a ##1 b)`;
+- `(s_nexttime b) or c`, `s_eventually [1:2] (b ##1 c)`, `nexttime (s_nexttime
+  b)` and `s_nexttime (s_nexttime b)`;
+- `b ##[1:2] c #-# d`.
+
+The flow of this document lowers with `formalff -clk2ff`. Under
+`multiclock on` in SymbiYosys every clock is a free input that may stop, which
+the lowering cannot tell from the design: neither a strong bounded operator
+nor an unbounded eventuality on a clock with no `iff` then fails when that
+clock stops for good, so the monitors are not exact in that flow and liveness
+proofs are not supported there.
 
 ## Rejected constructs
 
@@ -334,9 +339,8 @@ The setup script downloads the OSS CAD Suite Linux x64 release dated
 2026-07-27, verifies SHA-256
 `d5cd8fb0276b51ae6b35945e70e03f222d82a863f2e3523b33b937be0ea416f4`,
 and extracts `suprove`, `z3` and `yices-smt2` plus their runtime
-dependencies. The default install root
-is the sibling `.tools` directory and can be changed with
-`YOSYS_SLANG_TOOL_ROOT`. An install it has extracted from the verified archive
+dependencies. The default install root is the sibling `.tools` directory and
+can be changed with `YOSYS_SLANG_TOOL_ROOT`. An install it has extracted from the verified archive
 carries a digest of the checksum and of the list of members it extracts in
 `.install-id`, and the script then uses it as it is, with no archive and no
 download, as in CI where the install is cached. A change to the list makes it
@@ -435,14 +439,7 @@ reject.
 `tests/liveness/run_response_proof.sh PLUGIN SUPROVE` runs every
 solver-backed liveness test in a temporary directory of its own, which takes
 the temporary files of suprove as well and is removed at the end, and requires
-each expected `PASS` and each intentional `FAIL`. Each task has a `timeout` of
-300 seconds, which sby reports as `Reached TIMEOUT`, and each run of sby a
-limit of 900 seconds, or `SBY_TIME_LIMIT`, for a run that hangs as a whole.
-sby gives up a job slot only when the process holding it ends, not when it
-stops it, as it does with the base case or the induction of a `mode prove`
-task once the other one has settled it. With no slots left the tasks still to
-come never start, so the safety proofs set `wait on`, which lets both run to
-their end. In `mode live`, most shapes
+each expected `PASS` and each intentional `FAIL`. In `mode live`, most shapes
 with a failing variant next to the passing one:
 
 - `response.sby`: a request-grant response, and the same with the grant
@@ -454,7 +451,8 @@ with a failing variant next to the passing one:
 - `procedural.sby`: procedural assertions, guards, `iff` clocking, default
   clocking and the one attempt of an `initial` procedure;
 - `clock_stop.sby`: an `iff` qualified clock that stops for good, or pauses,
-  with attempts pending;
+  with attempts pending, of eventualities and of the strong operators over
+  bounded ranges, and assumptions of these;
 - `sequence.sby`: named sequences, `nexttime` and empty matches;
 - `abort.sby`: aborts around selected sequences, implications and
   followed-by, and their order;
@@ -468,6 +466,14 @@ with a failing variant next to the passing one:
 The safety parts of mixed properties are proven in `mode prove`
 (`*_safety.sby`), the antecedents are covered (`*reachability.sby`), and
 `raw_live.sby` checks the solver flow on hand-written RTLIL.
+
+Each task has a `timeout` of 300 seconds, which sby reports as `Reached
+TIMEOUT`, and each run of sby a limit of 900 seconds, or `SBY_TIME_LIMIT`, for
+a run that hangs as a whole. sby gives up a job slot only when the process
+holding it ends, not when it stops it, as it does with the base case or the
+induction of a `mode prove` task once the other one has settled it. With no
+slots left the tasks still to come never start, so the safety proofs set
+`wait on`, which lets both run to their end.
 
 The OpenTitan liveness tests fetch a pinned OpenTitan revision on demand. The
 arbiter test proves safety, reachability and starvation freedom of
