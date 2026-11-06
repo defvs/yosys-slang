@@ -334,10 +334,14 @@ The setup script downloads the OSS CAD Suite Linux x64 release dated
 and extracts `suprove` plus its runtime dependencies. The default install root
 is the sibling `.tools` directory and can be changed with
 `YOSYS_SLANG_TOOL_ROOT`. An install it has extracted from the verified archive
-carries the checksum in `.archive-sha256`, and the script then uses it as it
-is, with no archive and no download, as in CI where the install is cached. The
-script does not replace the system Yosys or ABC, and prints the path of
-`suprove` as `SUPROVE_EXECUTABLE=...`.
+carries a digest of the checksum and of the list of members it extracts in
+`.install-id`, and the script then uses it as it is, with no archive and no
+download, as in CI where the install is cached. A change to the list makes it
+extract again. Each run proves a justice property that holds and one that
+fails with the install, as suprove reports success even when an engine it
+needs is missing; an install that gets either verdict wrong is extracted again,
+and if it still does, the script fails. The script does not replace the system
+Yosys or ABC, and prints the path of `suprove` as `SUPROVE_EXECUTABLE=...`.
 
 Distribution packages do not consistently name the standalone ABC executable.
 CTest discovers either `yosys-abc` or `abc` and passes the exact path only to
