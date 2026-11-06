@@ -399,8 +399,16 @@ top.il
 
 ```sh
 YOSYS_SLANG_REAL_SUPROVE=/absolute/path/to/suprove \
-  sby --suprove tools/suprove_all_justice.py -f top.sby
+  sby --suprove "$PWD/tools/suprove_all_justice.py" -f top.sby
 ```
+
+SymbiYosys starts each engine from the directory of its task, here `top_live`,
+so both paths have to be absolute: the command above is run from the
+repository root, where the lowering left `top.il` and where `top.sby` is. With
+a relative `--suprove` path the live task ends in `COMMAND NOT FOUND` and
+`DONE (ERROR)`, and sby exits with an error, while the safety task still
+passes. For the solvers of the setup script, put its `SOLVER_DIR` first on
+`PATH`.
 
 `tools/suprove_all_justice.py` stands in for `suprove`. A model with several
 justice properties is common: two liveness assertions, or a strong sequence
