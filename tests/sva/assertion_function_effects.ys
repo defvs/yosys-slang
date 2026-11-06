@@ -427,6 +427,24 @@ EOF
 
 design -reset
 
+# An output argument of a call does not count as assigning the variable either
+test_slangdiag -expect "function called in a concurrent assertion may read state left by an earlier call"
+read_slang <<EOF
+module output_argument_state(input logic clk, input logic [3:0] v);
+	function automatic void give(input logic [3:0] x, output logic [3:0] y);
+		y = x;
+	endfunction
+	function logic [3:0] passed(logic [3:0] x);
+		logic [3:0] t;
+		give(x, t);
+		return t;
+	endfunction
+	assert property (@(posedge clk) passed(v) == v);
+endmodule
+EOF
+
+design -reset
+
 test_slangdiag -expect "function called in a concurrent assertion assigns a variable not its own"
 read_slang <<EOF
 module module_memory_load(input logic clk, input logic [1:0] i);

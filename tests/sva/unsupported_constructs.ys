@@ -497,6 +497,16 @@ design -reset
 
 test_slangdiag -expect "encountered unsupported SVA feature"
 read_slang <<EOF
+module explicit_clock_other_edge(input logic clk, input logic a, input logic b);
+	always @(posedge clk)
+		other_edge_test: assert property (@(negedge clk) a |=> b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "encountered unsupported SVA feature"
+read_slang <<EOF
 module multiclocked_property(input logic clk, input logic clk2, input logic a, input logic b);
 	multiclock_test: assert property (@(posedge clk) a |=> @(posedge clk2) b);
 endmodule

@@ -98,11 +98,11 @@ queues an attempt of its own and gives a cell of its own.
   be the first step of a trace when there are several clocks. Automatic variables are read
   as they are at the statement, and the conditions around it are worked out at time 0.
   An assertion the procedure reaches under an `if` on a value unknown then (`x`), or in a
-  `case` statement, is an error, and so is one in a procedure with a timing control under
-  `--ignore-timing`, which runs the procedure as if there were none. With neither a clock
-  of its own nor a default clocking, an assertion with no delay and no sampled value
-  function is lowered like an immediate assertion there: it is checked once, on the
-  initial values.
+  `case` statement, is an error, and so is one in a procedure with a timing control, also
+  in a task it calls, under `--ignore-timing`, which runs the procedure as if there were
+  none. With neither a clock of its own nor a default clocking, an assertion with no delay
+  and no sampled value function is lowered like an immediate assertion there: it is
+  checked once, on the initial values.
 
 ## Sampling
 
@@ -303,9 +303,10 @@ p: assert property (@(posedge clk) disable iff (rst) !b);
 
 On a tick where `b` is sampled high, a simulator already sees `rst` high and disables
 the attempt, so `p` never fails in simulation. Here `rst` is sampled as `b` was on the tick
-before, so `p` fails on a tick where `b` rises. To match simulation for a reset that a register on the clock loads on every
-edge, disable on the register's input instead, here `disable iff (b)`: its sampled value on
-a tick is what a simulator sees in the register on that tick.
+before, so `p` fails on a tick where `b` rises. To match simulation for a reset that a
+register on the clock loads on every edge, disable on the register's input instead, here
+`disable iff (b)`: its sampled value on a tick is what a simulator sees in the register on
+that tick.
 
 ### Conditions of processes with no edge
 
@@ -356,10 +357,11 @@ call, so it is rejected if it
 
 Parts of a variable assigned with constant selects, such as `t[1:0]` and `t[3:2]` or the
 fields of a packed structure, add up to the whole variable. A nonblocking assignment does
-not count, its value comes after the read. The last check follows paths, not values, so it
-can reject a static function that fills a variable in a loop and then reads it whole.
-Declaring the function `automatic`, or assigning the variable whole first, avoids that.
-Immediate assertions are not checked this way.
+not count, its value comes after the read, and neither does an output argument of a call
+the function makes. The last check follows paths, not values, so it can reject a static
+function that fills a variable in a loop and then reads it whole. Declaring the function
+`automatic`, or assigning the variable whole first, avoids that. Immediate assertions are
+not checked this way.
 
 ## Action blocks
 
@@ -400,7 +402,8 @@ interface handle, an assignment to a variable a hierarchical name refers to,
 assertion control tasks, a call of a DPI import declared `context`, which can call
 back into the design, an assertion, an event trigger, a delay or event control, also one
 within an assignment (`x = @(posedge clk) y`), `fork`, `disable`, or a `break`, `continue`
-or `return` that leaves the action block.
+or `return` that leaves the action block. A call is rejected at the call, with a note at
+what the subroutine does there.
 
 ## Final procedures
 
@@ -457,7 +460,7 @@ first variable part. The tests are under `tests/`.
 | `iff` on the clock of an assertion or on the default clocking | `iff qualifier not supported in combination with this event` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Clock of more than one bit, event list as the clock | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Clock of an assertion in a process other than the process's own: another signal or edge, a process with an `iff` guard, a reset branch | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
-| Assertion with a clock in an `initial` procedure, reached under an `if` on an unknown value or in a `case` statement, or in a procedure with a timing control under `--ignore-timing` | `encountered unsupported SVA feature` | `sva/initial_attempt.ys` |
+| Assertion with a clock in an `initial` procedure, reached under an `if` on an unknown value or in a `case` statement, or in a procedure with a timing control, also in a task it calls, under `--ignore-timing` | `encountered unsupported SVA feature` | `sva/initial_attempt.ys` |
 | Clock within a property: multiclocked properties, repetition of a clocked sequence | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Signals of a clocking block, read or driven | `clocking block signals unsupported` | `sva/unsupported_clocking.ys` |
 | Event control of a process on a clocking block or a sequence, `always @(cb)`, `always @(s)` | `unsynthesizable feature` | `sva/unsupported_clocking.ys` |
