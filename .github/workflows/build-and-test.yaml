@@ -139,9 +139,15 @@ jobs:
         shell: bash
         run: |
           sudo cp -r -t / tests/third_party/yosys/*
+      # The release of Yosys, but no older than v0.67: before it, sby hands
+      # the witness of a failed liveness proof, which no tool of Yosys reads,
+      # to yosys-witness aiw2yw, and logs 'unexpected data in AIGER witness
+      # file' for every intentional failure
       - name: Install SymbiYosys
+        shell: bash
         run: |
-          git clone --depth 1 --branch "$YOSYS_VERSION" https://github.com/YosysHQ/sby.git sby
+          sby_version=$(printf '%s\n' "$YOSYS_VERSION" v0.67 | sort -V | tail -n 1)
+          git clone --depth 1 --branch "$sby_version" https://github.com/YosysHQ/sby.git sby
           sudo make -C sby install
       # The script pins the archive and the members it extracts. Restored and
       # saved apart, as actions/cache saves only after a job that succeeds, so

@@ -321,7 +321,9 @@ property `if`, is read as frozen (IEEE 1800-2017 16.14.6.1).
 
 - Yosys with the sv-elab plugin;
 - SymbiYosys (`sby`), with `yosys-smtbmc` and z3 for the safety and
-  reachability checks;
+  reachability checks. Releases before v0.67 hand the witness of a failed
+  liveness proof to `yosys-witness`, which cannot read one, and log
+  `unexpected data in AIGER witness file`; the verdict stands;
 - `suprove`, for the liveness checks, from the pinned OSS CAD Suite release.
   `tools/setup_liveness_tools.sh` installs it, and z3 and yices from the same
   release, and needs `curl`, `sha256sum` and `tar`;
