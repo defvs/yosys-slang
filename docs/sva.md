@@ -59,10 +59,10 @@ A concurrent assertion is clocked by, in this order:
 
 Assertions on different clocks can sit side by side. A clock has to be one edge of a 1-bit
 signal: an event list, an `iff` on the assertion's clock or on the default clocking, `edge`,
-a clocking block or sequence as the event, and a clock within the property are rejected.
-So is any concurrent assertion in a process on both edges of its clock, `always @(edge
-clk)` with `--allow-dual-edge-ff`, as such a process queues attempts on both edges. An
-immediate assertion there is checked on one edge, see
+a clocking block or sequence as the event, `$inferred_clock`, and a clock within the
+property are rejected. So is any concurrent assertion in a process on both edges of its
+clock, `always @(edge clk)` with `--allow-dual-edge-ff`, as such a process queues attempts
+on both edges. An immediate assertion there is checked on one edge, see
 [Deviations](#immediate-assertions-on-both-edges).
 
 Without any of these clocks, an assertion with no delay and no sampled value function
@@ -271,7 +271,8 @@ Assertions and covers are reported on the last tick only.
 
 `disable iff (c)` is lowered at the top of a property, also when it comes from a named
 property the assertion consists of. `default disable iff c;` applies to the assertions of
-its scope that have none of their own. A `disable iff` anywhere else is rejected.
+its scope that have none of their own. A `disable iff` anywhere else is rejected, and so
+is `$inferred_disable`.
 
 The lowering follows Annex F of IEEE 1800-2017. The attempt is disabled from the first of
 its ticks, the first tick of the attempt included, on which the condition is true. The
@@ -444,12 +445,14 @@ first variable part. The tests are under `tests/`.
 | `restrict property`, `cover sequence` | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
 | The sequence methods `.triggered`, `.matched` | `unsupported system task` | `sva/unsupported_constructs.ys` |
 | `$sampled`, the global clocking functions `$past_gclk`, `$rose_gclk` and so on | `unsupported system task` | `sva/unsupported_constructs.ys` |
+| `$inferred_disable`, as the default of an argument (IEEE 1800-2017 16.14.7) | `unsupported system task` | `sva/unsupported_constructs.ys` |
 | Gating or clocking argument of `$past` | `$past gating_expr (3rd argument) and clocking_event (4th argument) are not supported` | `sva/unsupported_constructs.ys` |
 | Clocking argument of `$rose`, `$fell`, `$stable`, `$changed` | `encountered unsupported SVA feature` | `sva/unsupported_sampled_clocking.ys` |
 | Sampled value function without a single clock edge | `system function` | `sva/unsupported_constructs.ys` |
 | Automatic variable or `const'` cast read after the first tick of an attempt | `automatic variable or const cast of non-constant value used past the first tick of an assertion attempt` | `sva/frozen_past_first_tick.ys` |
 | Delay without a single clock edge: no clock, also in an `initial` procedure, a process with no edge and no clock for the assertion, a reset branch | `SVA temporal delay requires exactly one clock edge` | `sva/unsupported_constructs.ys` |
 | Clock without an edge: `@(clk)`, a clocking block, a sequence or `$global_clock` as the event, as in `@(cb)` or `@(s)` | `SVA clocking requires a signal edge` | `sva/unsupported_constructs.ys` |
+| `$inferred_clock`, the default of an argument used as a clock (16.14.7), also where the default clocking or the process gives a clock with an edge | `SVA clocking requires a signal edge` | `sva/unsupported_constructs.ys` |
 | Clock on both edges, `@(edge clk)`, also with `--allow-dual-edge-ff`, and any concurrent assertion in a process `always @(edge clk)` | `@(edge) will not be synthesized` | `sva/unsupported_constructs.ys` |
 | `iff` on the clock of an assertion or on the default clocking | `iff qualifier not supported in combination with this event` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |
 | Clock of more than one bit, event list as the clock | `encountered unsupported SVA feature` | `sva/unsupported_clocking.ys`, `sva/unsupported_constructs.ys` |

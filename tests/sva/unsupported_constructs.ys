@@ -375,6 +375,35 @@ EOF
 
 design -reset
 
+# $inferred_clock is not resolved to the clock it stands for (IEEE 1800-2017 16.14.7),
+# so it is a clock without an edge, also where the default clocking or the process has one
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module inferred_clock_default(input logic clk, input logic a);
+	default clocking @(posedge clk); endclocking
+	property p(x, ck = $inferred_clock);
+		@(ck) x;
+	endproperty
+	inferred_clock_test: assert property (p(a));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "SVA clocking requires a signal edge"
+read_slang <<EOF
+module inferred_clock_process(input logic clk, input logic a, input logic b);
+	property p(x, ck = $inferred_clock);
+		@(ck) x;
+	endproperty
+	always @(posedge clk)
+		if (b)
+			inferred_clock_test: assert property (p(a));
+endmodule
+EOF
+
+design -reset
+
 test_slangdiag -expect "@(edge) will not be synthesized (override with '--allow-dual-edge-ff')"
 read_slang --allow-dual-edge-ff <<EOF
 module dual_edge_clock(input logic clk, input logic a, input logic b);
@@ -605,5 +634,20 @@ read_slang <<EOF
 module global_clock_rose(input logic clk, input logic a, input logic b);
 	global clocking @(posedge clk); endclocking
 	rose_gclk_test: assert property (@(posedge clk) a |-> $rose_gclk(b));
+endmodule
+EOF
+
+design -reset
+
+# Nor is $inferred_disable resolved to the default disable condition (16.14.7)
+test_slangdiag -expect "unsupported system task '$inferred_disable'"
+read_slang <<EOF
+module inferred_disable(input logic clk, input logic rst, input logic a);
+	default clocking @(posedge clk); endclocking
+	default disable iff rst;
+	property p(x, d = $inferred_disable);
+		disable iff (d) x;
+	endproperty
+	inferred_disable_test: assert property (p(a));
 endmodule
 EOF
