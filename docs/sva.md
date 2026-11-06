@@ -25,10 +25,17 @@ tick with `EN` and `A` both high. That includes a vacuous success: `cover proper
 b)` is hit on any tick where the attempt sees no `a`. IEEE 1800-2017 16.14.3 counts
 vacuous successes too, in a counter of their own.
 
-The cell takes the label of the statement, prefixed by the path of any generate block it
-is in, as in `g.req_gnt`. A label reached more than once, in a loop or in a function
-called more than once, gives cells `label`, `label_1` and so on. A statement without a
-label gets an internal name.
+The cell takes the label of the statement, prefixed by the path of the scopes it is in
+within the module: generate blocks (`g.req_gnt`, `gen[1].req_gnt`), named blocks
+(`blk.req_gnt`), the function or task it is written in (`f.req_gnt`, or
+`$root.pkg.f.req_gnt` for one in a package), and an instance flattened into the module
+(`u.req_gnt`). An unnamed scope with declarations of its own, such as a `for` loop that
+declares its loop variable, a `foreach` loop or a `begin`-`end` block that declares a
+variable, shows as `$` and a number, as in `$5.req_gnt`; to Yosys a name starting with
+`$` is an internal one. An unlabeled statement that is the only statement of a named block
+takes the name of the block. A name reached more than once, in a loop or in a function or
+task called more than once, gives cells `name`, `name_1` and so on. Any other statement
+without a label gets an internal name.
 
 Immediate assertions (`assert`, `assume` and `cover`, also deferred with `#0` or `final`)
 become `$check` cells too. They take the trigger of the process they are in, with the
