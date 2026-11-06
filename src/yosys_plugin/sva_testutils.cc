@@ -12,9 +12,7 @@ USING_YOSYS_NAMESPACE
 
 struct TestSlangsvaPass : Pass
 {
-	TestSlangsvaPass()
-		: Pass("test_slangsva", "helper pass used by sv-elab SVA support testing")
-	{}
+	TestSlangsvaPass() : Pass("test_slangsva", "helper pass used by sv-elab SVA support testing") {}
 
 	void help() override
 	{
@@ -56,8 +54,8 @@ struct TestSlangsvaPass : Pass
 
 				auto test = m->cell(test_name);
 				if (!test || !tests.count(test)) {
-					log_error("No test assertion '%s' found to pair with reference '%s'", test_name.c_str(),
-							log_id(ref));
+					log_error("No test assertion '%s' found to pair with reference '%s'",
+							test_name.c_str(), log_id(ref));
 				}
 				tests.erase(test);
 
