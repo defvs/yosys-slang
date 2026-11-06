@@ -10,6 +10,7 @@ followed_disabled_pass
 
 [options]
 mode live
+timeout 300
 selected_settled_fail: expect fail
 
 [engines]

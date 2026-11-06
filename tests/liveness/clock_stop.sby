@@ -48,6 +48,7 @@ stop_assume_bounded_fail
 
 [options]
 mode live
+timeout 300
 stop_minimum_fail: expect fail
 stop_minimum_single_fail: expect fail
 stop_minimum_late_fail: expect fail

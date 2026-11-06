@@ -7,6 +7,7 @@ selected_fail
 
 [options]
 mode live
+timeout 300
 first_fail: expect fail
 second_fail: expect fail
 selected_fail: expect fail

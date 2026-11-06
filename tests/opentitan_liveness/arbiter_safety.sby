@@ -4,6 +4,10 @@ fail
 
 [options]
 mode prove
+# sby loses the job slot of an engine process it stops before its end, and
+# once it has lost them all the tasks left never start: the base case and
+# the induction both run to their end instead
+wait on
 depth 12
 fail: expect fail
 

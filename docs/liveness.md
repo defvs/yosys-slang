@@ -323,15 +323,16 @@ property `if`, is read as frozen (IEEE 1800-2017 16.14.6.1).
 - SymbiYosys (`sby`), with `yosys-smtbmc` and z3 for the safety and
   reachability checks;
 - `suprove`, for the liveness checks, from the pinned OSS CAD Suite release.
-  `tools/setup_liveness_tools.sh` installs it and needs `curl`, `sha256sum`
-  and `tar`;
+  `tools/setup_liveness_tools.sh` installs it, and z3 and yices from the same
+  release, and needs `curl`, `sha256sum` and `tar`;
 - for the OpenTitan proofs, `git` to fetch OpenTitan and yices, the default
   solver of the stress run (`SOLVER` selects another).
 
 The setup script downloads the OSS CAD Suite Linux x64 release dated
 2026-07-27, verifies SHA-256
 `d5cd8fb0276b51ae6b35945e70e03f222d82a863f2e3523b33b937be0ea416f4`,
-and extracts `suprove` plus its runtime dependencies. The default install root
+and extracts `suprove`, `z3` and `yices-smt2` plus their runtime
+dependencies. The default install root
 is the sibling `.tools` directory and can be changed with
 `YOSYS_SLANG_TOOL_ROOT`. An install it has extracted from the verified archive
 carries a digest of the checksum and of the list of members it extracts in
@@ -339,9 +340,13 @@ carries a digest of the checksum and of the list of members it extracts in
 download, as in CI where the install is cached. A change to the list makes it
 extract again. Each run proves a justice property that holds and one that
 fails with the install, as suprove reports success even when an engine it
-needs is missing; an install that gets either verdict wrong is extracted again,
-and if it still does, the script fails. The script does not replace the system
-Yosys or ABC, and prints the path of `suprove` as `SUPROVE_EXECUTABLE=...`.
+needs is missing, and has each solver decide a formula; an install that gets
+any of these wrong is extracted again, and if it still does, the script fails.
+The script does not replace the system Yosys, ABC or solvers. It prints the
+path of `suprove` as `SUPROVE_EXECUTABLE=...`, and as `SOLVER_DIR=...` a
+directory holding `z3` and `yices-smt2` alone, to put first on `PATH` for the
+proofs, as CI does, so that they run on the solvers they are tested with
+rather than on those of the distribution.
 
 Distribution packages do not consistently name the standalone ABC executable.
 CTest discovers either `yosys-abc` or `abc` and passes the exact path only to
@@ -420,7 +425,14 @@ reject.
 `tests/liveness/run_response_proof.sh PLUGIN SUPROVE` runs every
 solver-backed liveness test in a temporary directory of its own, which takes
 the temporary files of suprove as well and is removed at the end, and requires
-each expected `PASS` and each intentional `FAIL`. In `mode live`, most shapes
+each expected `PASS` and each intentional `FAIL`. Each task has a `timeout` of
+300 seconds, which sby reports as `Reached TIMEOUT`, and each run of sby a
+limit of 900 seconds, or `SBY_TIME_LIMIT`, for a run that hangs as a whole.
+sby gives up a job slot only when the process holding it ends, not when it
+stops it, as it does with the base case or the induction of a `mode prove`
+task once the other one has settled it. With no slots left the tasks still to
+come never start, so the safety proofs set `wait on`, which lets both run to
+their end. In `mode live`, most shapes
 with a failing variant next to the passing one:
 
 - `response.sby`: a request-grant response, and the same with the grant

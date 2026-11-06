@@ -14,6 +14,7 @@ reject_abort_pass
 
 [options]
 mode live
+timeout 300
 disable_fail: expect fail
 disable_or_fail: expect fail
 minimum_fail: expect fail

@@ -1,5 +1,6 @@
 [options]
 mode cover
+timeout 300
 depth 5
 
 [engines]

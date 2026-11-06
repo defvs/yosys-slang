@@ -37,6 +37,7 @@ initial_assume_fail
 
 [options]
 mode live
+timeout 300
 guard_response_fail: expect fail
 guard_selected_fail: expect fail
 guard_or_fail: expect fail

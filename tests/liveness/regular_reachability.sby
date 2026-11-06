@@ -22,6 +22,7 @@ empty_fusion_fail
 
 [options]
 mode cover
+timeout 300
 depth 6
 
 [engines]

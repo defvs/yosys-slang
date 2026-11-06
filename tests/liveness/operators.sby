@@ -12,6 +12,7 @@ case_fail
 
 [options]
 mode live
+timeout 300
 until_progress_fail: expect fail
 until_with_progress_fail: expect fail
 implies_fail: expect fail

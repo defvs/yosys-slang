@@ -30,6 +30,7 @@ followed_one_end_fail
 
 [options]
 mode live
+timeout 300
 strong_assumed_fail: expect fail
 strong_next_fail: expect fail
 weak_bounded_fail: expect fail

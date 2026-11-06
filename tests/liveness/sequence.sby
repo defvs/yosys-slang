@@ -15,6 +15,7 @@ suffix_empty_pass
 
 [options]
 mode live
+timeout 300
 named_strong_fail: expect fail
 named_eventually_fail: expect fail
 zero_prefix_fail: expect fail

@@ -4,6 +4,7 @@ fail
 
 [options]
 mode live
+timeout 300
 pass: expect pass
 fail: expect fail
 

@@ -405,43 +405,56 @@ yosys -q -m "${plugin}" -p "
 	write_rtlil ${work_dir}/response_fail.il
 "
 
+# Each task stops at the `timeout` of its file, but a run whose engines never
+# start, as when sby has lost all its job slots, outlasts that: the whole run
+# gets a limit of its own
+sby_limit=${SBY_TIME_LIMIT:-900}
+run_sby() {
+	local status=0
+	timeout --kill-after=30 "${sby_limit}" sby "$@" || status=$?
+	if ((status == 124 || status == 137)); then
+		echo "error: sby $* did not finish within ${sby_limit} seconds" >&2
+	fi
+	return "${status}"
+}
+
 (
 	cd -- "${work_dir}"
 	export YOSYS_SLANG_REAL_SUPROVE="${suprove}"
 	# suprove leaves its temporary files behind, so they go where the cleanup
 	# removes them
 	export TMPDIR="${work_dir}"
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/raw_live" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/raw_live" \
 		-f raw_live.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/response" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/response" \
 		-f response.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/semantics" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/semantics" \
 		-f semantics.sby
-	sby --prefix "${work_dir}/reachability" -f reachability.sby
-	sby --prefix "${work_dir}/until_safety" -f until_safety.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/regular" \
+	run_sby --prefix "${work_dir}/reachability" -f reachability.sby
+	run_sby --prefix "${work_dir}/until_safety" -f until_safety.sby
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/regular" \
 		-f regular.sby
-	sby --prefix "${work_dir}/regular_reachability" \
+	run_sby --prefix "${work_dir}/regular_reachability" \
 		-f regular_reachability.sby
-	sby --prefix "${work_dir}/reject_safety" -f reject_safety.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/procedural" \
+	run_sby --prefix "${work_dir}/reject_safety" -f reject_safety.sby
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/procedural" \
 		-f procedural.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/clock_stop" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/clock_stop" \
 		-f clock_stop.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/sequence" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/sequence" \
 		-f sequence.sby
-	sby --prefix "${work_dir}/sequence_safety" -f sequence_safety.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/abort" \
+	run_sby --prefix "${work_dir}/sequence_safety" -f sequence_safety.sby
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/abort" \
 		-f abort.sby
-	sby --prefix "${work_dir}/abort_safety" -f abort_safety.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/constants" \
+	run_sby --prefix "${work_dir}/abort_safety" -f abort_safety.sby
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/constants" \
 		-f constants.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/composition" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/composition" \
 		-f composition.sby
-	sby --prefix "${work_dir}/composition_safety" \
+	run_sby --prefix "${work_dir}/composition_safety" \
 		-f composition_safety.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/justice" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/justice" \
 		-f justice.sby
-	sby --suprove "${suprove_driver}" --prefix "${work_dir}/operators" \
+	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/operators" \
 		-f operators.sby
 )

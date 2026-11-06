@@ -12,6 +12,7 @@ function_fail
 
 [options]
 mode live
+timeout 300
 enum_fail: expect fail
 defparam_fail: expect fail
 hierarchical_fail: expect fail
