@@ -207,13 +207,19 @@ blackboxes and other abstractions the runner doesn't apply.
 | `prim_alert_rxtx_async_fpv` | PARTIAL | `AlertPingOk_A` is dropped: its disable condition has `$changed(ping_skew_i, @clk_i)`, a sampled value function with a clock of its own (`encountered unsupported SVA feature`) |
 | `pinmux_*`, `flash_ctrl_sec_cm`, `otp_ctrl_sec_cm`, `prim_alert_rxtx*_fatal_fpv` | LOWERING_FAIL | frontend and configuration errors outside the properties, such as undeclared identifiers and unresolved hierarchical paths in this revision's benches; see `REPORT.md` |
 | `prim_fifo_sync_fpv` | LOWERING_FAIL | the bind module binds into instance names of the bench (`bind i_nopass1 ...`), which aren't visible from the bind module, a top of its own |
-| `prim_alert_rxtx_fpv` | PARTIAL, BMC_FAIL | `PingEn_M` (here and in the async bench) is dropped, as a weak sequence with an unbounded match; it also lacks parentheses: `throughout` binds looser than `##1`, so it asks `ping_req_i` to stay high up to its own `$fell`. Without it, `ping_req_i` may fall before `ping_ok_o` and `AlertPingOk_A` fails |
+| `prim_alert_rxtx_fpv`, `prim_alert_rxtx_async_fpv` | BMC_PASS on fewer traces | `PingEn_M` lacks parentheses: `throughout` binds looser than `##1`, so the last step of its sequence needs both `ping_req_i` and `$fell(ping_req_i)`, and it never matches. As an assumption it fails, and so ends the trace, one step after a ping raised out of reset is answered (`ping_ok_o` or `error_present`). With the parentheses it matches, and the 61 assertions of `prim_alert_rxtx_fpv` still pass |
 | `alert_handler_esc_timer_fpv` | BMC_FAIL | `CrashdumpTrigger_A` is disabled when `esc_state_o == FsmError`, a register output; with the disable condition sampled (see `docs/sva.md`), the step the FSM enters `FsmError` isn't disabled |
 | `prim_packer_fpv`, `prim_lfsr_fpv` | BMC_FAIL | multiple drivers: `prim_packer_tb` ties the outputs of its 17 instances together, and `prim_lfsr` has conflicting drivers on `lfsr_q` of its 64- and 128-bit Fibonacci XNOR instances |
 | `rv_plic_fpv`, `rv_plic_sec_cm` | PREP_FAIL | the `always_comb` of `rv_plic_assert_fpv` assigns `i_high_prio` only when a source wins, a latch, which is lowered into a combinational loop (`--clk2fflogic`; without it the negedge flops of the CSR assertions stop the model first) |
 | `otbn_sec_cm` | PREP_TIMEOUT | `prep -flatten` doesn't finish within the timeout |
 | `pwrmgr_sec_cm`, `pwrmgr_esc_unstoppable` | BMC_FAIL | `fpv.tcl` doesn't declare the escalation clock and reset (`clk_esc_i`, `rst_esc_ni`) of `pwrmgr`; with `--jasper-env` they are inputs like any other |
 | `sec_cm` targets without `--task-only` | BMC_FAIL | the checks of other tasks fail under the `FPV_SEC_CM_ON` bench, which JasperGold doesn't prove for the task |
+
+Three assertions of `otbn.sv`, `ImemSecWipeRequiresOtpKey_A`,
+`DmemSecWipeRequiresOtpKey_A` and `BusyOrLockingFromStartToDone_A`, end in
+`##[0:$] x` with no `strong(...)`. A weak sequence fails only where no match is
+left to come, so they hold on any trace, and sv-elab warns that they never
+fail. They are in `otbn_sec_cm`, which stops at LOWERING_FAIL first.
 
 The BMC rows of `alert_handler_esc_timer_fpv`, `otbn_sec_cm`, `pwrmgr` and the
 `sec_cm` tasks come from runs on a census that let the `next()` error through;
