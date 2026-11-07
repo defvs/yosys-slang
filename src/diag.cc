@@ -171,6 +171,8 @@ DiagCode SVASequenceProductUnsupported(DiagSubsystem::Netlist, 1217);
 DiagCode SVAFollowedByUnsupported(DiagSubsystem::Netlist, 1218);
 DiagCode SVACompoundCoverUnsupported(DiagSubsystem::Netlist, 1219);
 DiagCode SVAClockStopUnsupported(DiagSubsystem::Netlist, 1220);
+DiagCode SVAWeakSequenceAssumeUnsupported(DiagSubsystem::Netlist, 1221);
+DiagCode SVAWeakSequenceNeverFails(DiagSubsystem::Netlist, 1222);
 
 DiagGroup unsynthesizable("unsynthesizable",
 		{IffUnsupported, GenericTimingUnsyn, BothEdgesUnsupported, ExpectingIfElseAload,
@@ -292,8 +294,16 @@ void setup_messages(slang::DiagnosticEngine &slang_engine)
 	engine.setSeverity(SVAVacuousCoverUnsupported, DiagnosticSeverity::Error);
 
 	engine.setMessage(SVAWeakSequenceUnsupported,
-					  "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`");
+					  "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`");
 	engine.setSeverity(SVAWeakSequenceUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAWeakSequenceAssumeUnsupported,
+					  "weak sequence with an unbounded match in an assumption is unsupported where an attempt can be on several of its paths at once, as telling the attempts apart would take a monitor exponential in the sequence; it is supported in an assertion, and in an assumption where each attempt is on one path at a time, as in `b throughout c[->1] ##1 d`");
+	engine.setSeverity(SVAWeakSequenceAssumeUnsupported, DiagnosticSeverity::Error);
+
+	engine.setMessage(SVAWeakSequenceNeverFails,
+					  "weak sequence with an unbounded match never fails here, so the property holds on any trace: a weak sequence fails only where no match is left to come, write `strong(...)` to require the match");
+	engine.setSeverity(SVAWeakSequenceNeverFails, DiagnosticSeverity::Warning);
 
 	engine.setMessage(SVASequenceProductUnsupported,
 					  "sequence `and`, `intersect`, `within` or `first_match` of an unbounded sequence is supported where its match starts on one tick, as in `strong(...)`, not under an eventuality or on the left of `within`");

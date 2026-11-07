@@ -57,8 +57,7 @@ done
   echo
   echo "| Source | Item | Reason |"
   echo "| --- | --- | --- |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | weak sequence with an unbounded match in the consequent |"
-  echo "| prim_alert_rxtx_assert_fpv.sv | AlertPingIgnored_A | weak sequence with an unbounded match in the consequent |"
+  echo "| prim_alert_rxtx_assert_fpv.sv | PingEn_M | as written it never matches: \`##\` binds tighter than \`throughout\`, so its last tick needs both \`ping_req_i\` and \`\$fell(ping_req_i)\`, and the assumption would rule out every ping that completes |"
   echo "| prim_alert_rxtx_assert_fpv.sv | init_pending / AlertPingOk_A inside sets | hierarchical enum literals rewritten to their encoding: inside needs items slang evaluates as constants, and slang does not evaluate hierarchical references |"
   echo "| tlul_assert.sv | knownness assertions | \$isunknown is not synthesized |"
   echo "| tlul_assert.sv | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |"

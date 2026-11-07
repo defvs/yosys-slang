@@ -21,7 +21,7 @@ proofs are in `tests/opentitan_liveness`.
 | Target | Enabled checks | `$live`/`$fair` cells | Expected result |
 | --- | ---: | ---: | --- |
 | `prim_fifo_sync` | 21 | 0 | PASS |
-| `prim_alert_rxtx` | 11 | 4 | PASS |
+| `prim_alert_rxtx` | 12 | 4 | PASS |
 | `prim_esc_rxtx` | 13 | 3 | PASS |
 | `clkmgr` | 5 | 0 | PASS |
 | `sha3pad` | 1 | 2 | PASS |
@@ -31,7 +31,7 @@ Unsupported or rewritten OpenTitan constructs:
 
 | Source | Disabled / rewritten | Reason |
 | --- | --- | --- |
-| `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M`, `AlertPingIgnored_A` | weak sequence with an unbounded match in the consequent (`throughout` a goto repetition) |
+| `prim_alert_rxtx_assert_fpv.sv` | `PingEn_M` | as written it never matches: `##` binds tighter than `throughout`, so its last tick needs both `ping_req_i` and `$fell(ping_req_i)`, and the assumption would rule out every ping that completes |
 | `tlul_assert.sv` | knownness assertions | `$isunknown` |
 | `tlul_assert.sv` | cover properties | coverage-only; some cover sequences use match-item locals and goto repetition |
 | `tlul_assert.sv` | `noOutstandingReqsAtEndOfSim_A` (`ASSERT_FINAL`) | checks the end of simulation in a final procedure, which has no counterpart in a netlist; sv-elab rejects it |

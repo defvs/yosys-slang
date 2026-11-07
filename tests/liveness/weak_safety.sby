@@ -1,0 +1,35 @@
+[tasks]
+selected_pass
+selected_fail
+assume_pass
+assume_fail
+
+[options]
+mode prove
+# sby loses the job slot of an engine process it stops before its end, and
+# once it has lost them all the tasks left never start: the base case and
+# the induction both run to their end instead
+wait on
+timeout 300
+depth 12
+selected_fail: expect fail
+assume_fail: expect fail
+
+[engines]
+smtbmc z3
+
+[script]
+selected_pass: read_rtlil weak_selected_pass.il
+selected_pass: prep -top weak_selected_pass
+selected_fail: read_rtlil weak_selected_fail.il
+selected_fail: prep -top weak_selected_fail
+assume_pass: read_rtlil weak_assume_pass.il
+assume_pass: prep -top weak_assume_pass
+assume_fail: read_rtlil weak_assume_fail.il
+assume_fail: prep -top weak_assume_fail
+
+[files]
+selected_pass: weak_selected_pass.il
+selected_fail: weak_selected_fail.il
+assume_pass: weak_assume_pass.il
+assume_fail: weak_assume_fail.il

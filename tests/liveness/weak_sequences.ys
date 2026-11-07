@@ -1,0 +1,76 @@
+# A sequence used as a property in `assert` or `assume` is weak (IEEE 1800-2017
+# 16.12.2): an attempt fails on the tick it can no longer match whatever comes next.
+# The monitors of the attempts are in sva/weak_sequences.sv, checked against
+# hand-written ones; this covers what they do around that.
+
+# Where a match is always still to come the property holds on any trace, which is
+# likely not what was meant
+test_slangdiag -expect "weak sequence with an unbounded match never fails here, so the property holds on any trace: a weak sequence fails only where no match is left to come, write `strong(...)` to require the match"
+read_slang <<EOF
+module never_fails_delay(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> ##[0:$] b);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match never fails here, so the property holds on any trace: a weak sequence fails only where no match is left to come, write `strong(...)` to require the match"
+read_slang <<EOF
+module never_fails_goto(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> b[->2]);
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match never fails here, so the property holds on any trace: a weak sequence fails only where no match is left to come, write `strong(...)` to require the match"
+read_slang <<EOF
+module never_fails_nonconsecutive(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> b[=2]);
+endmodule
+EOF
+
+design -reset
+
+# It is still a check, one that holds
+read_slang <<EOF
+module never_fails(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) a |-> ##[0:$] b);
+endmodule
+EOF
+select -assert-count 1 never_fails/t:$check
+select -assert-count 1 never_fails/t:$check r:FLAVOR=assert %i
+async2sync
+formalff -clk2ff
+chformal -lower
+prep -top never_fails
+sat -verify -prove-asserts -set-init-zero -tempinduct
+
+design -reset
+
+# An attempt of `t throughout (##[0:$] x ##6 y)` can be counting down from each of
+# the last six `x` at once, and a monitor that follows each set of them as one state
+# takes 2^6 of them. An assertion fails where one attempt does, so it checks a single
+# attempt, picked by the solver, with no fairness needed: weak_proof.sv proves it.
+read_slang <<EOF
+module selected_assert(input logic clk, input logic a, input logic t, input logic x,
+					   input logic y);
+	assert property (@(posedge clk) a |-> t throughout (##[0:$] x ##6 y));
+endmodule
+EOF
+select -assert-count 1 selected_assert/t:$check
+select -assert-count 1 selected_assert/t:$check r:FLAVOR=assert %i
+select -assert-count 1 selected_assert/t:$anyseq
+check -assert
+
+design -reset
+
+# An assumption has to hold for every attempt, and a single one picked by the
+# solver would constrain nothing
+test_slangdiag -expect "weak sequence with an unbounded match in an assumption is unsupported where an attempt can be on several of its paths at once, as telling the attempts apart would take a monitor exponential in the sequence; it is supported in an assertion, and in an assumption where each attempt is on one path at a time, as in `b throughout c[->1] ##1 d`"
+read_slang <<EOF
+module selected_assume(input logic clk, input logic a, input logic t, input logic x,
+					   input logic y);
+	assume property (@(posedge clk) a |-> t throughout (##[0:$] x ##6 y));
+endmodule
+EOF

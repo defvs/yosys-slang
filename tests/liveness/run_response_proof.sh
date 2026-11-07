@@ -39,6 +39,7 @@ cp -- "${test_dir}/composition_safety.sby" \
 	"${work_dir}/composition_safety.sby"
 cp -- "${test_dir}/justice.sby" "${work_dir}/justice.sby"
 cp -- "${test_dir}/operators.sby" "${work_dir}/operators.sby"
+cp -- "${test_dir}/weak_safety.sby" "${work_dir}/weak_safety.sby"
 
 yosys -q -m "${plugin}" -p "
 	read_slang ${test_dir}/response_proof.sv;
@@ -395,6 +396,23 @@ do
 	"
 done
 
+for top in \
+	weak_selected_pass \
+	weak_selected_fail \
+	weak_assume_pass \
+	weak_assume_fail
+do
+	yosys -q -m "${plugin}" -p "
+		read_slang ${test_dir}/weak_proof.sv;
+		prep -top ${top};
+		async2sync;
+		formalff -clk2ff;
+		chformal -lower;
+		opt_clean;
+		write_rtlil ${work_dir}/${top}.il
+	"
+done
+
 yosys -q -m "${plugin}" -p "
 	read_slang -DMUTATE_LIVENESS ${test_dir}/response_proof.sv;
 	prep -top response_proof;
@@ -457,4 +475,5 @@ run_sby() {
 		-f justice.sby
 	run_sby --suprove "${suprove_driver}" --prefix "${work_dir}/operators" \
 		-f operators.sby
+	run_sby --prefix "${work_dir}/weak_safety" -f weak_safety.sby
 )

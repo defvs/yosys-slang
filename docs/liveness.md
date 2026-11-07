@@ -43,7 +43,7 @@ implications, and `p` and `q` for properties.
 | `b until c`, `b until_with c` | weak-until safety monitor |
 | `b s_until c`, `b s_until_with c` | safety monitor plus progress obligation |
 | `strong(s)` | finite safety check of a bounded `s`, with a progress obligation under a clock that can stop, exact acceptance of an unbounded one |
-| `weak(s)` | bounded `s` only, where it agrees with `strong(s)` |
+| `weak(s)`, and a sequence used as a property in `assert` and `assume` | finite safety check of a bounded `s`, as for `strong(s)`; safety monitor of an unbounded one that fails where an attempt can no longer match, see below |
 | `s \|-> p`, `s \|=> p` | one attempt of `p` per match of `s` |
 | `s #-# p`, `s #=# p` | a match of `s` plus `p` started on it, with the limits listed under rejected constructs |
 | `p and q` | union of both obligation sets |
@@ -115,10 +115,29 @@ does. A sequence used as a property, under `strong`, `nexttime` or
 A sequence used as a property is weak in `assert` and `assume` unless written
 `strong(...)`, and strong in `cover` (IEEE 1800-2017 16.12.2). So is the
 operand of an eventuality: `s_eventually (a ##[1:$] b)` is met by an `a` with
-no `b` after it, while `s_eventually strong(a ##[1:$] b)` needs the `b`. A
-weak sequence with an unbounded match is rejected: `a |-> b ##[1:$] c` in an
-assertion is, while `a |-> strong(b ##[1:$] c)`, which also requires the `c`
-to come, is lowered.
+no `b` after it, while `s_eventually strong(a ##[1:$] b)` needs the `b`.
+
+An attempt of a weak sequence with an unbounded match fails on the tick it can
+no longer match, whatever the later ticks hold, and holds from its first match
+on (Annex F.3.4.4). One that waits forever holds. So `a |-> b throughout
+c[->1]` fails where `b` drops before the first `c`, and `a |-> b ##[1:$] c` is
+`a |-> b`, while `a |-> strong(b ##[1:$] c)` also requires the `c` to come.
+The monitor follows the attempts by the set of states of the sequence they are
+in, as one state for each set. Where each attempt is on one path at a time
+these sets are no more than the states, but where an attempt waits on several
+paths at once they can grow exponentially: `t throughout (##[0:$] x ##6 y)`
+counts down from each of the last six `x`. Past a size linear in the sequence
+an assertion checks one attempt that a fresh `$anyseq` bit selects, which
+needs no fairness condition, as the assertion fails where any of its attempts
+does. An assumption has to constrain every attempt, and there it is rejected.
+
+A weak sequence that never fails, as in `a |-> ##[0:$] b` or `a |-> b[->2]`,
+gives a warning: the property holds on any trace, and `strong(...)` is likely
+what was meant. A weak sequence with an unbounded match is rejected under
+`not`, property `or`, `iff`, `until`, `nexttime` and the eventualities, which
+need where it holds as well as where it fails, and with sequence `and`,
+`intersect`, `within` or `first_match` in it, whose attempts are on a pair of
+paths at once.
 
 Sequence `and`, `intersect`, `within` and `first_match` compose matches of
 their operands from one and the same start, which a monitor taking the
@@ -295,7 +314,8 @@ message, the tests are under `tests/`.
 | Construct | Diagnostic | Test |
 | --- | --- | --- |
 | `restrict property`, `cover sequence` | unsupported assertion statement | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
-| a weak sequence with an unbounded match, as a bare `a ##[1:$] b` in `assert` or `assume`, in a consequent, under an eventuality or in `weak(...)` | weak sequence with an unbounded match is unsupported | `liveness/unsupported.ys`, `sva/unsupported_constructs.ys` |
+| a weak sequence with an unbounded match under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it | weak sequence with an unbounded match is unsupported | `liveness/unsupported.ys` |
+| a weak sequence with an unbounded match in an assumption, where an attempt can be on several paths at once and the monitor of their sets of states would be exponential in the sequence | weak sequence with an unbounded match in an assumption is unsupported | `liveness/weak_sequences.ys` |
 | `cover property` of `always`, `until`, an unbounded eventuality or a sequence with an unbounded match | cover of a property with `always`, `until`, ... | `liveness/unsupported.ys` |
 | `cover property` with a property `if`, `case` or `implies` in it, or with an implication that has an unbounded antecedent or `if`, `case`, `implies`, `iff` or an abort in its consequent: no check would see its vacuous successes | cover of a property with a property `if`, ... | `liveness/unsupported.ys` |
 | `cover property` of an `and` or followed-by with `iff` or an abort in an operand, whose parts would each be covered on their own | cover of a property `and`, or of followed-by, ... | `liveness/unsupported.ys` |
@@ -464,8 +484,10 @@ with a failing variant next to the passing one:
   `implies`, `if` and `case`.
 
 The safety parts of mixed properties are proven in `mode prove`
-(`*_safety.sby`), the antecedents are covered (`*reachability.sby`), and
-`raw_live.sby` checks the solver flow on hand-written RTLIL.
+(`*_safety.sby`), as are the selected attempt of a weak sequence and an
+assumption of one (`weak_safety.sby`), the antecedents are covered
+(`*reachability.sby`), and `raw_live.sby` checks the solver flow on
+hand-written RTLIL.
 
 Each task has a `timeout` of 300 seconds, which sby reports as `Reached
 TIMEOUT`, and each run of sby a limit of 900 seconds, or `SBY_TIME_LIMIT`, for

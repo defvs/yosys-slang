@@ -210,7 +210,7 @@ design -reset
 # 1800-2017 16.12.2). With an unbounded match it holds as long as one is still to
 # come, so this assumption constrains nothing, while reading it strong would make
 # `b` come.
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_eventual_assume(input logic clk, input logic b);
 	assume property (@(posedge clk) s_eventually (##[1:$] b));
@@ -219,7 +219,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_eventual_assert(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) a |-> s_eventually (a ##[1:$] b));
@@ -228,7 +228,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_eventual_named(input logic clk, input logic a, input logic b);
 	sequence s;
@@ -240,7 +240,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_eventual_nexttime(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) s_eventually (nexttime (a ##[1:$] b)));
@@ -249,7 +249,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_eventual_or(input logic clk, input logic a, input logic b, input logic c);
 	assert property (@(posedge clk) (s_eventually (##[1:$] b)) or (s_eventually c));
@@ -258,7 +258,7 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
 module weak_explicit(input logic clk, input logic a, input logic b);
 	assert property (@(posedge clk) a |-> s_eventually weak(a ##[1:$] b));
@@ -267,10 +267,31 @@ EOF
 
 design -reset
 
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+# The monitor of a weak sequence reports where an attempt fails, and so has nothing to
+# give where the property needs where it holds or matches
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
 read_slang <<EOF
-module weak_top(input logic clk, input logic a, input logic b);
-	assert property (@(posedge clk) weak(a ##[1:$] b));
+module weak_not(input logic clk, input logic a, input logic b);
+	assert property (@(posedge clk) not (a ##[1:$] b));
+endmodule
+EOF
+
+design -reset
+
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_or(input logic clk, input logic a, input logic b, input logic c, input logic d);
+	assert property (@(posedge clk) (a ##[1:$] b) or (c |-> d));
+endmodule
+EOF
+
+design -reset
+
+# An attempt of sequence `intersect` is on a pair of paths, one in each operand
+test_slangdiag -expect "weak sequence with an unbounded match is unsupported under `not`, property `or`, `iff`, `until`, `nexttime` or an eventuality, or with sequence `and`, `intersect`, `within` or `first_match` in it; in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
+read_slang <<EOF
+module weak_intersect(input logic clk, input logic a, input logic b, input logic c);
+	assert property (@(posedge clk) a |-> (b[->1] intersect c[->1]));
 endmodule
 EOF
 
@@ -412,34 +433,6 @@ test_slangdiag -expect "unsupported assertion statement"
 read_slang <<EOF
 module cover_sequence(input logic clk, input logic a, input logic b);
 	cover sequence (@(posedge clk) a ##1 b);
-endmodule
-EOF
-
-design -reset
-
-# A bare sequence in an assertion is weak, as the consequent of an implication too
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
-read_slang <<EOF
-module weak_consequent(input logic clk, input logic a, input logic b, input logic c);
-	assert property (@(posedge clk) a |-> b ##[1:$] c);
-endmodule
-EOF
-
-design -reset
-
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
-read_slang <<EOF
-module weak_bare_assume(input logic clk, input logic a, input logic b);
-	assume property (@(posedge clk) a ##[1:$] b);
-endmodule
-EOF
-
-design -reset
-
-test_slangdiag -expect "weak sequence with an unbounded match is unsupported, in `assert` and `assume` a sequence used as a property is weak unless written `strong(...)`"
-read_slang <<EOF
-module weak_goto_throughout(input logic clk, input logic r, input logic a, input logic b);
-	assert property (@(posedge clk) disable iff (r) $rose(a) |-> a throughout b[->1] ##1 $fell(a));
 endmodule
 EOF
 

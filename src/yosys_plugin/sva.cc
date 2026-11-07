@@ -5,10 +5,12 @@
 // Distributed under the terms of the ISC license, see LICENSE
 //
 // clang-format off
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <string>
 #include <optional>
+#include <tuple>
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/ASTVisitor.h"
@@ -124,9 +126,58 @@ static bool assertion_has_unbounded_sequence(const ast::AssertionExpr& expr);
 // The graph has two kinds of arcs:
 //   * links are evaluated without consuming a sampled clock tick;
 //   * edges transfer active states on the next sampled clock tick.
+//
+// Each control also comes as a cube, a conjunction of literals over the booleans the
+// sequence reads, which is what determinize_weak() goes by: unlike the nets, it tells
+// `b` and `!b` apart as one boolean. An empty cube is true.
+struct SvaNfaCube {
+	std::vector<std::pair<int, bool>> literals;
+	bool never = false;
+};
+
 struct SvaNfaNode {
 	std::vector<std::pair<int, ir::Net>> edges;
 	std::vector<std::pair<int, ir::Net>> links;
+	// The cubes of the controls, in the order of the arcs
+	std::vector<SvaNfaCube> edge_cubes;
+	std::vector<SvaNfaCube> link_cubes;
+};
+
+// A deterministic monitor of the attempts of a weak sequence (see determinize_weak())
+struct SvaWeakDfa {
+	// An attempt on a leaf goes to the state `next` on the next tick, or else fails on
+	// this one (Fail) or is settled (Settled), by a match or by a path that can't fail
+	static constexpr int Fail = -1;
+	static constexpr int Settled = -2;
+	// A node of the decision tree of a state, the root first. An inner one splits on
+	// the boolean `atom`, `low` and `high` being the trees for its two values.
+	struct Split {
+		int atom = -1;
+		int low = -1;
+		int high = -1;
+		int next = Settled;
+	};
+	// The sets of NFA nodes an attempt enters a tick on, the first one that of the
+	// start node
+	std::vector<std::vector<int>> states;
+	std::vector<std::vector<Split>> splits;
+
+	bool fails() const {
+		for (const auto& tree : splits)
+			for (const auto& split : tree)
+				if (split.atom < 0 && split.next == Fail)
+					return true;
+		return false;
+	}
+};
+
+struct SvaWeakMonitor {
+	// High on the tick an attempt is left with no match to complete
+	ir::Net failure;
+	// High where an attempt is in flight
+	ir::Net in_flight;
+	// High where the one attempt of a monitor of a single one has a match
+	ir::Net match = ir::S0;
 };
 
 class SvaSequenceNfa {
@@ -137,10 +188,16 @@ class SvaSequenceNfa {
 	// attempt was queued is valid on that tick alone (see check_frozen_offset()).
 	bool attempt_tick;
 	ir::Net throughout = ir::S1;
+	SvaNfaCube throughout_cube;
 	// Where the throughout condition reads a frozen value, if it does
 	std::optional<slang::SourceLocation> throughout_frozen;
-	std::vector<std::pair<ir::Net, std::optional<slang::SourceLocation>>> throughout_stack;
+	std::vector<std::tuple<ir::Net, SvaNfaCube, std::optional<slang::SourceLocation>>> throughout_stack;
 	std::vector<SvaNfaNode> nodes;
+	// The booleans the literals of the cubes are on
+	std::vector<ir::Net> atoms;
+	// Do the cubes give the controls? Not where the letters can be T, which satisfies a
+	// boolean and its negation alike.
+	bool cubes_exact = true;
 	// The nodes frozen values get read on, by the controls of their arcs
 	std::vector<std::pair<int, slang::SourceLocation>> frozen_reads;
 	bool materialized = false;
@@ -153,6 +210,37 @@ class SvaSequenceNfa {
 			make_link_order(order, link.first, minimum + 1);
 	}
 
+	// The nodes in an order that has the source of each link ahead of its target
+	std::vector<int> link_order() const {
+		std::vector<int> order(nodes.size(), -1);
+		for (int i = 0; i < int(nodes.size()); i++)
+			make_link_order(order, i, 0);
+		std::vector<int> sorted(nodes.size());
+		for (int i = 0; i < int(nodes.size()); i++)
+			sorted[i] = i;
+		std::stable_sort(sorted.begin(), sorted.end(),
+						 [&](int a, int b) { return order[a] < order[b]; });
+		return sorted;
+	}
+
+	static SvaNfaCube conjoin(SvaNfaCube a, const SvaNfaCube& b) {
+		if (a.never || b.never)
+			return {{}, true};
+		for (const auto& literal : b.literals) {
+			bool present = false;
+			for (const auto& other : a.literals) {
+				if (other.first != literal.first)
+					continue;
+				if (other.second != literal.second)
+					return {{}, true};
+				present = true;
+			}
+			if (!present)
+				a.literals.push_back(literal);
+		}
+		return a;
+	}
+
 public:
 	const int start_node;
 	const int accept_node;
@@ -160,6 +248,30 @@ public:
 	SvaSequenceNfa(EvalContext& eval_, ir::Net trigger_, ir::Net disable_, bool attempt_tick_):
 		eval(eval_), trigger(trigger_), disable(disable_), attempt_tick(attempt_tick_),
 		start_node(create_node()), accept_node(create_node()) {}
+
+	// The trigger and the disable, if they are to be other than those it was made with
+	void retarget(ir::Net trigger_, ir::Net disable_) {
+		assert_invariant(!materialized);
+		trigger = trigger_;
+		disable = disable_;
+	}
+
+	// The cube of `boolean`, or of its negation
+	SvaNfaCube literal(ir::Net boolean, bool positive = true) {
+		if (boolean == ir::S0 || boolean == ir::S1)
+			return {{}, (boolean == ir::S1) != positive};
+		int atom = 0;
+		while (atom < int(atoms.size()) && atoms[atom] != boolean)
+			atom++;
+		if (atom == int(atoms.size()))
+			atoms.push_back(boolean);
+		return {{{atom, positive}}, false};
+	}
+
+	// The letters can be T, which only the nets of the controls take into account
+	void letters_can_be_top() {
+		cubes_exact = false;
+	}
 
 	int create_node(int link_from = -1) {
 		assert_invariant(!materialized);
@@ -170,7 +282,7 @@ public:
 		return index;
 	}
 
-	void create_edge(int from, int to, ir::Net control = ir::S1) {
+	void create_edge(int from, int to, ir::Net control = ir::S1, const SvaNfaCube& cube = {}) {
 		assert_invariant(!materialized);
 		assert_invariant(0 <= from && from < int(nodes.size()));
 		assert_invariant(0 <= to && to < int(nodes.size()));
@@ -179,9 +291,10 @@ public:
 		if (throughout_frozen.has_value())
 			read_frozen(from, *throughout_frozen);
 		nodes[from].edges.emplace_back(to, control);
+		nodes[from].edge_cubes.push_back(conjoin(cube, throughout_cube));
 	}
 
-	void create_link(int from, int to, ir::Net control = ir::S1) {
+	void create_link(int from, int to, ir::Net control = ir::S1, const SvaNfaCube& cube = {}) {
 		assert_invariant(!materialized);
 		assert_invariant(0 <= from && from < int(nodes.size()));
 		assert_invariant(0 <= to && to < int(nodes.size()));
@@ -190,6 +303,7 @@ public:
 		if (throughout_frozen.has_value())
 			read_frozen(from, *throughout_frozen);
 		nodes[from].links.emplace_back(to, control);
+		nodes[from].link_cubes.push_back(conjoin(cube, throughout_cube));
 	}
 
 	// The control of an arc from `node` reads a frozen value
@@ -197,17 +311,18 @@ public:
 		frozen_reads.emplace_back(node, loc);
 	}
 
-	void push_throughout(ir::Net condition, std::optional<slang::SourceLocation> frozen) {
-		throughout_stack.emplace_back(throughout, throughout_frozen);
+	void push_throughout(ir::Net condition, const SvaNfaCube& cube,
+						 std::optional<slang::SourceLocation> frozen) {
+		throughout_stack.emplace_back(throughout, throughout_cube, throughout_frozen);
 		throughout = eval.netlist.LogicAnd(throughout, condition);
+		throughout_cube = conjoin(throughout_cube, cube);
 		if (!throughout_frozen.has_value())
 			throughout_frozen = frozen;
 	}
 
 	void pop_throughout() {
 		assert_invariant(!throughout_stack.empty());
-		throughout = throughout_stack.back().first;
-		throughout_frozen = throughout_stack.back().second;
+		std::tie(throughout, throughout_cube, throughout_frozen) = throughout_stack.back();
 		throughout_stack.pop_back();
 	}
 
@@ -238,7 +353,15 @@ public:
 				eval.netlist.add_diag(diag::SVAFrozenValueAfterFirstTick, loc);
 	}
 
-	ir::Net materialize_accept() {
+	// The state nets of the nodes: `entered` high where a tick led into one, `active` where
+	// the attempts are on it after the links, `next` where they go into it on the next tick
+	struct States {
+		std::vector<ir::Net> entered;
+		std::vector<ir::Net> active;
+		std::vector<ir::Net> next;
+	};
+
+	States materialize_states() {
 		assert_invariant(!materialized);
 		materialized = true;
 		check_frozen_reads();
@@ -294,7 +417,329 @@ public:
 				add_sva_flop(eval, next_states[i], state_wires[i], "sva_nfa_state");
 		}
 
-		return states[accept_node];
+		return {std::move(state_wires), std::move(states), std::move(next_states)};
+	}
+
+	ir::Net materialize_accept() {
+		return materialize_states().active[accept_node];
+	}
+
+	// The nodes a path leads from to the accepting node. With T letters an attempt on one
+	// of them has a match to come.
+	std::vector<bool> co_reachable() const {
+		std::vector<std::vector<int>> sources(nodes.size());
+		for (int i = 0; i < int(nodes.size()); i++) {
+			for (const auto& link : nodes[i].links)
+				sources[link.first].push_back(i);
+			for (const auto& edge : nodes[i].edges)
+				sources[edge.first].push_back(i);
+		}
+		std::vector<bool> reach(nodes.size(), false);
+		std::vector<int> pending = {accept_node};
+		reach[accept_node] = true;
+		while (!pending.empty()) {
+			int node = pending.back();
+			pending.pop_back();
+			for (int source : sources[node])
+				if (!reach[source]) {
+					reach[source] = true;
+					pending.push_back(source);
+				}
+		}
+		return reach;
+	}
+
+	// The nodes an attempt can't fail from: arcs whose cubes are true lead from them into a
+	// loop of such arcs, which a tick goes around, and the match stays to come from it. That
+	// is where a delay or a repetition of a true boolean has no upper bound.
+	std::vector<bool> undying(const std::vector<bool>& reach) const {
+		auto is_true = [](const SvaNfaCube& cube) { return !cube.never && cube.literals.empty(); };
+		std::vector<std::vector<int>> targets(nodes.size()), sources(nodes.size());
+		for (int i = 0; i < int(nodes.size()); i++) {
+			for (size_t k = 0; k < nodes[i].links.size(); k++)
+				if (is_true(nodes[i].link_cubes[k])) {
+					targets[i].push_back(nodes[i].links[k].first);
+					sources[nodes[i].links[k].first].push_back(i);
+				}
+			for (size_t k = 0; k < nodes[i].edges.size(); k++)
+				if (is_true(nodes[i].edge_cubes[k])) {
+					targets[i].push_back(nodes[i].edges[k].first);
+					sources[nodes[i].edges[k].first].push_back(i);
+				}
+		}
+		// The links are acyclic, so a loop of true arcs takes a tick
+		std::vector<bool> result(nodes.size(), false);
+		std::vector<int> pending;
+		for (int i = 0; i < int(nodes.size()); i++) {
+			if (!reach[i])
+				continue;
+			std::vector<bool> seen(nodes.size(), false);
+			std::vector<int> stack(targets[i].begin(), targets[i].end());
+			while (!stack.empty() && !result[i]) {
+				int node = stack.back();
+				stack.pop_back();
+				if (node == i)
+					result[i] = true;
+				else if (!seen[node]) {
+					seen[node] = true;
+					stack.insert(stack.end(), targets[node].begin(), targets[node].end());
+				}
+			}
+			if (result[i])
+				pending.push_back(i);
+		}
+		while (!pending.empty()) {
+			int node = pending.back();
+			pending.pop_back();
+			for (int source : sources[node])
+				if (!result[source]) {
+					result[source] = true;
+					pending.push_back(source);
+				}
+		}
+		return result;
+	}
+
+	// A deterministic monitor of the attempts of the sequence as a weak property, or none
+	// where it would take more states than the NFA has nodes, or more leaves in the tree
+	// of a state than its arcs and their literals plus one.
+	//
+	// Two attempts on the same set of nodes have the same future, so they can be merged,
+	// which the NFA does node by node: a failure is one attempt left with no node, which
+	// the NFA can't tell where the others are on nodes of their own. Each state of the
+	// monitor is a set of nodes, which the attempts on it enter a tick on. An attempt is
+	// settled, and dropped, once it has a match or reaches a node it can't fail from (see
+	// undying()). It fails on the tick that leaves it on no node from which T letters would
+	// complete a match (IEEE Std 1800-2017 section F.3.4.4), an attempt with no match to
+	// come. Each state splits on the booleans its arcs read up to where its attempts are
+	// settled, fail or go to a state, the booleans taken as independent of each other.
+	std::optional<SvaWeakDfa> determinize_weak() const {
+		assert_invariant(cubes_exact);
+		std::vector<bool> reach = co_reachable();
+		std::vector<bool> settled = undying(reach);
+		std::vector<int> order = link_order();
+		enum : uint8_t { Low, High, Unknown };
+		auto both = [](uint8_t a, uint8_t b) -> uint8_t {
+			return (a == Low || b == Low) ? Low : (a == High && b == High) ? High : Unknown;
+		};
+		auto either = [](uint8_t a, uint8_t b) -> uint8_t {
+			return (a == High || b == High) ? High : (a == Low && b == Low) ? Low : Unknown;
+		};
+
+		SvaWeakDfa dfa;
+		std::map<std::vector<int>, int> ids;
+		dfa.states.push_back({start_node});
+		ids[{start_node}] = 0;
+		std::vector<int8_t> assignment(atoms.size(), -1);
+		auto value = [&](const SvaNfaCube& cube) -> uint8_t {
+			if (cube.never)
+				return Low;
+			uint8_t result = High;
+			for (const auto& [atom, positive] : cube.literals) {
+				if (assignment[atom] < 0)
+					result = Unknown;
+				else if ((assignment[atom] == 1) != positive)
+					return Low;
+			}
+			return result;
+		};
+
+		for (size_t state = 0; state < dfa.states.size(); state++) {
+			const std::vector<int> entered = dfa.states[state];
+			// The arcs and literals the attempts on the state can read on a tick
+			size_t budget = 1;
+			{
+				std::vector<bool> seen(nodes.size(), false);
+				std::vector<int> stack(entered);
+				while (!stack.empty()) {
+					int node = stack.back();
+					stack.pop_back();
+					if (seen[node])
+						continue;
+					seen[node] = true;
+					for (size_t k = 0; k < nodes[node].links.size(); k++) {
+						budget += 1 + nodes[node].link_cubes[k].literals.size();
+						stack.push_back(nodes[node].links[k].first);
+					}
+					for (const auto& cube : nodes[node].edge_cubes)
+						budget += 1 + cube.literals.size();
+				}
+			}
+
+			std::vector<SvaWeakDfa::Split> tree;
+			size_t leaves = 0;
+			bool overflow = false;
+			std::function<int()> split = [&]() -> int {
+				int index = int(tree.size());
+				tree.emplace_back();
+				std::vector<uint8_t> active(nodes.size(), Low);
+				for (int node : entered)
+					active[node] = High;
+				for (int node : order) {
+					if (active[node] == Low)
+						continue;
+					for (size_t k = 0; k < nodes[node].links.size(); k++) {
+						int target = nodes[node].links[k].first;
+						active[target] = either(active[target],
+												both(active[node], value(nodes[node].link_cubes[k])));
+					}
+				}
+				std::vector<uint8_t> next(nodes.size(), Low);
+				for (int node = 0; node < int(nodes.size()); node++) {
+					if (active[node] == Low)
+						continue;
+					for (size_t k = 0; k < nodes[node].edges.size(); k++) {
+						int target = nodes[node].edges[k].first;
+						next[target] = either(next[target],
+											  both(active[node], value(nodes[node].edge_cubes[k])));
+					}
+				}
+
+				bool decided = active[accept_node] == High;
+				for (int node = 0; node < int(nodes.size()) && !decided; node++)
+					decided = settled[node] && next[node] == High;
+				if (!decided) {
+					decided = active[accept_node] == Low;
+					for (int node = 0; node < int(nodes.size()) && decided; node++)
+						decided = !reach[node] || next[node] != Unknown;
+				}
+				if (decided) {
+					if (++leaves > budget) {
+						overflow = true;
+						return index;
+					}
+					int outcome = SvaWeakDfa::Settled;
+					bool match = active[accept_node] == High;
+					for (int node = 0; node < int(nodes.size()) && !match; node++)
+						match = settled[node] && next[node] == High;
+					if (!match) {
+						std::vector<int> successor;
+						for (int node = 0; node < int(nodes.size()); node++)
+							if (reach[node] && next[node] == High)
+								successor.push_back(node);
+						if (successor.empty()) {
+							outcome = SvaWeakDfa::Fail;
+						} else {
+							auto [it, inserted] = ids.emplace(successor, int(dfa.states.size()));
+							if (inserted) {
+								if (dfa.states.size() >= nodes.size()) {
+									overflow = true;
+									return index;
+								}
+								dfa.states.push_back(successor);
+							}
+							outcome = it->second;
+						}
+					}
+					tree[index].next = outcome;
+					return index;
+				}
+
+				// Split on a boolean read by an arc from a node the attempts may be on, which
+				// is one of the arcs left undecided
+				int atom = -1;
+				for (int node : order) {
+					if (active[node] == Low)
+						continue;
+					for (const auto* cubes : {&nodes[node].link_cubes, &nodes[node].edge_cubes})
+						for (const auto& cube : *cubes)
+							if (!cube.never)
+								for (const auto& literal : cube.literals)
+									if (atom < 0 && assignment[literal.first] < 0)
+										atom = literal.first;
+					if (atom >= 0)
+						break;
+				}
+				assert_invariant(atom >= 0);
+				assignment[atom] = 0;
+				int low = split();
+				if (overflow)
+					return index;
+				assignment[atom] = 1;
+				int high = split();
+				assignment[atom] = -1;
+				tree[index].atom = atom;
+				tree[index].low = low;
+				tree[index].high = high;
+				return index;
+			};
+			split();
+			if (overflow)
+				return std::nullopt;
+			dfa.splits.push_back(std::move(tree));
+		}
+		return dfa;
+	}
+
+	// The monitor of `dfa`, a register for each state but the first, which the trigger
+	// starts the attempts on. A disable drops the attempts in flight.
+	SvaWeakMonitor materialize_weak(const SvaWeakDfa& dfa) {
+		assert_invariant(!materialized);
+		materialized = true;
+		check_frozen_reads();
+
+		ir::Net enabled = sva_not(eval, disable);
+		std::vector<ir::Net> wires(dfa.states.size());
+		std::vector<ir::Net> active(dfa.states.size());
+		active[0] = eval.netlist.LogicAnd(trigger, enabled);
+		for (size_t state = 1; state < dfa.states.size(); state++) {
+			wires[state] = add_sva_state(eval, "sva_weak_state");
+			active[state] = eval.netlist.LogicAnd(wires[state], enabled);
+		}
+
+		std::vector<ir::Value> into(dfa.states.size());
+		ir::Value failures;
+		std::function<void(const std::vector<SvaWeakDfa::Split>&, int, ir::Net)> walk =
+				[&](const std::vector<SvaWeakDfa::Split>& tree, int index, ir::Net on) {
+			const auto& split = tree[index];
+			if (split.atom >= 0) {
+				ir::Net atom = atoms[split.atom];
+				walk(tree, split.low, eval.netlist.LogicAnd(on, sva_not(eval, atom)));
+				walk(tree, split.high, eval.netlist.LogicAnd(on, atom));
+			} else if (split.next == SvaWeakDfa::Fail) {
+				failures.append(on);
+			} else if (split.next >= 0) {
+				into[split.next].append(on);
+			}
+		};
+		for (size_t state = 0; state < dfa.states.size(); state++)
+			walk(dfa.splits[state], 0, active[state]);
+
+		for (size_t state = 1; state < dfa.states.size(); state++) {
+			if (into[state].empty())
+				eval.netlist.connect(wires[state], ir::S0);
+			else
+				add_sva_flop(eval, eval.netlist.ReduceBool(into[state]), wires[state], "sva_weak_state");
+		}
+
+		ir::Value in_flight;
+		for (ir::Net net : active)
+			in_flight.append(net);
+		return {failures.empty() ? ir::S0 : eval.netlist.ReduceBool(failures),
+				eval.netlist.ReduceBool(in_flight)};
+	}
+
+	// The monitor of a sequence the trigger starts one attempt of, which the NFA follows
+	// apart from any other. The attempt fails on the tick that leaves it on no node from
+	// which T letters would complete a match, without a match by then, and is in flight
+	// from its trigger on while it is on a node it can still match from.
+	SvaWeakMonitor materialize_weak_attempt() {
+		std::vector<bool> reach = co_reachable();
+		States states = materialize_states();
+		ir::Value alive, entered;
+		entered.append(trigger);
+		for (int i = 0; i < int(nodes.size()); i++) {
+			if (!reach[i])
+				continue;
+			alive.append(states.next[i]);
+			entered.append(states.entered[i]);
+		}
+		ir::Net match = states.active[accept_node];
+		ir::Net in_flight = eval.netlist.LogicAnd(eval.netlist.ReduceBool(entered),
+												  sva_not(eval, disable));
+		ir::Net failure = eval.netlist.LogicAnd(
+			in_flight, sva_not(eval, eval.netlist.LogicOr(match, eval.netlist.ReduceBool(alive))));
+		return {failure, in_flight, match};
 	}
 };
 
@@ -470,6 +915,7 @@ private:
 			return {start, false};
 		}
 		// `!b` is a boolean of its own, T satisfies it as well as `b`
+		SvaNfaCube cube = fsm.literal(condition), not_cube = fsm.literal(condition, false);
 		ir::Net not_condition = letter(sva_not(eval, condition));
 		condition = letter(condition);
 		// Both get read while waiting
@@ -482,9 +928,9 @@ private:
 		Fragment result = parse_repeat(start, repetition.range, [&](int node) {
 			int wait = fsm.create_node(node);
 			wait_on(wait);
-			fsm.create_edge(wait, wait, not_condition);
+			fsm.create_edge(wait, wait, not_condition, not_cube);
 			int hit = fsm.create_node();
-			fsm.create_link(wait, hit, condition);
+			fsm.create_link(wait, hit, condition, cube);
 			return Fragment {hit, false};
 		});
 		if (repetition.kind == ast::SequenceRepetition::GoTo)
@@ -495,7 +941,7 @@ private:
 			int wait = fsm.create_node(node);
 			wait_on(wait);
 			int quiet = fsm.create_node();
-			fsm.create_link(wait, quiet, not_condition);
+			fsm.create_link(wait, quiet, not_condition, not_cube);
 			fsm.create_edge(quiet, wait);
 			return Fragment {quiet, true};
 		});
@@ -514,7 +960,10 @@ private:
 
 public:
 	SvaSequenceBuilder(EvalContext& eval_, SvaSequenceNfa& fsm_, ir::Net top_ = ir::S0):
-		eval(eval_), fsm(fsm_), top(top_) {}
+		eval(eval_), fsm(fsm_), top(top_) {
+		if (top != ir::S0)
+			fsm.letters_can_be_top();
+	}
 
 	bool good() const {
 		return valid;
@@ -546,9 +995,8 @@ public:
 				}
 				std::optional<slang::SourceLocation> frozen;
 				int node = fsm.create_node();
-				fsm.create_link(start, node, letter(
-					simple.isNullExpr ? ir::S0 :
-					expression_bit(simple.expr, frozen)));
+				ir::Net bit = simple.isNullExpr ? ir::S0 : expression_bit(simple.expr, frozen);
+				fsm.create_link(start, node, letter(bit), fsm.literal(bit));
 				if (frozen.has_value())
 					fsm.read_frozen(start, *frozen);
 				return {node, false};
@@ -640,7 +1088,7 @@ public:
 							unsupported(expr);
 							return {start, false};
 						}
-						fsm.push_throughout(letter(condition), frozen);
+						fsm.push_throughout(letter(condition), fsm.literal(condition), frozen);
 						Fragment result = parse(start, binary.right);
 						fsm.pop_throughout();
 						return result;
@@ -3288,6 +3736,76 @@ static const ast::AssertionExpr* find_weak_unbounded_sequence(const ast::Asserti
 	}
 }
 
+// A weak sequence with an unbounded match where lower_property() doesn't lower one, under
+// `not`, `or`, `iff`, `until`, `nexttime` or an eventuality, if the property has one. At
+// the top of the property, in a consequent, a branch of `if` or `case` and an operand of
+// property `and`, `always` or an abort it takes one to lower_weak_sequence().
+static const ast::AssertionExpr* find_unlowered_weak_sequence(const ast::AssertionExpr& expr) {
+	const ast::AssertionExpr& top = unwrap_property_instances(expr);
+	if (!is_property(top))
+		return nullptr;
+
+	auto either = [](const ast::AssertionExpr* left, const ast::AssertionExpr* right) {
+		return left ? left : right;
+	};
+	switch (top.kind) {
+	case ast::AssertionExprKind::Unary:
+		{
+			const auto& unary = top.as<ast::UnaryAssertionExpr>();
+			if (unary.op == ast::UnaryAssertionOperator::Always ||
+				unary.op == ast::UnaryAssertionOperator::SAlways)
+				return find_unlowered_weak_sequence(unary.expr);
+			return find_weak_unbounded_sequence(unary.expr);
+		}
+	case ast::AssertionExprKind::Binary:
+		{
+			const auto& binary = top.as<ast::BinaryAssertionExpr>();
+			switch (binary.op) {
+			case ast::BinaryAssertionOperator::OverlappedImplication:
+			case ast::BinaryAssertionOperator::NonOverlappedImplication:
+			case ast::BinaryAssertionOperator::OverlappedFollowedBy:
+			case ast::BinaryAssertionOperator::NonOverlappedFollowedBy:
+				// The left side is a sequence, not used as a property
+				return find_unlowered_weak_sequence(binary.right);
+			case ast::BinaryAssertionOperator::Implies:
+				return either(find_weak_unbounded_sequence(binary.left),
+							  find_unlowered_weak_sequence(binary.right));
+			case ast::BinaryAssertionOperator::And:
+				return either(find_unlowered_weak_sequence(binary.left),
+							  find_unlowered_weak_sequence(binary.right));
+			default:
+				return either(find_weak_unbounded_sequence(binary.left),
+							  find_weak_unbounded_sequence(binary.right));
+			}
+		}
+	case ast::AssertionExprKind::Abort:
+		return find_unlowered_weak_sequence(top.as<ast::AbortAssertionExpr>().expr);
+	case ast::AssertionExprKind::Conditional:
+		{
+			const auto& conditional = top.as<ast::ConditionalAssertionExpr>();
+			return either(find_unlowered_weak_sequence(conditional.ifExpr),
+						  conditional.elseExpr
+							  ? find_unlowered_weak_sequence(*conditional.elseExpr)
+							  : nullptr);
+		}
+	case ast::AssertionExprKind::Case:
+		{
+			const auto& case_expr = top.as<ast::CaseAssertionExpr>();
+			for (const auto& item : case_expr.items)
+				if (auto weak = find_unlowered_weak_sequence(*item.body))
+					return weak;
+			return case_expr.defaultCase
+				? find_unlowered_weak_sequence(*case_expr.defaultCase) : nullptr;
+		}
+	case ast::AssertionExprKind::Clocking:
+		return find_unlowered_weak_sequence(top.as<ast::ClockingAssertionExpr>().expr);
+	case ast::AssertionExprKind::DisableIff:
+		return find_unlowered_weak_sequence(top.as<ast::DisableIffAssertionExpr>().expr);
+	default:
+		return nullptr;
+	}
+}
+
 // The operand of an eventuality, which is read as strong by the monitors, with a strong()
 // around it taken off. An error is raised if it has a weak sequence they can't read so.
 static const ast::AssertionExpr* eventual_operand(EvalContext& eval,
@@ -3763,12 +4281,16 @@ static ir::Net add_sticky_observation(
 	return observed;
 }
 
+// One of the attempts the trigger starts, picked by a fresh $anyseq bit, high on its first
+// tick. With `fair`, an auxiliary fairness condition has an attempt picked if any starts,
+// which a liveness obligation of the attempt needs; a safety check of it needs none.
 static ir::Net add_selected_trigger(
 		PropertyResult& result, EvalContext& eval, ir::Net trigger,
-		ir::Net disable, slang::SourceLocation loc) {
+		ir::Net disable, slang::SourceLocation loc, bool fair = true) {
 	trigger = eval.netlist.LogicAnd(trigger, sva_not(eval, disable));
-	ir::Net seen_trigger = add_sticky_observation(
-		eval, trigger, ir::S0, loc, "sva_select_seen");
+	ir::Net seen_trigger = fair
+		? add_sticky_observation(eval, trigger, ir::S0, loc, "sva_select_seen")
+		: ir::S0;
 
 	ir::Net choice = eval.netlist.add_placeholder_signal(1, "sva_select_choice").as_net();
 	auto *choice_cell = eval.netlist.backend->canvas->addCell(
@@ -3787,6 +4309,8 @@ static ir::Net add_selected_trigger(
 		return ir::Sx;
 	}
 	add_sva_flop(eval, chosen, chosen_wire, "sva_select_chosen");
+	if (!fair)
+		return selected;
 
 	// The fresh prophecy input selects exactly one enabled attempt.  This
 	// fairness condition prevents it from avoiding every trigger.  Because
@@ -4745,6 +5269,65 @@ static PropertyResult lower_until(EvalContext& eval,
 	return result;
 }
 
+// A sequence with an unbounded match used as a property of an assertion or an assumption,
+// where it is weak (IEEE Std 1800-2017 section 16.12.2): an attempt holds once it has a
+// match, and fails on the tick that leaves it no match to complete, where T letters on the
+// ticks after would complete none either (F.3.4.4). Under a disable iff or an accept_on
+// the letters are T, which keeps the attempts from failing.
+//
+// The deterministic monitor of determinize_weak() takes all the attempts at once. Where it
+// would grow past the size of the NFA, an assertion has one attempt selected for an NFA
+// to follow apart from the others, which checks them all as the selection is free (see
+// add_selected_trigger()). That would only constrain the selected attempt of an
+// assumption, so there it's an error.
+static PropertyResult lower_weak_sequence(EvalContext& eval, const ast::AssertionExpr& sequence,
+										  ir::Net trigger, bool attempt_tick,
+										  const PropertyAborts& aborts) {
+	slang::SourceLocation loc = expr_loc(sequence);
+	if (aborts.cover) {
+		eval.netlist.add_diag(diag::SVATemporalCoverUnsupported, loc);
+		return {{}, false};
+	}
+	if (has_sequence_product(sequence)) {
+		eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, loc);
+		return {{}, false};
+	}
+	if (!sva_clock_ready(eval, loc))
+		return {{}, false};
+	ir::Net disable = aborts.any(eval);
+
+	SvaSequenceNfa fsm(eval, trigger, disable, attempt_tick);
+	SvaSequenceBuilder builder(eval, fsm);
+	auto match = builder.parse(fsm.create_node(fsm.start_node), sequence);
+	if (!builder.good())
+		return {{}, false};
+	fsm.create_link(match.end, fsm.accept_node);
+
+	PropertyResult result;
+	if (auto dfa = fsm.determinize_weak()) {
+		if (!dfa->fails())
+			eval.netlist.add_diag(diag::SVAWeakSequenceNeverFails, loc);
+		SvaWeakMonitor monitor = fsm.materialize_weak(*dfa);
+		add_safety_obligation(result, sva_not(eval, monitor.failure), monitor.in_flight);
+		return result;
+	}
+	if (aborts.assume) {
+		eval.netlist.add_diag(diag::SVAWeakSequenceAssumeUnsupported, loc);
+		return {{}, false};
+	}
+
+	ir::Net selected = add_selected_trigger(result, eval, trigger, disable, loc, false);
+	if (!result.valid)
+		return result;
+	// The attempt is settled by its first match, the paths it has left then fail nothing
+	ir::Net matched = add_sva_state(eval, "sva_weak_matched");
+	fsm.retarget(selected, eval.netlist.LogicOr(disable, matched));
+	SvaWeakMonitor monitor = fsm.materialize_weak_attempt();
+	add_sva_flop(eval, eval.netlist.LogicOr(matched, monitor.match), matched, "sva_weak_matched");
+	add_safety_obligation(result, sva_not(eval, monitor.failure), monitor.in_flight);
+	return result;
+}
+
 static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr& expr,
 									 ir::Net trigger, bool attempt_tick,
 									 const PropertyAborts& aborts) {
@@ -4880,10 +5463,8 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		// reported. A clock that stops for good fails the strong form of an attempt still
 		// waiting for its match, which takes an obligation of its own.
 		if (strong_weak.strength == ast::StrongWeakAssertionExpr::Weak) {
-			if (assertion_has_unbounded_sequence(strong_weak.expr)) {
-				eval.netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(expr));
-				return {{}, false};
-			}
+			if (assertion_has_unbounded_sequence(strong_weak.expr))
+				return lower_weak_sequence(eval, strong_weak.expr, trigger, attempt_tick, aborts);
 			return lower_finite_property_from_trigger(
 				eval, strong_weak.expr, trigger, attempt_tick, aborts);
 		}
@@ -5257,6 +5838,9 @@ static PropertyResult lower_property(EvalContext& eval, const ast::AssertionExpr
 		}
 	}
 
+	// A sequence used as a property, weak in an assertion or an assumption
+	if (!aborts.cover && !is_property(expr) && assertion_has_unbounded_sequence(expr))
+		return lower_weak_sequence(eval, expr, trigger, attempt_tick, aborts);
 	return lower_finite_property(eval, expr, trigger, attempt_tick, aborts);
 }
 
@@ -5427,10 +6011,11 @@ static void lower_sva_obligations(const ast::ConcurrentAssertionStatement &state
 		return;
 	}
 
-	// In an assertion or an assumption a sequence used as a property is weak, which no
-	// monitor takes where it has an unbounded match. A cover reads it as strong.
+	// In an assertion or an assumption a sequence used as a property is weak, which takes a
+	// monitor of its own where it has an unbounded match (see lower_weak_sequence()). A
+	// cover reads it as strong.
 	if (statement.assertionKind != ast::AssertionKind::CoverProperty) {
-		if (auto weak = find_weak_unbounded_sequence(*property)) {
+		if (auto weak = find_unlowered_weak_sequence(*property)) {
 			netlist.add_diag(diag::SVAWeakSequenceUnsupported, expr_loc(*weak));
 			return;
 		}

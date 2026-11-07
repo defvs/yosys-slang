@@ -28,7 +28,7 @@ _SVA_TESTS = [
 _LIVENESS_TESTS = [
     "composition", "equivalence", "frozen", "labels", "large_ranges", "lowering",
     "procedural", "property_conditions", "regular_sequences", "unbounded_sequences",
-    "unsupported",
+    "unsupported", "weak_sequences",
 ]
 
 _UNIT_DATA = glob(["unit/*.sv"])

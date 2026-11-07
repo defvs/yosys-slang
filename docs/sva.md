@@ -444,7 +444,6 @@ operators they lower is listed in [liveness.md](liveness.md#rejected-constructs)
 
 | Construct | Message | Test |
 | --- | --- | --- |
-| Unbounded delay, `##[m:$]`, `##[*]`, `##[+]`, unbounded repetition, `[*m:$]`, `[*]`, `[+]`, and nonconsecutive and goto repetition, `[=n]`, `[->n]`, in a weak sequence: one used as a property in `assert` or `assume` and not written `strong(...)` | `weak sequence with an unbounded match is unsupported` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
 | `within` of sequences with no unbounded match | `unsupported assertion statement` | `sva/unsupported_constructs.ys` |
 | Match items, `(s, f())`, `first_match(s, ...)` | `SVA match items and local-variable actions are not synthesizable` | `sva/unsupported_constructs.ys`, `liveness/unsupported.ys` |
 | Local variables of sequences and properties, as in `(s, v = e)`, `local` arguments | `unsupported assertion statement` | `sva/local_variables.ys` |

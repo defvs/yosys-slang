@@ -7,14 +7,11 @@ import re
 from pathlib import Path
 
 
-UNSUPPORTED_PATTERNS = (
-    "[->",
-)
-
 DISABLED_REASON = {
     "prim_alert_rxtx_assert_fpv.sv": {
-        "PingEn_M": "weak sequence with an unbounded match in the consequent",
-        "AlertPingIgnored_A": "weak sequence with an unbounded match in the consequent",
+        "PingEn_M": (
+            "as written it never matches: `##` binds tighter than `throughout`, so its last tick needs both `ping_req_i` and `$fell(ping_req_i)`, and the assumption would rule out every ping that completes"
+        ),
     },
 }
 
@@ -78,12 +75,11 @@ def filter_source(src, dst):
         if stripped.startswith("sequence "):
             name = stripped.split()[1].rstrip(";")
             seq, index = copy_sequence(lines, index)
-            text = "".join(seq)
             reason = disabled.get(name)
             if source_name in DISABLE_ALL_PROPERTIES:
                 disable_block(out, source_name, name, "inline RTL sequence disabled to focus this stress target on the FPV VIP")
-            elif reason or any(pattern in text for pattern in UNSUPPORTED_PATTERNS):
-                disable_block(out, source_name, name, reason or "uses unsupported sequence constructs")
+            elif reason:
+                disable_block(out, source_name, name, reason)
             else:
                 out.extend(seq)
             continue
@@ -91,12 +87,11 @@ def filter_source(src, dst):
         name = macro_name(lines[index])
         if name:
             stmt, index = copy_macro_statement(lines, index)
-            text = "".join(stmt)
             reason = disabled.get(name)
             if source_name in DISABLE_ALL_PROPERTIES:
                 disable_block(out, source_name, name, "inline RTL assertion disabled to focus this stress target on the FPV VIP")
-            elif reason or any(pattern in text for pattern in UNSUPPORTED_PATTERNS):
-                disable_block(out, source_name, name, reason or "uses unsupported SVA constructs")
+            elif reason:
+                disable_block(out, source_name, name, reason)
             else:
                 out.extend(stmt)
             continue

@@ -35,6 +35,7 @@ set(ALL_TESTS
     liveness/property_conditions.ys
     liveness/frozen.ys
     liveness/labels.ys
+    liveness/weak_sequences.ys
     sva/seqequiv.tcl
     sva/action_blocks.ys
     sva/assertion_function_effects.ys
