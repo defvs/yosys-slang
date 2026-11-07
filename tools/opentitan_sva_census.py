@@ -1078,9 +1078,12 @@ def parse_diagnostics(log: str, cwd: Path, originals: dict[Path, Path],
         path = originals.get(path, path)
         item["path"] = str(path)
         item["file"] = relative_source(path, opentitan)
+        # A warning rejects nothing, such as the one on a weak sequence that
+        # never fails, though its text may match
         item["class"] = (
             "unsupported_sva"
-            if any(text.lower() in item["message"].lower() for text in SVA_DIAGNOSTIC_TEXT)
+            if item["severity"] != "warning"
+            and any(text.lower() in item["message"].lower() for text in SVA_DIAGNOSTIC_TEXT)
             else "frontend"
         )
         diagnostics.append(item)
