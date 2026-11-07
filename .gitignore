@@ -1,6 +1,7 @@
 /build/
 __pycache__/
 /tests/third_party/opentitan/
+/docs/opentitan_sva_census/results.json
 /bazel-*
 /MODULE.bazel.lock
 .*
